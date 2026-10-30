@@ -23,6 +23,9 @@ pub mod dxgi;
 #[cfg(windows)]
 pub mod win32;
 
+#[cfg(all(target_os = "linux", feature = "pipewire"))]
+pub mod wayland;
+
 #[cfg(any(
     target_os = "macos",
     target_os = "android",
@@ -48,6 +51,8 @@ pub enum CaptureError {
     Win32(String),
     #[error("screen changed shape mid-capture")]
     Resized,
+    #[error("{0}")]
+    Other(String),
 }
 
 /// One captured frame in RGBA8.
@@ -143,6 +148,23 @@ pub fn platform_capture(
     // `backend` only matters on Windows; reference it unconditionally so
     // the unused_variables lint is satisfied on other platforms.
     let _ = backend;
+    #[cfg(all(target_os = "linux", feature = "pipewire"))]
+    {
+        // Native Wayland session → the PipeWire portal (X11 would only see
+        // XWayland windows). Fall back to X11 when the portal is
+        // unavailable or denied.
+        if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+            match crate::wayland::PipeWireCapture::connect() {
+                Ok(c) => {
+                    tracing::info!(target: "opacusr", "using PipeWire portal capture (Wayland)");
+                    return Ok(Box::new(c));
+                }
+                Err(e) => {
+                    tracing::warn!(target: "opacusr", "PipeWire capture unavailable ({e}); falling back to X11/XWayland");
+                }
+            }
+        }
+    }
     #[cfg(all(feature = "x11", target_os = "linux"))]
     {
         match crate::x11::X11Capture::connect() {

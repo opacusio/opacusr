@@ -12,6 +12,15 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 x11rb = { workspace = true, optional = true }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# Wayland (PipeWire) capture — optional, experimental. See src/wayland.rs.
+# The xdg-desktop-portal asks the user which monitor to share.
+ashpd = { version = "0.9", optional = true, default-features = false, features = [
+    "async-std",
+] }
+pipewire = { version = "0.8", optional = true }
+async-std = { version = "1", optional = true }
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
@@ -31,3 +40,4 @@ windows = { version = "0.59", features = [
 [features]
 default = ["x11"]
 x11 = ["dep:x11rb"]
+pipewire = ["dep:ashpd", "dep:pipewire", "dep:async-std"]
