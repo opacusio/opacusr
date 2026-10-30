@@ -33,6 +33,10 @@ jobs:
         run: cargo build --release -p opacusr-app -p opacusr-agent -p opacusr-server
       - name: Test
         run: cargo test --workspace
+      - name: Smoke test
+        run: |
+          ./target/release/opacusr-agent --version
+          ./target/release/opacusr-server --version
       - name: Build debs
         run: |
           cargo install cargo-deb
@@ -70,6 +74,11 @@ jobs:
         run: cargo build --release -p opacusr-app -p opacusr-agent -p opacusr-server
       - name: Test
         run: cargo test --workspace
+      - name: Smoke test
+        shell: pwsh
+        run: |
+          & target\release\opacusr-agent.exe --version
+          & target\release\opacusr-server.exe --version
       - name: Install WiX Toolset v3
         run: |
           curl.exe -sLo wix311-binaries.zip https://github.com/wixtoolset/wix3/releases/download/wix3112rtm/wix311-binaries.zip
@@ -127,6 +136,10 @@ jobs:
           key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
       - name: Build
         run: cargo build --release -p opacusr-app -p opacusr-agent -p opacusr-server
+      - name: Smoke test
+        run: |
+          ./target/release/opacusr-agent --version
+          ./target/release/opacusr-server --version
       - name: Package tar.gz
         run: |
           VER="${GITHUB_REF_NAME#v}"
@@ -149,6 +162,11 @@ jobs:
         with:
           merge-multiple: true
           path: dist
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
       - uses: softprops/action-gh-release@v2
         with:
           files: |
@@ -156,4 +174,5 @@ jobs:
             dist/*.zip
             dist/*.msi
             dist/*.deb
+            dist/SHA256SUMS
           generate_release_notes: true

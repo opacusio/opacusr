@@ -1,5 +1,10 @@
 # OpacusR
 
+[![Release](https://img.shields.io/github/v/release/opacusio/opacusr)](https://github.com/opacusio/opacusr/releases/latest)
+[![CI](https://github.com/opacusio/opacusr/actions/workflows/ci.yml/badge.svg)](https://github.com/opacusio/opacusr/actions/workflows/ci.yml)
+[![Release build](https://github.com/opacusio/opacusr/actions/workflows/release.yml/badge.svg)](https://github.com/opacusio/opacusr/actions/workflows/release.yml)
+[![License](https://img.shields.io/github/license/opacusio/opacusr)](LICENSE)
+
 **Open-source remote desktop** — screen sharing, control, file transfer, chat and terminal over a self-hostable transport. Built in Rust: an alternative to TeamViewer / AnyDesk where *you* own the infrastructure.
 
 > 🇷🇺 Russian documentation: [README.ru.md](README.ru.md)
@@ -78,6 +83,8 @@ cargo run --release -p opacusr-app
 In the GUI: enter the signaling URL, connect, pick the host from the list (or type its ID), enter the access password, and the remote desktop opens. The session window includes the video stream, chat, file-transfer and terminal panels.
 
 ### Installing (packages)
+
+**Download:** [latest release](https://github.com/opacusio/opacusr/releases/latest) вЂ” `.deb` for Debian/Ubuntu, `.msi` / `.zip` for Windows, `.tar.gz` for macOS and portable Linux. Every asset has a SHA-256 checksum in `SHA256SUMS` (verify with `sha256sum -c SHA256SUMS`).
 
 | Platform | Package | Notes |
 | --- | --- | --- |

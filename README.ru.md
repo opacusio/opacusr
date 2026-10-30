@@ -1,5 +1,10 @@
 # OpacusR
 
+[![Release](https://img.shields.io/github/v/release/opacusio/opacusr)](https://github.com/opacusio/opacusr/releases/latest)
+[![CI](https://github.com/opacusio/opacusr/actions/workflows/ci.yml/badge.svg)](https://github.com/opacusio/opacusr/actions/workflows/ci.yml)
+[![Release build](https://github.com/opacusio/opacusr/actions/workflows/release.yml/badge.svg)](https://github.com/opacusio/opacusr/actions/workflows/release.yml)
+[![License](https://img.shields.io/github/license/opacusio/opacusr)](LICENSE)
+
 **Открытый удалённый рабочий стол** — трансляция экрана, управление, передача файлов, чат и терминал поверх самохостинговой инфраструктуры. Написано на Rust: аналог TeamViewer / AnyDesk, где серверы — *ваши*.
 
 > 🇬🇧 English documentation: [README.md](README.md)
@@ -78,6 +83,8 @@ cargo run --release -p opacusr-app
 В GUI: введите URL signaling-сервера, подключитесь, выберите хост из списка (или введите его ID), введите пароль доступа — откроется удалённый рабочий стол. В окне сессии есть видеопоток, чат, панели передачи файлов и терминала.
 
 ### Установка (пакеты)
+
+**Скачивание:** [последний релиз](https://github.com/opacusio/opacusr/releases/latest) — `.deb` для Debian/Ubuntu, `.msi` / `.zip` для Windows, `.tar.gz` для macOS и портативного Linux. У каждого файла есть SHA-256 контрольная сумма в `SHA256SUMS` (проверка: `sha256sum -c SHA256SUMS`).
 
 | Платформа | Пакет | Примечания |
 | --- | --- | --- |
