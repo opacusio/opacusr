@@ -4,6 +4,62 @@ All notable changes to OpacusR are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is
 SemVer-ish (breaking protocol changes bump the minor until 1.0).
 
+## [0.3.0] — 2026-10-30
+
+Protocol version 2 (`SessionAccept` gained `view_only`/`screens`/
+`audio_available`; new messages `LinkStats`, `SelectScreen`,
+`AudioControl`, `AudioFrame`). Mixed 0.2/0.3 versions are rejected
+cleanly with a version-mismatch message.
+
+### Added
+
+- **Clipboard sync** — both directions with echo suppression, driven by a
+  dedicated clipboard worker thread (`opacusr-input::clipboard`); 512 KiB
+  size cap; live toggle in the viewer toolbar; `clipboard_sync` in
+  `agent.toml`. Headless hosts degrade to no-op.
+- **View-only sessions + ACL** — the host-side grant is authoritative:
+  input is ignored and file/terminal requests are explicitly refused in
+  view-only sessions. Consent is now three-way (full / view-only / deny)
+  in both the GUI dialog and the CLI prompt. Unattended policy:
+  `default_permission = full | view-only | deny` plus per-viewer
+  `acl_rules` (matched on the self-reported display name — the session
+  password remains the real gate).
+- **Adaptive quality** — the viewer reports `LinkStats` (RTT + received
+  FPS) on every pong; the host maps reports onto four quality tiers with
+  fast-degrade / slow-upgrade hysteresis. A manual `QualitySet` disables
+  adaptation for the session. `adaptive_quality` in `agent.toml`.
+- **Windows: DXGI Desktop Duplication capture** — frames straight from
+  DWM (hardware overlays, fullscreen apps), BGRA→RGBA readback through a
+  staging texture, idle-timeout frame caching, automatic rebuild on
+  `ACCESS_LOST` (UAC prompts, desktop switches). Backend selection via
+  `capture = auto | gdi | dxgi` and `--capture`; GDI remains the fallback.
+- **Wayland: PipeWire screencast (experimental)** — behind the non-default
+  `pipewire` cargo feature: xdg-desktop-portal ScreenCast consent, then a
+  PipeWire consumer stream (BGRx/RGBA/RGB). A native Wayland session
+  prefers the portal and falls back to X11/XWayland.
+- **Multi-monitor** — backends enumerate monitors (`ScreenCapture::screens`,
+  RandR on X11, `EnumDisplayMonitors` on GDI, DXGI adapter outputs);
+  the viewer picks one in the toolbar (`SelectScreen`); input rescaling
+  follows the streamed monitor.
+- **Audio streaming** — Opus 48 kHz mono, 20 ms frames, ~32 kbps.
+  Windows: WASAPI shared-mode *loopback* of the default output device
+  (the machine's actual sound). Linux/macOS: `cpal` capture (microphone,
+  or a Pulse monitor by name via `audio_device =`). The viewer plays
+  through the default output with a small prebuffer; toolbar toggle when
+  the host advertises `audio_available`.
+- `cargo-deb` agent package now depends on `libasound2`; CI installs
+  `libasound2-dev` on Linux.
+
+### Changed
+
+- `SessionAccept` extended (see protocol v2 above); old peers are refused
+  with a clean version mismatch.
+- `opacusr-agent --run` gained `--capture auto|gdi|dxgi`.
+- Agent audio is a default cargo feature (`audio`); opt out with
+  `--no-default-features` where the vendored opus build is unavailable
+  (e.g. windows-gnu cross builds). Windows MSVC links the prebuilt opus
+  shipped by `audiopus_sys`.
+
 ## [0.2.0] — 2026-10-30
 
 ### Added
@@ -56,19 +112,10 @@ SemVer-ish (breaking protocol changes bump the minor until 1.0).
   webrtc-rs + TCP direct + TCP relay + chunking + secure session +
   file-transfer engine + signaling client), capture (X11 / Win32 GDI /
   test source), codec (JPEG), input (enigo + test doubles), server (axum
-  WebSocket signaling + TCP relay hub), agent (sessions, PTY, config,
-  CLI), client (viewer state machine), app (eframe/egui GUI).
-- End-to-end encryption on every transport: Argon2id PSK, HMAC-SHA256
-  challenge-response, HKDF → ChaCha20-Poly1305 with counter nonces and
-  strict replay rejection.
-- Features: screen streaming (JPEG), remote mouse/keyboard, resumable
-  SHA-256-verified file transfer (64 KiB chunks, sliding window 8), chat,
-  interactive terminal (ConPTY/openpty), unattended access, attended-mode
-  consent prompts.
-- Self-hosted signaling + relay server; Docker Compose bundle with coturn
-  (STUN/TURN).
-- Documentation: architecture, wire protocol, security/threat model,
-  platform matrix, roadmap; bilingual README (EN/RU).
-- CI (fmt + clippy + tests on Linux/Windows/macOS); 35 tests including a
-  full in-process E2E session.
-- AGPL-3.0 license.
+  signaling + relay), agent (PTY, unattended), client (viewer session
+  logic), app (egui GUI).
+- Security model: Argon2id PSK → HMAC-SHA256 proof → HKDF-SHA256 →
+  ChaCha20-Poly1305 with counter nonces; replay = fatal.
+- Docker Compose (signaling + coturn), CI matrix (Linux/Windows/macOS),
+  bilingual README, docs (architecture, protocol, security, platforms,
+  roadmap), AGPL-3.0.

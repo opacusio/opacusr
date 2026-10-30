@@ -74,16 +74,24 @@ What the infrastructure *can* do: correlate peer IDs and timing, refuse service,
 
 **Out of scope:** compromises of the endpoints themselves (keyloggers, screen scrapers on the host), side channels, traffic-analysis-resistant cover traffic.
 
-## 7. Known limitations (v0.2.0)
+## 7. Access policy (v0.3.0)
+
+- **View-only is enforced host-side.** In a view-only session the agent drops input and explicitly refuses file-transfer and terminal requests regardless of what the viewer sends. The viewer is told via `SessionAccept.view_only` and disables its input path too — but never trust the client: the host decides.
+- **ACL (access control list).** `default_permission = full | view-only | deny` sets the policy for unattended connections; `acl_rules` override it per viewer. Rules match the viewer's **self-reported display name** (case-insensitive). This is a convenience policy layer, not authentication — the session password remains the real gate, so name-based rules must not be relied on in adversarial settings (cryptographic viewer identities are on the roadmap).
+- **Attended consent** always wins: the GUI dialog (full / view-only / deny) or the CLI prompt overrides ACL defaults for that session.
+- **Clipboard sync** transfers up to 512 KiB of text per event in both directions. Both sides keep an echo-suppression shadow (text they just sent or applied) so a sync does not ping-pong. Treat clipboard contents as sensitive: sync can be disabled per session (viewer toolbar) or globally (`clipboard_sync = false`).
+- **Audio** is opt-in per session (viewer sends `AudioControl`) and globally (`audio = false` disables it); Windows captures the default output device's loopback, Linux/macOS capture the configured input device.
+
+## 8. Known limitations (v0.3.0)
 
 1. **Password storage on Linux without a Secret Service.** On Windows and macOS the unattended password lives in the OS keychain (Credential Manager / Keychain). On Linux it goes to GNOME Keyring/KWallet via the Secret Service; when no provider runs (headless servers), the agent falls back to the `agent.toml` field (mode `0600`). It must be recoverable to compute Argon2id for every challenge; hashed storage would break unattended verification.
-2. **No per-user accounts / ACLs.** One access password per host. Role-based access ("view only", "no file transfer") is planned.
+2. **ACL identities are self-reported names.** See §7 — strong per-viewer identities are planned.
 3. **No rate limiting / lockout** on auth attempts yet — recommended mitigation while self-hosting: run the server behind a firewall/reverse proxy with rate limiting, and use a strong random password.
 4. **WebRTC DTLS certificates are ephemeral** (generated per connection by webrtc-rs). Combined with the password handshake this is acceptable, but pinned/fingerprinted certs would harden the first connection.
 5. **TURN credentials** (when using coturn) are shared static/time-limited secrets at the deployment layer; OpacusR does not yet broker per-session TURN credentials.
 6. **Strict in-order crypto** means a transport that reorders frames (none today) would require a resync mechanism before use.
 
-## 8. Operational hardening checklist (self-hosting)
+## 9. Operational hardening checklist (self-hosting)
 
 - Generate the access password with a password manager (≥ 20 random characters); `opacusr-agent passwd` prompts without echo.
 - Let `opacusr-agent passwd` store the password in the OS keychain (default); use `passwd --file` only on systems without a keychain. Keep `agent.toml` permissions at `0600` (default on Unix) in that case; on Windows keep it under the user profile, not a shared location.
@@ -92,7 +100,7 @@ What the infrastructure *can* do: correlate peer IDs and timing, refuse service,
 - Monitor `/health` and logs (`RUST_LOG=info`); every auth failure is logged by the agent.
 - Restrict the relay port (8081) and signaling (8080) at the firewall to the networks that need them.
 
-## 9. Roadmap (security items)
+## 10. Roadmap (security items)
 
 - ~~OS keychain for the unattended password~~ **done in v0.2.0** (Windows Credential Manager / macOS Keychain / Secret Service with a vendored libdbus; file fallback).
 - Per-session TURN credential minting (coturn REST API) driven by the signaling server.

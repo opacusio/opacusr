@@ -1,25 +1,25 @@
 # OpacusR Roadmap
 
-Where OpacusR is heading. Items are grouped by milestone; security items from [security.md](security.md) §9 are folded in where they belong.
+Where OpacusR is heading. Items are grouped by milestone; security items from [security.md](security.md) §10 are folded in where they belong.
 
 ## Done
 
 - **v0.1.0** — WebRTC + TCP/relay transports, JPEG streaming, remote input, file transfer, chat, PTY terminal, unattended access, self-hosted signaling/relay, Docker Compose (server + coturn), CI on three OSes.
 - **v0.2.0** — H.264 codec (Cisco OpenH264, screen-content tuned, JPEG fallback, `codec` config), unattended password in the OS keychain (Windows Credential Manager / macOS Keychain / Linux Secret Service, 0600-file fallback), packaging: deb (agent + viewer with systemd unit and .desktop), Windows MSI (WiX), release pipeline producing tar.gz/zip/deb/msi on every `v*` tag.
+- **v0.3.0** — clipboard sync (both directions, echo-suppressed), view-only mode + ACL policy, adaptive quality (RTT/FPS tiers with hysteresis), DXGI Desktop Duplication (Windows) and PipeWire portal capture (Wayland, experimental), multi-monitor selection, audio streaming (WASAPI loopback on Windows, cpal mic on Linux/macOS, Opus 48 kHz mono).
 
 ## M1 — Media & experience (next)
 
-- **Quality adaptation** — drive quality/scale/fps from measured RTT (`Ping/Pong`) and send-queue depth; frame pacing.
-- **DXGI Desktop Duplication** capture on Windows (multi-monitor, cursor compositing, higher fps at lower CPU).
-- **Wayland capture** via PipeWire/xdg-desktop-portal on Linux.
-- **Clipboard sync** end-to-end (`ClipboardText` message exists; wire to platform clipboards with size limits).
-- **Session UX**: multi-monitor selection, fullscreen hotkeys, quality presets in the viewer UI.
+- **Audio polish**: Linux system-sound capture without manual device picking (PipeWire monitor), Windows per-device selection, viewer-side volume/mute, WASAPI loopback auto-recovery after default-device changes.
+- **Wayland hardening**: promote the PipeWire backend to default after field testing; multi-monitor portal dialogs; DmaBuf zero-copy path.
+- **Cursor rendering**: compositor cursor overlay (DXGI pointer shapes / X11 cursor events) so remote viewers always see the pointer.
+- **Session UX**: fullscreen hotkeys, quality presets, session stats panel (tier, encode time, packet loss).
 - **VP9/AV1 evaluation** behind the existing codec traits (web-optimized fallback for slow links).
-- **Audio streaming** (microphone + system sound, Opus over a dedicated WebRTC channel) — the single most requested remote-desktop feature after video.
+- **H.264 incremental/region encode** for lower CPU on static screens (dirty-rect driven).
 
 ## M2 — Trust & accounts
 
-- **Per-user access control**: multiple credentials per host with scopes (`view-only`, `no-files`, `no-terminal`), session logging with consent prompts.
+- **Strong ACL identities**: per-viewer keys / device fingerprints so rules do not depend on self-reported names (today the password is the real gate, see security.md).
 - **Auth rate limiting & lockout** in the agent; optional TOFU/pinned host fingerprints in the viewer.
 - **Per-session TURN credentials** minted by the signaling server (coturn REST API) instead of a shared secret.
 - **Windows service / macOS launchd** installs for the agent (the systemd user unit and MSI already ship; service-mode is the remaining gap).

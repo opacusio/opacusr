@@ -5,8 +5,8 @@
 > 🇬🇧 English documentation: [README.md](README.md)
 
 - **Лицензия:** AGPL-3.0
-- **Статус:** v0.2.0 — рабочее ядро, активная разработка
-- **Платформы:** Linux (X11), Windows, macOS (частично), Android/iOS (каркас)
+- **Статус:** v0.3.0 — рабочее ядро, активная разработка
+- **Платформы:** Linux (X11 / Wayland через PipeWire), Windows (DXGI/GDI), macOS (частично), Android/iOS (каркас)
 - **Репозиторий:** [github.com/opacusio](https://github.com/opacusio)
 
 ---
@@ -20,6 +20,11 @@
 | Функция | Состояние |
 | --- | --- |
 | Трансляция экрана — H.264 (Cisco OpenH264, настройки под экран) с фолбэком на JPEG; настройка качества / масштаба / fps | ✅ |
+| **Адаптивное качество** — тир-контроллер по RTT/FPS: быстрое снижение, осторожное повышение, ручные настройки в приоритете | ✅ |
+| **Мульти-монитор** — список мониторов и переключение на лету (X11 RandR, GDI, DXGI) | ✅ |
+| **Синхронизация буфера обмена** — в обе стороны с защитой от эха | ✅ |
+| **View-only режим + ACL** — полный доступ / только просмотр / отказ — на сессию и на зрителя | ✅ |
+| **Аудио** — Windows: системный звук (WASAPI loopback); Linux/macOS: микрофон; Opus 48 кГц моно ~32 кбит/с | ✅ |
 | Управление мышью и клавиатурой | ✅ |
 | Передача файлов (чанками, с докачкой, проверка SHA-256) | ✅ |
 | Чат | ✅ |
@@ -32,6 +37,7 @@
 | Самохостинговый сервер signaling + relay | ✅ |
 | Docker Compose (signaling + coturn) | ✅ |
 | Пакеты: deb (agent + viewer, systemd unit, .desktop) · MSI (WiX) · release-CI | ✅ |
+| Захват: DXGI Desktop Duplication (Windows), X11 (Linux), Wayland через PipeWire-портал (эксперим.) | ✅ |
 
 ## Быстрый старт
 
@@ -61,7 +67,7 @@ opacusr-agent id                # показать ID этого хоста
 opacusr-agent config            # путь к конфигу и сводка
 ```
 
-Настройки лежат в `~/.config/opacusr/agent.toml` (Linux), `%APPDATA%\opacusr\agent.toml` (Windows), `~/Library/Application Support/opacusr/agent.toml` (macOS). Ключевые поля: `server_url`, `name`, `password` / `password_in_keychain`, `fps`, `jpeg_quality`, `scale_percent`, `auto_accept_files`, `download_dir`, `lan_port`, `ice_urls`, `codec` (`auto` | `h264` | `jpeg`).
+Настройки лежат в `~/.config/opacusr/agent.toml` (Linux), `%APPDATA%\opacusr\agent.toml` (Windows), `~/Library/Application Support/opacusr/agent.toml` (macOS). Ключевые поля: `server_url`, `name`, `password` / `password_in_keychain`, `fps`, `jpeg_quality`, `scale_percent`, `auto_accept_files`, `download_dir`, `lan_port`, `ice_urls`, `codec` (`auto` | `h264` | `jpeg`), `clipboard_sync`, `adaptive_quality`, `audio`, `audio_device`, `capture` (`auto` | `gdi` | `dxgi`, Windows), `default_permission` (`full` | `view-only` | `deny`), `acl_rules` (переопределения по зрителям).
 
 ### 3. Сторона зрителя (кто управляет)
 
@@ -88,7 +94,14 @@ cargo build --release          # всё
 cargo test  --workspace        # 40 тестов, включая полный E2E-цикл (уже с H.264)
 ```
 
-Rust 1.75+ (edition 2021). Для сборки на Linux нужны клиентские библиотеки X11 (`libx11-dev`, `libxi-dev` на Debian/Ubuntu); NASM опционален (ускоряет встроенный OpenH264). Windows использует GDI; macOS — core-graphics там, где доступно (см. [docs/platforms.md](docs/platforms.md)). Собрать без H.264: `cargo build --release -p opacusr-codec --no-default-features`.
+Rust 1.75+ (edition 2021). Для сборки на Linux нужны клиентские библиотеки X11 (`libx11-dev`, `libxi-dev` на Debian/Ubuntu) и `libasound2-dev` (аудио); NASM опционален (ускоряет встроенный OpenH264). Захват на Windows — DXGI Desktop Duplication с фолбэком на GDI (`--capture gdi` — принудительно); macOS — core-graphics там, где доступно (см. [docs/platforms.md](docs/platforms.md)).
+
+Опциональные сборки:
+
+```bash
+cargo build --release --features opacusr-capture/pipewire   # Wayland через портал (нужны libpipewire-0.3-dev, libspa-0.2-dev)
+cargo build --release --no-default-features                 # без аудио (например, кросс-сборка windows-gnu)
+```
 
 ## Архитектура за минуту
 
@@ -116,12 +129,12 @@ Rust 1.75+ (edition 2021). Для сборки на Linux нужны клиен�
 | `opacusr-proto` | Сообщения, framing, signaling-пакеты (bincode) |
 | `opacusr-crypto` | Вывод PSK, challenge-response, сессионная криптография |
 | `opacusr-transport` | Транспорты WebRTC / TCP / relay, чанкинг, защищённая сессия, движок передачи файлов, signaling-клиент |
-| `opacusr-capture` | Захват экрана: X11, Win32 GDI, тестовый источник |
-| `opacusr-codec` | JPEG-кодек за трейтом `VideoEncoder/Decoder` |
-| `opacusr-input` | Ввод (enigo) с тестовыми дублями |
+| `opacusr-capture` | Захват экрана: X11 (RandR, мультимонитор), DXGI Desktop Duplication + GDI (Windows), PipeWire-портал (Wayland, эксперим.), тестовый источник |
+| `opacusr-codec` | JPEG + H.264 (OpenH264) за трейтом `VideoEncoder/Decoder` |
+| `opacusr-input` | Ввод (enigo), воркер буфера обмена, тестовые дубли |
 | `opacusr-server` | axum WebSocket signaling + TCP relay hub |
-| `opacusr-agent` | Хост-демон: сессии, PTY, конфиг, CLI |
-| `opacusr-client` | Машина состояний сессии зрителя (не зависит от транспорта) |
+| `opacusr-agent` | Хост-демон: сессии, PTY, захват аудио, адаптивное качество, ACL, CLI |
+| `opacusr-client` | Машина состояний сессии зрителя (кадры, ввод, аудио, буфер обмена) |
 | `opacusr-app` | Десктопный GUI eframe/egui (зритель + панель хоста) |
 
 ## Заметки о безопасности (кратко)
@@ -132,7 +145,7 @@ Rust 1.75+ (edition 2021). Для сборки на Linux нужны клиен�
 - Пароль unattended-доступа хранится в OS-keychain (Windows Credential Manager / macOS Keychain / Linux Secret Service); если keychain недоступен — в конфиге с правами `0600`.
 - Конфиги с учётными данными записываются с правами `0600`.
 
-Полная модель угроз и планы (TURN-учётные данные, rate limiting, view-only режимы) — в [docs/security.md](docs/security.md).
+Полная модель угроз и планы (TURN-учётные данные, rate limiting) — в [docs/security.md](docs/security.md).
 
 ## Документация
 
@@ -142,7 +155,7 @@ Rust 1.75+ (edition 2021). Для сборки на Linux нужны клиен�
 | [docs/protocol.md](docs/protocol.md) | Framing, signaling-рукопожатие, сессионное рукопожатие, справочник сообщений |
 | [docs/security.md](docs/security.md) | Криптографическая схема, модель угроз, известные ограничения |
 | [docs/platforms.md](docs/platforms.md) | Статус захвата/ввода по платформам, заметки о сборке |
-| [docs/roadmap.md](docs/roadmap.md) | Планы: H.264/VP9, аудио, keychain, мобильный UI… |
+| [docs/roadmap.md](docs/roadmap.md) | Планы: VP9/AV1, маршрутизация аудио, мобильный UI… |
 
 ## Участие в разработке
 

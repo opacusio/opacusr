@@ -71,7 +71,7 @@ AuthResponse {proof: 32}            ──►
 AuthResult {ok, session_salt:16}    ◄──
      session_key = HKDF-SHA256(PSK, salt=session_salt, info="opacusr-session-v1") → 32
      every following frame is ChaCha20-Poly1305 sealed (SecureSession)
-SessionAccept {screen_w, screen_h, …}  ◄──   capabilities of the host
+SessionAccept {screen_w, screen_h, view_only, screens[], audio_available}  ◄──   capabilities of the host
 ```
 
 `proto_version` must match; otherwise the peer rejects with a descriptive `AuthResult`/`SessionReject`. Authentication is always initiated by the viewer toward the host's access password (interactive *and* unattended). See [security.md](security.md) for parameter choices (Argon2id memory/iterations, nonce discipline, replay window).
@@ -88,9 +88,12 @@ Serialized with bincode over the framed channels. Grouped by purpose:
 | `AuthChallenge` | host→viewer | `salt:16`, `nonce:16`, `kdf: KdfParams` | per-session randomness |
 | `AuthResponse` | viewer→host | `proof:32` | HMAC over `nonce‖salt` |
 | `AuthResult` | host→viewer | `ok`, `error`, `session_salt:16` | salt keys the session |
-| `SessionAccept` | host→viewer | `screen_w`, `screen_h`, … | capabilities |
+| `SessionAccept` | host→viewer | `screen_w`, `screen_h`, `codec`, `fps_hint`, `view_only`, `screens: Vec<ScreenInfo>`, `audio_available` | capabilities; `screens` lists selectable monitors (id, name, w×h, active) |
 | `SessionReject` | host→viewer | reason | busy / rejected |
-| `QualitySet` | viewer→host | jpeg quality, scale | live quality control |
+| `QualitySet` | viewer→host | jpeg quality, scale | live quality control; disables adaptive quality for the session |
+| `LinkStats` | viewer→host | `rtt_ms`, `recv_fps` | sent on every pong; feeds the adaptive-quality controller |
+| `SelectScreen` | viewer→host | `id` | switch the streamed monitor (ids from `SessionAccept.screens`) |
+| `AudioControl` | viewer→host | `enable` | start/stop the audio stream |
 | `Pause(bool)` | viewer→host | — | pause/resume stream |
 | `Ping(u64)` / `Pong(u64)` | both | monotonic counter | RTT + liveness |
 | `Bye(ByeReason)` | both | reason | clean disconnect |
@@ -99,7 +102,16 @@ Serialized with bincode over the framed channels. Grouped by purpose:
 
 | Message | Fields | Notes |
 | --- | --- | --- |
-| `VideoFrame` | `seq:u64`, `width`, `height`, `keyframe:bool`, `codec: CodecId`, `data` | Media channel; `CodecId::Jpeg` today, trait-ready for H.264/VP9 |
+| `VideoFrame` | `seq:u64`, `width`, `height`, `keyframe:bool`, `codec: CodecId`, `data` | Media channel; `CodecId::Jpeg` or `CodecId::H264` (v0.2+) |
+
+### Audio (v0.3+)
+
+Fixed wire format: **Opus, 48 kHz mono, 20 ms frames (960 samples), VoIP bitrate** (`opacusr_proto::audio`).
+
+| Message | Direction | Fields | Notes |
+| --- | --- | --- | --- |
+| `AudioControl` | viewer→host | `enable` | start/stop; only honoured when `SessionAccept.audio_available` |
+| `AudioFrame` | host→viewer | `seq:u32`, `data` | Media channel; viewer applies a small prebuffer, silence on underrun |
 
 ### Input
 
@@ -110,7 +122,7 @@ Serialized with bincode over the framed channels. Grouped by purpose:
 | `MouseWheel` | delta, axis | horizontal + vertical |
 | `KeyEvent` | key code, down/up | enigo key codes |
 | `TextInput` | UTF-8 text | used by chat-driven typing and mobile |
-| `ClipboardText` | text | clipboard sync (where supported) |
+| `ClipboardText` | text | clipboard sync both ways (≤512 KiB, echo-suppressed on both sides) |
 
 ### Chat
 

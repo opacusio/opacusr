@@ -5,8 +5,8 @@
 > 🇷🇺 Russian documentation: [README.ru.md](README.ru.md)
 
 - **License:** AGPL-3.0
-- **Status:** v0.2.0 — working core, actively developed
-- **Platforms:** Linux (X11), Windows, macOS (partial), Android/iOS (skeleton)
+- **Status:** v0.3.0 — working core, actively developed
+- **Platforms:** Linux (X11 / Wayland via PipeWire), Windows (DXGI/GDI), macOS (partial), Android/iOS (skeleton)
 - **Repository home:** [github.com/opacusio](https://github.com/opacusio)
 
 ---
@@ -20,6 +20,11 @@ Commercial remote-desktop tools route your sessions through the vendor's cloud. 
 | Feature | State |
 | --- | --- |
 | Screen streaming — H.264 (Cisco OpenH264, screen-content tuned) with JPEG fallback; adjustable quality / scale / fps | ✅ |
+| **Adaptive quality** — RTT/FPS-driven tiers, fast-degrade / slow-upgrade hysteresis, manual override wins | ✅ |
+| **Multi-monitor** — enumerate + switch monitors mid-session (X11 RandR, GDI, DXGI) | ✅ |
+| **Clipboard sync** — both directions with echo suppression | ✅ |
+| **View-only mode + ACL** — full / view-only / deny per session and per viewer | ✅ |
+| **Audio** — Windows: system sound (WASAPI loopback); Linux/macOS: mic; Opus 48 kHz mono ~32 kbps | ✅ |
 | Remote mouse & keyboard control | ✅ |
 | File transfer (chunked, resumable, SHA-256 verified) | ✅ |
 | Chat | ✅ |
@@ -32,6 +37,7 @@ Commercial remote-desktop tools route your sessions through the vendor's cloud. 
 | Signaling + relay self-hosted server | ✅ |
 | Docker Compose bundle (signaling + coturn) | ✅ |
 | Packages: deb (agent + viewer, systemd unit, .desktop) · MSI (WiX) · release CI | ✅ |
+| Capture: DXGI Desktop Duplication (Windows), X11 (Linux), Wayland via PipeWire portal (experimental) | ✅ |
 
 ## Quick start
 
@@ -61,7 +67,7 @@ opacusr-agent id                # print this host's registered ID
 opacusr-agent config            # print config location & summary
 ```
 
-Settings live in `~/.config/opacusr/agent.toml` (Linux), `%APPDATA%\opacusr\agent.toml` (Windows), `~/Library/Application Support/opacusr/agent.toml` (macOS). Notable keys: `server_url`, `name`, `password` / `password_in_keychain`, `fps`, `jpeg_quality`, `scale_percent`, `auto_accept_files`, `download_dir`, `lan_port`, `ice_urls`, `codec` (`auto` | `h264` | `jpeg`).
+Settings live in `~/.config/opacusr/agent.toml` (Linux), `%APPDATA%\opacusr\agent.toml` (Windows), `~/Library/Application Support/opacusr/agent.toml` (macOS). Notable keys: `server_url`, `name`, `password` / `password_in_keychain`, `fps`, `jpeg_quality`, `scale_percent`, `auto_accept_files`, `download_dir`, `lan_port`, `ice_urls`, `codec` (`auto` | `h264` | `jpeg`), `clipboard_sync`, `adaptive_quality`, `audio`, `audio_device`, `capture` (`auto` | `gdi` | `dxgi`, Windows), `default_permission` (`full` | `view-only` | `deny`), `acl_rules` (per-viewer overrides).
 
 ### 3. Viewer side (the controller)
 
@@ -88,7 +94,14 @@ cargo build --release          # everything
 cargo test  --workspace        # 40 tests incl. a full E2E session (H.264 in the loop)
 ```
 
-Rust 1.75+ (edition 2021). Linux builds need X11 client libraries (`libx11-dev`, `libxi-dev` on Debian/Ubuntu); NASM is optional (speeds up the bundled OpenH264). Windows builds use GDI; macOS uses core-graphics where available (see [docs/platforms.md](docs/platforms.md)). Build without H.264: `cargo build --release -p opacusr-codec --no-default-features`.
+Rust 1.75+ (edition 2021). Linux builds need X11 client libraries (`libx11-dev`, `libxi-dev` on Debian/Ubuntu) and `libasound2-dev` (audio); NASM is optional (speeds up the bundled OpenH264). Windows capture uses DXGI Desktop Duplication with a GDI fallback (`--capture gdi` to force); macOS uses core-graphics where available (see [docs/platforms.md](docs/platforms.md)).
+
+Optional builds:
+
+```bash
+cargo build --release --features opacusr-capture/pipewire   # Wayland via the portal (needs libpipewire-0.3-dev, libspa-0.2-dev)
+cargo build --release --no-default-features                 # no audio (e.g. windows-gnu cross builds)
+```
 
 ## Architecture in one minute
 
@@ -116,12 +129,12 @@ Details: [docs/architecture.md](docs/architecture.md) · wire format: [docs/prot
 | `opacusr-proto` | Messages, framing, signaling payloads (bincode) |
 | `opacusr-crypto` | PSK derivation, challenge-response, session crypto |
 | `opacusr-transport` | WebRTC / TCP / relay transports, chunking, secure session, file-transfer engine, signaling client |
-| `opacusr-capture` | Screen capture: X11, Win32 GDI, test source |
-| `opacusr-codec` | JPEG video codec behind a `VideoEncoder/Decoder` trait |
-| `opacusr-input` | Input injection (enigo) with test doubles |
+| `opacusr-capture` | Screen capture: X11 (RandR multi-monitor), DXGI Desktop Duplication + GDI (Windows), PipeWire portal (Wayland, experimental), test source |
+| `opacusr-codec` | JPEG + H.264 (OpenH264) video codecs behind a `VideoEncoder/Decoder` trait |
+| `opacusr-input` | Input injection (enigo), clipboard worker, test doubles |
 | `opacusr-server` | axum WebSocket signaling + TCP relay hub |
-| `opacusr-agent` | Host daemon: sessions, PTY, config, CLI |
-| `opacusr-client` | Viewer session state machine (transport-agnostic) |
+| `opacusr-agent` | Host daemon: sessions, PTY, audio capture, adaptive quality, ACL, CLI |
+| `opacusr-client` | Viewer session state machine (frames, input, audio playback, clipboard) |
 | `opacusr-app` | eframe/egui desktop GUI (viewer + host panel) |
 
 ## Security notes (short version)
@@ -131,7 +144,7 @@ Details: [docs/architecture.md](docs/architecture.md) · wire format: [docs/prot
 - The relay server never sees plaintext — it forwards sealed frames.
 - Config files with credentials are written with mode `0600`.
 
-Read [docs/security.md](docs/security.md) for the full threat model and roadmap items (OS keychain, TURN credentials handling, rate limiting).
+Read [docs/security.md](docs/security.md) for the full threat model and roadmap items (TURN credentials handling, rate limiting).
 
 ## Documentation
 
@@ -141,7 +154,7 @@ Read [docs/security.md](docs/security.md) for the full threat model and roadmap 
 | [docs/protocol.md](docs/protocol.md) | Framing, signaling handshake, session handshake, message reference |
 | [docs/security.md](docs/security.md) | Crypto design, threat model, known limitations |
 | [docs/platforms.md](docs/platforms.md) | Per-platform capture/input status and build notes |
-| [docs/roadmap.md](docs/roadmap.md) | Planned features: H.264/VP9, audio, keychain, mobile UI… |
+| [docs/roadmap.md](docs/roadmap.md) | Planned features: VP9/AV1, audio routing, mobile UI… |
 
 ## Contributing
 
