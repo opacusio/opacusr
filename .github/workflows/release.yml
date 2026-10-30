@@ -38,6 +38,7 @@ jobs:
           cargo install cargo-deb
           cargo deb --no-build -p opacusr-agent
           cargo deb --no-build -p opacusr-app
+          cp target/debian/*.deb .
       - name: Package tar.gz
         run: |
           mkdir -p dist/opacusr-${GITHUB_REF_NAME#v}-linux-x86_64
@@ -50,7 +51,7 @@ jobs:
           name: linux-artifacts
           path: |
             opacusr-*-linux-x86_64.tar.gz
-            target/debian/*.deb
+            *.deb
 
   windows:
     name: Windows (msi + zip)
