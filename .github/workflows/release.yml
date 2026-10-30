@@ -99,6 +99,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: Install Opus + pkg-config
+        # audiopus_sys probes pkg-config first; only without a system Opus
+        # does it build the vendored copy via autotools, which needs
+        # autoreconf (absent on macOS runners).
+        run: brew install opus pkg-config
       - uses: actions/cache@v4
         with:
           path: |

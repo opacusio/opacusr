@@ -26,6 +26,16 @@ use tokio::sync::mpsc::UnboundedSender;
 
 pub use opacusr_proto::audio::{BITRATE, FRAME_MS};
 
+// Shared by the WASAPI loopback thread and `parse_wave_format` below.
+// They must live at module scope: `parse_wave_format` cannot see imports
+// that sit inside `wasapi_loopback_loop`.
+#[cfg(windows)]
+use windows::Win32::Media::Audio::{
+    IAudioCaptureClient, IAudioClient, IMMDeviceEnumerator, MMDeviceEnumerator,
+    AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK,
+    WAVEFORMATEX, WAVEFORMATEXTENSIBLE,
+};
+
 /// A live capture+encode stream. Dropping/stopping it joins the worker.
 pub struct HostAudioStream {
     stop: Arc<AtomicBool>,
@@ -200,12 +210,7 @@ fn start_capture(
 
 #[cfg(windows)]
 fn wasapi_loopback_loop(tx: Sender<CaptureChunk>, stop: Arc<AtomicBool>) {
-    use windows::core::GUID;
-    use windows::Win32::Media::Audio::{
-        eConsole, eRender, IAudioCaptureClient, IAudioClient, IMMDeviceEnumerator,
-        MMDeviceEnumerator, AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED,
-        AUDCLNT_STREAMFLAGS_LOOPBACK, WAVEFORMATEX, WAVEFORMATEXTENSIBLE,
-    };
+    use windows::Win32::Media::Audio::{eConsole, eRender};
     use windows::Win32::System::Com::{
         CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_MULTITHREADED,
     };
@@ -262,7 +267,9 @@ fn wasapi_loopback_loop(tx: Sender<CaptureChunk>, stop: Arc<AtomicBool>) {
                     {
                         return Err(format!("get buffer: {e}"));
                     }
-                    let silent = flags & AUDCLNT_BUFFERFLAGS_SILENT.0 != 0;
+                    // AUDCLNT_BUFFERFLAGS_* are generated as i32 in the
+                    // `windows` crate; our counter is u32.
+                    let silent = (flags & AUDCLNT_BUFFERFLAGS_SILENT.0 as u32) != 0;
                     let len = frames as usize * ch as usize;
                     let mut samples = vec![0.0f32; len];
                     if !silent && !data.is_null() {
@@ -307,8 +314,11 @@ fn parse_wave_format(fmt: &WAVEFORMATEX) -> (u32, u16, bool) {
     const IEEE_FLOAT_GUID: GUID = GUID::from_u128(0x0000_0003_0000_0010_8000_00aa_0038_9b71);
     let mut is_float = fmt.wFormatTag == IEEE_FLOAT_TAG;
     if fmt.wFormatTag == WAVE_FORMAT_EXTENSIBLE {
-        let ext = unsafe { &*(fmt as *const WAVEFORMATEX as *const WAVEFORMATEXTENSIBLE) };
-        is_float = ext.SubFormat == IEEE_FLOAT_GUID;
+        // WAVEFORMATEXTENSIBLE is a packed struct: read the GUID through
+        // `addr_of!` + `read_unaligned` instead of a field reference.
+        let ext = fmt as *const WAVEFORMATEX as *const WAVEFORMATEXTENSIBLE;
+        let sub_format = unsafe { std::ptr::addr_of!((*ext).SubFormat).read_unaligned() };
+        is_float = sub_format == IEEE_FLOAT_GUID;
     }
     (fmt.nSamplesPerSec, fmt.nChannels, is_float)
 }

@@ -42,6 +42,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libx11-dev libxi-dev libxtst-dev libasound2-dev
 
+      - name: macOS — install Opus + pkg-config
+        if: runner.os == 'macOS'
+        # audiopus_sys probes pkg-config first; only when Opus is NOT found
+        # does it fall back to building the vendored Opus via autotools —
+        # and macOS runners have no autoreconf, so give it a system Opus.
+        run: brew install opus pkg-config
+
       - name: Format
         run: cargo fmt --all --check
 

@@ -70,6 +70,20 @@ cleanly with a version-mismatch message.
   ICE80 for files under `ProgramFiles64Folder`). The MSI product version
   now comes from the release tag (`candle -dMsiVersion=<tag>` with a
   fallback default), so it no longer has to be bumped by hand.
+- Windows build: the WASAPI loopback code in `opacusr-agent/src/audio.rs`
+  did not compile on Windows. The `WAVEFORMATEX`/`WAVEFORMATEXTENSIBLE`
+  imports were function-local while `parse_wave_format` needed them too
+  (E0425); `AUDCLNT_BUFFERFLAGS_SILENT` is generated as `i32` by the
+  `windows` crate and was ANDed with a `u32` counter (E0308/E0277); and
+  rustc (E0793) rejects reading the `SubFormat` field of the packed
+  `WAVEFORMATEXTENSIBLE` through a reference. Imports moved to module
+  scope, the flag is cast to `u32`, the GUID is read via
+  `addr_of!` + `read_unaligned`.
+- macOS build: `audiopus_sys` fell back to building the vendored Opus
+  with autotools, but macOS runners ship no `autoreconf`, so the build
+  script panicked ("Failed to autogen Opus"). CI and Release now install
+  `opus` + `pkg-config` via Homebrew first; `audiopus_sys` probes
+  pkg-config before vendoring and links the system Opus.
 
 ## [0.2.0] — 2026-10-30
 
