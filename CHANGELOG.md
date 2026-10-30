@@ -84,6 +84,12 @@ cleanly with a version-mismatch message.
   script panicked ("Failed to autogen Opus"). CI and Release now install
   `opus` + `pkg-config` via Homebrew first; `audiopus_sys` probes
   pkg-config before vendoring and links the system Opus.
+- Release (macOS): the tar.gz job now builds Opus from the official
+  release tarball (`./configure --enable-static`, ships a pre-generated
+  `configure`, so no autotools are needed) instead of the Homebrew
+  bottle. The binaries link Opus statically and run on machines without
+  Homebrew; CI keeps the brew install, which is enough for clippy and
+  tests.
 
 ## [0.2.0] — 2026-10-30
 

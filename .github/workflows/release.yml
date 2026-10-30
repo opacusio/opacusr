@@ -99,11 +99,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Install Opus + pkg-config
-        # audiopus_sys probes pkg-config first; only without a system Opus
-        # does it build the vendored copy via autotools, which needs
-        # autoreconf (absent on macOS runners).
-        run: brew install opus pkg-config
+      - name: Install pkg-config
+        run: brew install pkg-config
+      - name: Build and install Opus (static)
+        # audiopus_sys probes pkg-config first and only falls back to the
+        # vendored autotools build (needs autoreconf, absent on macOS
+        # runners) when no system Opus is found. Official Opus release
+        # tarballs ship a pre-generated ./configure, so no autotools are
+        # needed here. Static linking keeps the artifact self-contained.
+        run: |
+          curl -sL -o /tmp/opus.tar.gz https://downloads.xiph.org/releases/opus/opus-1.5.2.tar.gz
+          tar -xzf /tmp/opus.tar.gz -C /tmp
+          cd /tmp/opus-1.5.2
+          ./configure --prefix=/usr/local --disable-shared --enable-static --disable-doc --disable-extra-programs
+          make -j3
+          sudo make install
       - uses: actions/cache@v4
         with:
           path: |
