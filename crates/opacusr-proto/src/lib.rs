@@ -17,7 +17,10 @@ pub use signal::*;
 
 /// Bump this when the message enums change in a way that breaks
 /// compatibility. Peers must refuse sessions when versions differ.
-pub const PROTO_VERSION: u32 = 1;
+///
+/// v2 (0.3.0): `SessionAccept` gained `view_only`/`screens`/`audio_available`;
+/// new messages `LinkStats`, `SelectScreen`, `AudioControl`, `AudioFrame`.
+pub const PROTO_VERSION: u32 = 2;
 
 /// Application name used in handshakes and logs.
 pub const APP_NAME: &str = "OpacusR";

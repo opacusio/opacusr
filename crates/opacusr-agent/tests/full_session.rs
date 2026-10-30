@@ -96,6 +96,10 @@ async fn full_session_over_tcp() {
             download_dir: host_downloads,
             auto_accept_files: true,
             codec: opacusr_agent::session::CodecChoice::Auto,
+            view_only: false,
+            clipboard_sync: true,
+            adaptive_quality: true,
+            audio: false,
         };
         let session = SecureSession::new(Box::new(TcpTransport::from_stream(sock)), None);
         let injector = SharedInjector::new(host_input_log);
@@ -131,8 +135,13 @@ async fn full_session_over_tcp() {
     let connected = tokio::time::timeout(Duration::from_secs(15), async {
         match events.recv().await.unwrap() {
             ClientEvent::Connected {
-                host_name, screen, ..
-            } => (host_name, screen),
+                host_name,
+                screen,
+                view_only,
+                screens,
+                audio_available,
+                ..
+            } => (host_name, screen, view_only, screens, audio_available),
             other => panic!("expected Connected, got {other:?}"),
         }
     })
@@ -140,6 +149,13 @@ async fn full_session_over_tcp() {
     .unwrap();
     assert_eq!(connected.0, "e2e-host");
     assert_eq!(connected.1, (320, 200));
+    assert!(!connected.2, "full-control session must not be view-only");
+    assert_eq!(
+        connected.3.len(),
+        1,
+        "test source exposes exactly one screen"
+    );
+    assert!(!connected.4, "audio is disabled in this test config");
 
     // Video frames flow with the expected geometry.
     let mut frames = 0u32;

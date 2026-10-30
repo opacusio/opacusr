@@ -1,6 +1,6 @@
 [package]
 name = "opacusr-input"
-description = "OpacusR input injection backends (mouse/keyboard)"
+description = "OpacusR input injection backends (mouse/keyboard) and clipboard helper"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -14,3 +14,4 @@ tracing = { workspace = true }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 enigo = { workspace = true }
+arboard = { workspace = true }

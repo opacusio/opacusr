@@ -3465,6 +3465,7 @@ dependencies = [
  "opacusr-capture",
  "opacusr-codec",
  "opacusr-crypto",
+ "opacusr-input",
  "opacusr-proto",
  "opacusr-transport",
  "rand 0.8.8",
@@ -3505,6 +3506,7 @@ dependencies = [
 name = "opacusr-input"
 version = "0.2.0"
 dependencies = [
+ "arboard",
  "enigo",
  "opacusr-proto",
  "thiserror 2.0.21",

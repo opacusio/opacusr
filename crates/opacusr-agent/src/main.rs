@@ -2,7 +2,9 @@
 //! password, show your ID.
 
 use clap::Parser;
-use opacusr_agent::{config::AgentConfig, service::AgentEvent, AgentService};
+use opacusr_agent::config::AgentConfig;
+use opacusr_agent::service::{AgentEvent, SessionDecision};
+use opacusr_agent::AgentService;
 use tokio::sync::{mpsc, watch};
 
 #[derive(Debug, Parser)]
@@ -137,19 +139,19 @@ async fn run(
     let service_run = async {
         let is_unattended = unattended;
         let (req_tx, mut req_rx) = mpsc::unbounded_channel::<(opacusr_proto::PeerId, String)>();
-        let answers: std::sync::Arc<std::sync::Mutex<Vec<bool>>> = Default::default();
+        let answers: std::sync::Arc<std::sync::Mutex<Vec<SessionDecision>>> = Default::default();
         let prompt_answers = answers.clone();
         std::thread::spawn(move || {
             while let Some((id, name)) = req_rx.blocking_recv() {
-                let ok = prompt_consent(id, &name).unwrap_or(false);
-                prompt_answers.lock().unwrap().push(ok);
+                let d = prompt_consent(id, &name).unwrap_or(SessionDecision::Reject);
+                prompt_answers.lock().unwrap().push(d);
             }
         });
         service
             .run(
                 move |id, name, _| {
                     if is_unattended {
-                        return true;
+                        return SessionDecision::Full;
                     }
                     let _ = req_tx.send((id, name.to_string()));
                     // Wait for the console answer (the prompt thread sets
@@ -160,7 +162,7 @@ async fn run(
                         }
                         std::thread::sleep(std::time::Duration::from_millis(100));
                     }
-                    false
+                    SessionDecision::Reject
                 },
                 shutdown_rx.clone(),
             )
@@ -195,14 +197,20 @@ async fn run(
     Ok(())
 }
 
-/// Blocking console prompt (CLI-only).
-fn prompt_consent(id: opacusr_proto::PeerId, name: &str) -> std::io::Result<bool> {
+/// Blocking console prompt (CLI-only). `y` = full control, `v` = view
+/// only, anything else = reject.
+fn prompt_consent(id: opacusr_proto::PeerId, name: &str) -> std::io::Result<SessionDecision> {
     use std::io::Write;
-    eprint!("Session request from {name} (id {id}). Allow? [y/N] ");
+    eprint!("Session request from {name} (id {id}). Allow? [y=full / v=view-only / N=no] ");
     std::io::stderr().flush()?;
     let mut line = String::new();
     std::io::stdin().read_line(&mut line)?;
-    Ok(line.trim().eq_ignore_ascii_case("y"))
+    let a = line.trim().to_ascii_lowercase();
+    Ok(match a.as_str() {
+        "y" | "yes" => SessionDecision::Full,
+        "v" | "view" | "view-only" => SessionDecision::ViewOnly,
+        _ => SessionDecision::Reject,
+    })
 }
 
 /// Store the unattended password: OS keychain when available (default),
@@ -290,6 +298,20 @@ fn config_info() -> anyhow::Result<()> {
     println!("scale:       {}%", cfg.scale_percent);
     println!("downloads:   {}", cfg.download_dir.display());
     println!("codec:       {}", cfg.codec);
+    println!(
+        "clipboard:   {}",
+        if cfg.clipboard_sync { "synced" } else { "off" }
+    );
+    println!(
+        "adaptive:    {}",
+        if cfg.adaptive_quality { "on" } else { "off" }
+    );
+    println!(
+        "acl:         default {}, {} rule(s)",
+        cfg.default_permission,
+        cfg.acl_rules.len()
+    );
+    println!("audio:       {}", if cfg.audio { "on" } else { "off" });
     let storage = if cfg.password.is_some() {
         "file"
     } else if cfg.password_in_keychain {

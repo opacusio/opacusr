@@ -3,6 +3,9 @@
 
 use egui::Context;
 
+use opacusr_agent::config::Permission;
+use opacusr_agent::service::SessionDecision;
+
 use crate::app::App;
 
 pub fn host_ui(ctx: &Context, app: &mut App) {
@@ -12,25 +15,41 @@ pub fn host_ui(ctx: &Context, app: &mut App) {
         // ---- consent dialog (if pending) ----
         if let Some(host) = &mut app.host {
             if let Some((_id, name, ans_tx)) = host.consent.take() {
-                let mut decision = false;
+                let mut decision: Option<SessionDecision> = None;
                 egui::Window::new("Incoming session")
                     .collapsible(false)
                     .resizable(false)
                     .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                     .show(ctx, |ui| {
                         ui.add_space(4.0);
-                        ui.label(egui::RichText::new(format!("{name} wants to view and control this machine.")).size(15.0));
+                        ui.label(
+                            egui::RichText::new(format!("{name} wants to connect to this machine."))
+                                .size(15.0),
+                        );
                         ui.add_space(8.0);
                         ui.horizontal(|ui| {
-                            if ui.button(egui::RichText::new("✔ Allow").strong()).clicked() {
-                                decision = true;
+                            if ui
+                                .button(egui::RichText::new("✔ Full control").strong())
+                                .clicked()
+                            {
+                                decision = Some(SessionDecision::Full);
+                            }
+                            if ui.button("👁 View only").clicked() {
+                                decision = Some(SessionDecision::ViewOnly);
                             }
                             if ui.button("✖ Deny").clicked() {
-                                decision = false;
+                                decision = Some(SessionDecision::Reject);
                             }
                         });
                     });
-                let _ = ans_tx.send(decision);
+                if let Some(d) = decision {
+                    let _ = ans_tx.send(d);
+                } else {
+                    // Still open — put it back for the next frame.
+                    if let Some(h) = &mut app.host {
+                        h.consent = Some((_id, name, ans_tx));
+                    }
+                }
             }
         }
 
@@ -142,6 +161,43 @@ pub fn host_ui(ctx: &Context, app: &mut App) {
                         }
                     });
             });
+            ui.end_row();
+
+            ui.label(egui::RichText::new("Clipboard sync").strong());
+            ui.checkbox(&mut app.config.clipboard_sync, "share clipboard with connected viewers");
+            ui.end_row();
+
+            ui.label(egui::RichText::new("Adaptive quality").strong());
+            ui.checkbox(
+                &mut app.config.adaptive_quality,
+                "adapt fps/quality/scale to the link (manual settings still win)",
+            );
+            ui.end_row();
+
+            ui.label(egui::RichText::new("Default access").strong());
+            ui.horizontal(|ui| {
+                let mut perm = Permission::parse(&app.config.default_permission);
+                egui::ComboBox::from_id_salt("default_perm")
+                    .selected_text(match perm {
+                        Permission::Full => "full control".to_string(),
+                        Permission::ViewOnly => "view only".to_string(),
+                        Permission::Deny => "deny".to_string(),
+                    })
+                    .width(140.0)
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut perm, Permission::Full, "full control");
+                        ui.selectable_value(&mut perm, Permission::ViewOnly, "view only");
+                        ui.selectable_value(&mut perm, Permission::Deny, "deny");
+                    });
+                if perm.as_str() != app.config.default_permission {
+                    app.config.default_permission = perm.as_str().to_string();
+                }
+                crate::hint(ui, "for unattended connections not matched by ACL rules");
+            });
+            ui.end_row();
+
+            ui.label(egui::RichText::new("Audio").strong());
+            ui.checkbox(&mut app.config.audio, "offer audio streaming to viewers");
             ui.end_row();
         });
 

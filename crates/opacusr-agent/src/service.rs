@@ -19,6 +19,27 @@ use opacusr_transport::webrtc::{
 use crate::config::AgentConfig;
 use crate::session::{CodecChoice, HostEvent, SessionConfig, SessionHost};
 
+/// Decision about an incoming session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionDecision {
+    /// Full control (input, files, terminal).
+    Full,
+    /// Watch only — the host ignores control traffic.
+    ViewOnly,
+    /// Refuse the connection.
+    Reject,
+}
+
+impl From<crate::config::Permission> for SessionDecision {
+    fn from(p: crate::config::Permission) -> Self {
+        match p {
+            crate::config::Permission::Full => SessionDecision::Full,
+            crate::config::Permission::ViewOnly => SessionDecision::ViewOnly,
+            crate::config::Permission::Deny => SessionDecision::Reject,
+        }
+    }
+}
+
 /// Events surfaced to the UI / CLI.
 #[derive(Debug, Clone)]
 pub enum AgentEvent {
@@ -53,10 +74,10 @@ pub struct AgentService {
 
 impl AgentService {
     /// Consent callback for attended mode (GUI dialog / CLI prompt).
-    /// Returning `false` rejects the session.
+    /// Returning [`SessionDecision::Reject`] refuses the session.
     pub async fn run(
         self,
-        mut consent: impl FnMut(opacusr_proto::PeerId, &str, Platform) -> bool + Send,
+        mut consent: impl FnMut(opacusr_proto::PeerId, &str, Platform) -> SessionDecision + Send,
         mut shutdown: tokio::sync::watch::Receiver<bool>,
     ) -> anyhow::Result<()> {
         let mut backoff = std::time::Duration::from_secs(1);
@@ -80,7 +101,7 @@ impl AgentService {
 
     async fn serve_once(
         &self,
-        consent: &mut impl FnMut(opacusr_proto::PeerId, &str, Platform) -> bool,
+        consent: &mut impl FnMut(opacusr_proto::PeerId, &str, Platform) -> SessionDecision,
         shutdown: &mut tokio::sync::watch::Receiver<bool>,
     ) -> anyhow::Result<()> {
         let mut sig = SignalingClient::connect(&self.cfg.server_url).await?;
@@ -107,6 +128,9 @@ impl AgentService {
 
         let mut heartbeat = tokio::time::interval(std::time::Duration::from_secs(10));
         heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        // Per-peer permission decisions, keyed by PeerId (filled on consent).
+        let mut decisions: std::collections::HashMap<opacusr_proto::PeerId, SessionDecision> =
+            std::collections::HashMap::new();
 
         loop {
             tokio::select! {
@@ -121,11 +145,21 @@ impl AgentService {
                     let msg = msg?;
                     match msg {
                         SignalMessage::SessionIncoming(incoming) => {
-                            let accepted = if !self.cfg.is_unattended() {
-                                false
-                            } else if self.unattended {
-                                true
+                            // Permission policy: ACL (+ default) applies in
+                            // unattended mode; a human decides in attended
+                            // mode. "Deny" always refuses.
+                            let decision = if self.unattended {
+                                SessionDecision::from(self.cfg.permission_for(&incoming.display_name))
+                            } else if !self.cfg.is_unattended() {
+                                let _ = self.events.send(AgentEvent::IncomingRequest {
+                                    from: incoming.from,
+                                    name: incoming.display_name.clone(),
+                                    platform: incoming.platform,
+                                });
+                                consent(incoming.from, &incoming.display_name, incoming.platform)
                             } else {
+                                // Password configured but running attended
+                                // (LAN fallback) — still ask, default allow.
                                 let _ = self.events.send(AgentEvent::IncomingRequest {
                                     from: incoming.from,
                                     name: incoming.display_name.clone(),
@@ -133,21 +167,39 @@ impl AgentService {
                                 });
                                 consent(incoming.from, &incoming.display_name, incoming.platform)
                             };
-                            let payload = if accepted {
-                                PeerPayload::Accept
-                            } else {
-                                PeerPayload::Reject { reason: "declined by the host".into() }
+                            if decision == SessionDecision::Reject {
+                                let _ = self.events.send(AgentEvent::Notice(format!(
+                                    "session from {} denied by policy",
+                                    incoming.display_name
+                                )));
+                            }
+                            let payload = match decision {
+                                SessionDecision::Reject => PeerPayload::Reject {
+                                    reason: "declined by the host".into(),
+                                },
+                                _ => PeerPayload::Accept,
                             };
+                            if decision != SessionDecision::Reject {
+                                decisions.insert(incoming.from, decision);
+                            }
                             sig.send(&SignalMessage::PeerSend(PeerSend { to: incoming.from, payload }))
                                 .await?;
                         }
                         SignalMessage::PeerRecv(PeerRecv { from, payload }) => {
                             match payload {
                                 PeerPayload::SdpOffer { sdp } => {
-                                    self.start_webrtc_session(&mut sig, from, &sdp).await?;
+                                    let view_only = decisions.get(&from)
+                                        .copied()
+                                        .unwrap_or(SessionDecision::Full)
+                                        == SessionDecision::ViewOnly;
+                                    self.start_webrtc_session(&mut sig, from, &sdp, view_only).await?;
                                 }
                                 PeerPayload::RelayUse { ticket, port } => {
-                                    self.start_relay_session(from, ticket, port).await?;
+                                    let view_only = decisions.get(&from)
+                                        .copied()
+                                        .unwrap_or(SessionDecision::Full)
+                                        == SessionDecision::ViewOnly;
+                                    self.start_relay_session(from, ticket, port, view_only).await?;
                                 }
                                 _ => {}
                             }
@@ -185,6 +237,7 @@ impl AgentService {
         sig: &mut SignalingClient,
         peer: opacusr_proto::PeerId,
         offer_sdp: &str,
+        view_only: bool,
     ) -> anyhow::Result<()> {
         let pc = new_peer_connection(&self.webrtc_config()).await?;
         let mut pending = AnswerPending::new(pc);
@@ -196,7 +249,7 @@ impl AgentService {
         .await?;
         let transport = pending.finish().await?;
         let _ = self.events.send(AgentEvent::SessionStarted { peer });
-        self.spawn_host(SecureSession::new(Box::new(transport), None));
+        self.spawn_host(SecureSession::new(Box::new(transport), None), view_only);
         Ok(())
     }
 
@@ -205,6 +258,7 @@ impl AgentService {
         peer: opacusr_proto::PeerId,
         ticket: [u8; 16],
         port: u16,
+        view_only: bool,
     ) -> anyhow::Result<()> {
         // Connect to the relay endpoint on the same host as the signaling
         // server.
@@ -216,11 +270,11 @@ impl AgentService {
         )
         .await?;
         let _ = self.events.send(AgentEvent::SessionStarted { peer });
-        self.spawn_host(SecureSession::new(Box::new(relay), None));
+        self.spawn_host(SecureSession::new(Box::new(relay), None), view_only);
         Ok(())
     }
 
-    fn spawn_host(&self, session: SecureSession) {
+    fn spawn_host(&self, session: SecureSession, view_only: bool) {
         // Event pump: HostEvent → AgentEvent for the UI.
         let (tx, rx) = mpsc::unbounded_channel();
         let events = self.events.clone();
@@ -249,6 +303,10 @@ impl AgentService {
             download_dir: self.cfg.download_dir.clone(),
             auto_accept_files: self.cfg.auto_accept_files,
             codec: CodecChoice::parse(&self.cfg.codec),
+            view_only,
+            clipboard_sync: self.cfg.clipboard_sync,
+            adaptive_quality: self.cfg.adaptive_quality,
+            audio: self.cfg.audio,
         };
         let host = SessionHost { cfg, events: tx };
         let capture: Box<dyn ScreenCapture> = if self.demo {
@@ -285,7 +343,14 @@ impl AgentService {
                     let (sock, addr) = accepted?;
                     let _ = self.events.send(AgentEvent::Notice(format!("LAN connection from {addr}")));
                     let transport = TcpTransport::from_stream(sock);
-                    self.spawn_host(SecureSession::new(Box::new(transport), None));
+                    // LAN sessions are password-gated; the ACL still applies
+                    // (the viewer's Hello carries its display name — checked
+                    // here by name after the handshake would be too late, so
+                    // the configured default decides).
+                    let view_only = SessionDecision::from(
+                        self.cfg.permission_for(""),
+                    ) == SessionDecision::ViewOnly;
+                    self.spawn_host(SecureSession::new(Box::new(transport), None), view_only);
                 }
             }
         }

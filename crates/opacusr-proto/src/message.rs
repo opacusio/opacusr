@@ -143,6 +143,25 @@ pub struct SessionAccept {
     pub screen_h: u32,
     pub codec: CodecId,
     pub fps_hint: u8,
+    /// `true` = the host granted *viewing* only: input, files and terminal
+    /// are ignored by the host regardless of what the viewer sends.
+    pub view_only: bool,
+    /// Monitors available for streaming (see [`SelectScreen`]).
+    pub screens: Vec<ScreenInfo>,
+    /// `true` = the host can stream audio on request (`AudioControl`).
+    pub audio_available: bool,
+}
+
+/// One selectable monitor/screen of the host.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScreenInfo {
+    /// Stable within one session; used in [`SelectScreen`].
+    pub id: u32,
+    pub name: String,
+    pub w: u32,
+    pub h: u32,
+    /// `true` for the monitor streamed right now.
+    pub active: bool,
 }
 
 /// Host → viewer: session refused.
@@ -159,6 +178,35 @@ pub struct QualitySet {
     pub jpeg_quality: u8,
     /// Downscale percentage (100 = native resolution).
     pub scale_percent: u16,
+}
+
+/// Viewer → host: periodic link-quality report (measured RTT and the
+/// frame rate the viewer actually received). The host feeds this into the
+/// adaptive-quality controller.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct LinkStats {
+    pub rtt_ms: u32,
+    pub recv_fps: u16,
+}
+
+/// Viewer → host: stream a different monitor (id from `SessionAccept.screens`).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct SelectScreen {
+    pub id: u32,
+}
+
+/// Viewer → host: enable/disable audio streaming.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct AudioControl {
+    pub enable: bool,
+}
+
+/// Host → viewer: one Opus-encoded audio packet
+/// (48 kHz mono, 20 ms, s16le source). Carried on [`crate::Channel::Media`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AudioFrame {
+    pub seq: u32,
+    pub data: Vec<u8>,
 }
 
 /// Host → viewer: one compressed video frame.
@@ -344,6 +392,14 @@ pub enum Message {
     /// Transport-level liveness probe (carries a monotonic counter).
     Ping(u64),
     Pong(u64),
+    /// Viewer → host: link-quality report for adaptive streaming.
+    LinkStats(LinkStats),
+    /// Viewer → host: switch the streamed monitor.
+    SelectScreen(SelectScreen),
+    /// Viewer → host: start/stop the audio stream.
+    AudioControl(AudioControl),
+    /// Host → viewer: one Opus audio packet.
+    AudioFrame(AudioFrame),
     Bye(ByeReason),
 
     // --- desktop streaming ---
@@ -383,7 +439,7 @@ impl Message {
     /// `true` for messages that belong on [`Channel::Media`].
     pub fn channel(&self) -> crate::Channel {
         match self {
-            Message::VideoFrame(_) => crate::Channel::Media,
+            Message::VideoFrame(_) | Message::AudioFrame(_) => crate::Channel::Media,
             _ => crate::Channel::Control,
         }
     }

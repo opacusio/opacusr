@@ -5,7 +5,7 @@ use egui::{Context, TextureHandle};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 use opacusr_agent::config::AgentConfig;
-use opacusr_agent::service::{AgentEvent, AgentService};
+use opacusr_agent::service::{AgentEvent, AgentService, SessionDecision};
 use opacusr_client::session::{
     ClientEvent, Command, SessionClient, SessionSettings, TransportChoice,
 };
@@ -28,6 +28,14 @@ pub struct SessionHandle {
     pub texture: Option<TextureHandle>,
     pub rtt: u32,
     pub paused: bool,
+    /// Host granted view-only access (no input is sent).
+    pub view_only: bool,
+    /// Host monitors (for the screen selector).
+    pub screens: Vec<opacusr_proto::message::ScreenInfo>,
+    pub selected_screen: u32,
+    pub audio_available: bool,
+    /// Live clipboard sync toggle (mirrors the client-side state).
+    pub clipboard_sync: bool,
     pub panel_chat: bool,
     pub panel_files: bool,
     pub panel_term: bool,
@@ -50,6 +58,11 @@ impl SessionHandle {
             texture: None,
             rtt: 0,
             paused: false,
+            view_only: false,
+            screens: Vec::new(),
+            selected_screen: 0,
+            audio_available: false,
+            clipboard_sync: true,
             panel_chat: false,
             panel_files: true,
             panel_term: false,
@@ -70,7 +83,7 @@ pub struct HostHandle {
     pub events: UnboundedReceiver<AgentEvent>,
     pub my_id: Option<PeerId>,
     pub notices: Vec<String>,
-    pub consent: Option<(PeerId, String, std::sync::mpsc::Sender<bool>)>,
+    pub consent: Option<(PeerId, String, std::sync::mpsc::Sender<SessionDecision>)>,
 }
 
 pub struct App {
@@ -91,8 +104,9 @@ pub struct App {
     session: Option<SessionHandle>,
     pub(crate) host: Option<HostHandle>,
     host_shutdown: Option<tokio::sync::watch::Sender<bool>>,
-    host_consent_rx:
-        Option<std::sync::mpsc::Receiver<(PeerId, String, std::sync::mpsc::Sender<bool>)>>,
+    host_consent_rx: Option<
+        std::sync::mpsc::Receiver<(PeerId, String, std::sync::mpsc::Sender<SessionDecision>)>,
+    >,
 
     pub config: AgentConfig,
     pub status_message: String,
@@ -143,6 +157,7 @@ impl App {
             display_name: self.display_name.clone(),
             download_dir: self.config.download_dir.clone(),
             auto_accept_files: true,
+            clipboard_sync: self.config.clipboard_sync,
             webrtc: opacusr_transport::webrtc::WebRtcConfig {
                 ice_servers: self
                     .config
@@ -228,7 +243,8 @@ impl App {
         cfg.scale_percent = self.scale as u16;
         let unattended = cfg.is_unattended();
         let (consent_tx, consent_rx) =
-            std::sync::mpsc::channel::<(PeerId, String, std::sync::mpsc::Sender<bool>)>();
+            std::sync::mpsc::channel::<(PeerId, String, std::sync::mpsc::Sender<SessionDecision>)>(
+            );
 
         let service = AgentService {
             cfg: cfg.clone(),
@@ -237,14 +253,14 @@ impl App {
             unattended,
         };
         self.rt.spawn(async move {
-            let consent = move |id: PeerId, name: &str, _platform| -> bool {
+            let consent = move |id: PeerId, name: &str, _platform| -> SessionDecision {
                 let (ans_tx, ans_rx) = std::sync::mpsc::channel();
                 if consent_tx.send((id, name.to_string(), ans_tx)).is_err() {
-                    return false;
+                    return SessionDecision::Reject;
                 }
                 ans_rx
                     .recv_timeout(std::time::Duration::from_secs(60))
-                    .unwrap_or(false)
+                    .unwrap_or(SessionDecision::Reject)
             };
             let _ = service.run(consent, shutdown_rx).await;
         });
@@ -371,10 +387,23 @@ impl eframe::App for App {
             };
             match ev {
                 ClientEvent::Connected {
-                    host_name, screen, ..
+                    host_name,
+                    screen,
+                    view_only,
+                    screens,
+                    audio_available,
+                    ..
                 } => {
                     sess.screen = screen;
-                    sess.status = format!("connected to {host_name}");
+                    sess.view_only = view_only;
+                    sess.screens = screens;
+                    sess.audio_available = audio_available;
+                    sess.selected_screen = 0;
+                    sess.clipboard_sync = true;
+                    sess.status = format!(
+                        "connected to {host_name}{}",
+                        if view_only { " (view only)" } else { "" }
+                    );
                 }
                 ClientEvent::Frame(frame) => {
                     let img = egui::ColorImage::from_rgba_unmultiplied(

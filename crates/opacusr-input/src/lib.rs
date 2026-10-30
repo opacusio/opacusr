@@ -42,6 +42,8 @@ mod desktop;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub use desktop::DesktopInjector;
 
+pub mod clipboard;
+
 /// No-op injector (mobile viewer-side builds, tests).
 #[derive(Debug, Default)]
 pub struct NullInjector;

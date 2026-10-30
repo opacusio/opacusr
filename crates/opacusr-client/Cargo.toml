@@ -13,6 +13,7 @@ opacusr-crypto = { workspace = true }
 opacusr-transport = { workspace = true }
 opacusr-capture = { workspace = true }
 opacusr-codec = { workspace = true }
+opacusr-input = { workspace = true }
 tokio = { workspace = true }
 futures = { workspace = true }
 anyhow = { workspace = true }

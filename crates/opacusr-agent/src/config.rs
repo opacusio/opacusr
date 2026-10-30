@@ -14,6 +14,44 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+/// Permission level granted to a viewer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Permission {
+    /// Full control (input, files, terminal).
+    Full,
+    /// Watch only: the host ignores input, file and terminal messages.
+    ViewOnly,
+    /// Reject the connection outright.
+    Deny,
+}
+
+impl Permission {
+    /// Parse a config string (`full` | `view-only` | `view` | `deny`).
+    pub fn parse(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "view-only" | "view_only" | "view" | "viewonly" => Self::ViewOnly,
+            "deny" | "reject" | "blocked" => Self::Deny,
+            _ => Self::Full,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Permission::Full => "full",
+            Permission::ViewOnly => "view-only",
+            Permission::Deny => "deny",
+        }
+    }
+}
+
+/// One ACL entry: viewers whose self-reported display name matches
+/// `peer` (case-insensitive) get `permission`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AclRule {
+    pub peer: String,
+    pub permission: String,
+}
+
 /// Agent settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -46,6 +84,20 @@ pub struct AgentConfig {
     /// Video codec: `auto` (H.264 when built with it, else JPEG), `jpeg`,
     /// or `h264` (falls back to JPEG when the feature is compiled out).
     pub codec: String,
+    /// Synchronize the clipboard with connected viewers (both directions).
+    pub clipboard_sync: bool,
+    /// Adapt fps/quality/scale to the measured link quality.
+    pub adaptive_quality: bool,
+    /// Permission for unattended connections not matched by `acl_rules`:
+    /// `full` | `view-only` | `deny`.
+    pub default_permission: String,
+    /// Per-viewer overrides (matched by display name, case-insensitive).
+    pub acl_rules: Vec<AclRule>,
+    /// Offer audio streaming (`AudioControl` from viewers).
+    pub audio: bool,
+    /// Audio capture device substring (`""` = system default; on Windows
+    /// an empty value prefers WASAPI loopback of the default output).
+    pub audio_device: String,
 }
 
 impl Default for AgentConfig {
@@ -66,6 +118,12 @@ impl Default for AgentConfig {
             lan_port: 54000,
             ice_urls: vec!["stun:stun.l.google.com:19302".into()],
             codec: "auto".into(),
+            clipboard_sync: true,
+            adaptive_quality: true,
+            default_permission: "full".into(),
+            acl_rules: Vec::new(),
+            audio: true,
+            audio_device: String::new(),
         }
     }
 }
@@ -142,6 +200,19 @@ impl AgentConfig {
     pub fn is_unattended(&self) -> bool {
         self.password.is_some() || self.password_in_keychain
     }
+
+    /// Permission for a viewer with the given self-reported display name.
+    /// Explicit `acl_rules` win over `default_permission`. Note that names
+    /// are self-reported — the real gate is the session password; the ACL
+    /// is a convenience policy layer, see docs/security.md.
+    pub fn permission_for(&self, peer_name: &str) -> Permission {
+        for rule in &self.acl_rules {
+            if rule.peer.trim().eq_ignore_ascii_case(peer_name.trim()) {
+                return Permission::parse(&rule.permission);
+            }
+        }
+        Permission::parse(&self.default_permission)
+    }
 }
 
 #[cfg(test)]
@@ -160,5 +231,32 @@ mod tests {
         assert_eq!(back.name, "test-box");
         assert_eq!(back.fps, 24);
         assert_eq!(back.jpeg_quality, AgentConfig::default().jpeg_quality);
+    }
+
+    #[test]
+    fn acl_rules_win_over_default() {
+        let cfg = AgentConfig {
+            default_permission: "view-only".into(),
+            acl_rules: vec![
+                AclRule {
+                    peer: "alice".into(),
+                    permission: "full".into(),
+                },
+                AclRule {
+                    peer: "bob".into(),
+                    permission: "deny".into(),
+                },
+            ],
+            ..Default::default()
+        };
+        assert_eq!(cfg.permission_for("Alice"), Permission::Full);
+        assert_eq!(cfg.permission_for("BOB"), Permission::Deny);
+        assert_eq!(cfg.permission_for("stranger"), Permission::ViewOnly);
+    }
+
+    #[test]
+    fn unknown_permission_falls_back_to_full() {
+        assert_eq!(Permission::parse("nonsense"), Permission::Full);
+        assert_eq!(Permission::parse("view-only"), Permission::ViewOnly);
     }
 }

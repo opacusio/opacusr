@@ -11,6 +11,7 @@ use tokio::sync::mpsc;
 
 use opacusr_capture::Frame;
 use opacusr_codec::{make_pair, VideoDecoder};
+use opacusr_input::clipboard::ClipboardHandle;
 use opacusr_proto::message::{self, ByeReason};
 use opacusr_proto::signal::*;
 use opacusr_proto::{Message, PeerId, Platform};
@@ -63,6 +64,10 @@ pub enum Command {
     },
     Chat(String),
     SendClipboard(String),
+    /// Switch the streamed host monitor (id from `Connected.screens`).
+    SelectScreen(u32),
+    /// Enable/disable live clipboard synchronization (both directions).
+    ClipboardSync(bool),
     Quality {
         fps: u8,
         jpeg_quality: u8,
@@ -98,6 +103,13 @@ pub enum ClientEvent {
         host_name: String,
         platform: Platform,
         screen: (u32, u32),
+        /// `true` = host granted view-only access; the UI should not send
+        /// input (the host ignores it anyway).
+        view_only: bool,
+        /// Host monitors available for [`Command::SelectScreen`].
+        screens: Vec<message::ScreenInfo>,
+        /// Host can stream audio on request.
+        audio_available: bool,
     },
     Frame(Frame),
     Chat {
@@ -148,6 +160,8 @@ pub struct SessionSettings {
     pub display_name: String,
     pub download_dir: PathBuf,
     pub auto_accept_files: bool,
+    /// Two-way clipboard synchronization.
+    pub clipboard_sync: bool,
     pub webrtc: WebRtcConfig,
 }
 
@@ -160,6 +174,7 @@ impl Default for SessionSettings {
                 .unwrap_or_else(|| PathBuf::from("."))
                 .join("OpacusR-Received"),
             auto_accept_files: true,
+            clipboard_sync: true,
             webrtc: WebRtcConfig {
                 ice_servers: vec![opacusr_transport::webrtc::IceServerConfig::stun(&[
                     "stun:stun.l.google.com:19302",
@@ -181,6 +196,18 @@ pub struct SessionClient {
     ping_times: HashMap<u64, Instant>,
     next_term_id: u32,
     screen: (u32, u32),
+    /// Host-side permission (from `SessionAccept`).
+    view_only: bool,
+    /// Host monitors (from `SessionAccept`).
+    screens: Vec<message::ScreenInfo>,
+    audio_available: bool,
+    /// Clipboard sync worker + echo-suppression state.
+    clipboard: Option<ClipboardHandle>,
+    clip_sent: Option<String>,
+    clip_applied: Option<String>,
+    /// Frames received since the last `LinkStats` report (for recv_fps).
+    frames_since_stats: u32,
+    stats_started: Instant,
 }
 
 impl SessionClient {
@@ -371,13 +398,24 @@ impl SessionClient {
             }
         };
         let screen = (accept.screen_w, accept.screen_h);
+        let screens = accept.screens.clone();
+        let view_only = accept.view_only;
+        let audio_available = accept.audio_available;
         let (events, rx) = mpsc::unbounded_channel::<ClientEvent>();
         let _ = events.send(ClientEvent::Connected {
             host_name: handshake.host_hello.display_name.clone(),
             platform: handshake.host_hello.platform,
             screen,
+            view_only,
+            screens: screens.clone(),
+            audio_available,
         });
         let (_encoder, decoder) = make_pair(accept.codec);
+        let clipboard = if settings.clipboard_sync {
+            ClipboardHandle::spawn()
+        } else {
+            None
+        };
         let client = Self {
             session,
             decoder,
@@ -389,6 +427,14 @@ impl SessionClient {
             ping_times: HashMap::new(),
             next_term_id: 1,
             screen,
+            view_only,
+            screens,
+            audio_available,
+            clipboard,
+            clip_sent: None,
+            clip_applied: None,
+            frames_since_stats: 0,
+            stats_started: Instant::now(),
         };
         Ok((client, rx))
     }
@@ -402,6 +448,8 @@ impl SessionClient {
     pub async fn run(mut self, mut commands: mpsc::UnboundedReceiver<Command>) -> ClientEvent {
         let mut ping_ticker = tokio::time::interval(std::time::Duration::from_secs(5));
         ping_ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut clip_ticker = tokio::time::interval(std::time::Duration::from_millis(1200));
+        clip_ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         let closed: ClientEvent = loop {
             tokio::select! {
@@ -411,6 +459,28 @@ impl SessionClient {
                     self.ping_times.insert(n, Instant::now());
                     if self.session.send_msg(&Message::Ping(n)).await.is_err() {
                         break ClientEvent::Closed("connection lost".into());
+                    }
+                }
+                _ = clip_ticker.tick() => {
+                    // Local → host clipboard push with echo suppression.
+                    if let Some(clip) = &mut self.clipboard {
+                        clip.request_get();
+                        while let Some(text) = clip.poll() {
+                            if text.len() > opacusr_input::clipboard::CLIPBOARD_MAX_BYTES {
+                                continue;
+                            }
+                            if Some(&text) == self.clip_sent.as_ref()
+                                || Some(&text) == self.clip_applied.as_ref()
+                            {
+                                continue;
+                            }
+                            self.clip_sent = Some(text.clone());
+                            if self.session.send_msg(&Message::ClipboardText(
+                                message::ClipboardText { text },
+                            )).await.is_err() {
+                                break;
+                            }
+                        }
                     }
                 }
                 cmd = commands.recv() => {
@@ -465,6 +535,11 @@ impl SessionClient {
                 })
             }
             Command::SendClipboard(text) => Message::ClipboardText(message::ClipboardText { text }),
+            Command::SelectScreen(id) => Message::SelectScreen(message::SelectScreen { id }),
+            Command::ClipboardSync(on) => {
+                self.clipboard = if on { ClipboardHandle::spawn() } else { None };
+                return Ok(true); // no wire message — pure client-side state
+            }
             Command::Quality {
                 fps,
                 jpeg_quality,
@@ -532,6 +607,7 @@ impl SessionClient {
         match msg {
             Message::VideoFrame(frame) => {
                 self.screen = (frame.width, frame.height);
+                self.frames_since_stats = self.frames_since_stats.saturating_add(1);
                 match self.decoder.decode(&frame.data, frame.width, frame.height) {
                     Ok(f) => {
                         let _ = self.events.send(ClientEvent::Frame(f));
@@ -549,11 +625,37 @@ impl SessionClient {
                     ts_ms: c.ts_ms,
                 });
             }
-            Message::ClipboardText(c) => set_local_clipboard(&c.text),
+            Message::ClipboardText(c) => {
+                if self.settings.clipboard_sync {
+                    if c.text.len() > opacusr_input::clipboard::CLIPBOARD_MAX_BYTES {
+                        tracing::debug!(target: "opacusr", "remote clipboard too large, dropped");
+                    } else {
+                        set_local_clipboard(&c.text);
+                        self.clip_applied = Some(c.text.clone());
+                        self.clip_sent = Some(c.text);
+                    }
+                }
+            }
             Message::Pong(n) => {
                 if let Some(start) = self.ping_times.remove(&n) {
                     let rtt = start.elapsed().as_millis() as u32;
                     let _ = self.events.send(ClientEvent::Rtt(rtt));
+                    // Feed the host's adaptive-quality controller.
+                    let elapsed = self.stats_started.elapsed().as_secs_f32();
+                    let recv_fps = if elapsed >= 1.0 {
+                        (self.frames_since_stats as f32 / elapsed).round() as u16
+                    } else {
+                        0
+                    };
+                    self.frames_since_stats = 0;
+                    self.stats_started = Instant::now();
+                    let _ = self
+                        .session
+                        .send_msg(&Message::LinkStats(message::LinkStats {
+                            rtt_ms: rtt,
+                            recv_fps,
+                        }))
+                        .await;
                 }
             }
             Message::Bye(reason) => {
@@ -598,6 +700,21 @@ impl SessionClient {
 
     pub fn screen_size(&self) -> (u32, u32) {
         self.screen
+    }
+
+    /// Whether the host granted view-only access.
+    pub fn view_only(&self) -> bool {
+        self.view_only
+    }
+
+    /// Host monitors (ids for [`Command::SelectScreen`]).
+    pub fn screens(&self) -> &[message::ScreenInfo] {
+        &self.screens
+    }
+
+    /// Whether the host offered audio streaming.
+    pub fn audio_available(&self) -> bool {
+        self.audio_available
     }
 }
 

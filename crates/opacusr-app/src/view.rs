@@ -15,6 +15,14 @@ pub fn session_ui(ctx: &Context, s: &mut SessionHandle, cfg: &mut AgentConfig) {
     // ---- toolbar ---------------------------------------------------------
     egui::TopBottomPanel::top("session_toolbar").show(ctx, |ui| {
         ui.horizontal(|ui| {
+            if s.view_only {
+                ui.label(
+                    egui::RichText::new("👁 view only")
+                        .color(Color32::from_rgb(255, 170, 60))
+                        .strong(),
+                );
+                ui.separator();
+            }
             ui.label(egui::RichText::new(&s.status).weak().small());
             ui.separator();
             if ui
@@ -23,6 +31,34 @@ pub fn session_ui(ctx: &Context, s: &mut SessionHandle, cfg: &mut AgentConfig) {
             {
                 s.paused = !s.paused;
                 let _ = s.commands.send(Command::Pause(s.paused));
+            }
+            // Screen selector (multi-monitor hosts).
+            if s.screens.len() > 1 {
+                ui.separator();
+                let current = s
+                    .screens
+                    .iter()
+                    .find(|sc| sc.id == s.selected_screen)
+                    .cloned()
+                    .unwrap_or_else(|| s.screens[0].clone());
+                egui::ComboBox::from_id_salt("screen_select")
+                    .selected_text(format!("🖥 {} ({}×{})", current.name, current.w, current.h))
+                    .show_ui(ui, |ui| {
+                        for sc in &s.screens {
+                            ui.selectable_value(
+                                &mut s.selected_screen,
+                                sc.id,
+                                format!("{} ({}×{})", sc.name, sc.w, sc.h),
+                            );
+                        }
+                    });
+                if s.selected_screen != current.id {
+                    let _ = s.commands.send(Command::SelectScreen(s.selected_screen));
+                }
+            }
+            ui.separator();
+            if ui.toggle_value(&mut s.clipboard_sync, "📋 sync").changed() {
+                let _ = s.commands.send(Command::ClipboardSync(s.clipboard_sync));
             }
             ui.separator();
             let mut fps = cfg.fps as f32;
@@ -117,12 +153,17 @@ fn fit_size(available: egui::Vec2, rw: f32, rh: f32) -> egui::Vec2 {
 }
 
 /// Map egui pointer/keyboard events onto remote-desktop commands.
+/// In view-only sessions nothing is sent — the host ignores control
+/// traffic anyway, and not sending it saves bandwidth and surprises.
 fn capture_input(
     _ui: &egui::Ui,
     response: &egui::Response,
     rect: egui::Rect,
     s: &mut SessionHandle,
 ) {
+    if s.view_only {
+        return;
+    }
     let (sw, sh) = (s.screen.0 as f32, s.screen.1 as f32);
 
     // Pointer → remote coordinates.
@@ -310,6 +351,13 @@ fn chat_panel(ui: &mut egui::Ui, s: &mut SessionHandle) {
 
 fn files_panel(ui: &mut egui::Ui, s: &mut SessionHandle) {
     ui.heading("📁 Files");
+    if s.view_only {
+        crate::hint(
+            ui,
+            "View-only session: file transfer is disabled by the host.",
+        );
+        return;
+    }
     crate::hint(
         ui,
         "Drag & drop files anywhere on the window to send them to the host.",
@@ -337,6 +385,13 @@ fn files_panel(ui: &mut egui::Ui, s: &mut SessionHandle) {
 
 fn terminal_panel(ui: &mut egui::Ui, s: &mut SessionHandle) {
     ui.heading("⌨ Remote terminal");
+    if s.view_only {
+        crate::hint(
+            ui,
+            "View-only session: the terminal is disabled by the host.",
+        );
+        return;
+    }
     if !s.term_open {
         if ui.button("Open shell").clicked() {
             let _ = s.commands.send(Command::TermOpen {
