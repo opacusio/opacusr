@@ -69,11 +69,11 @@ git push
 `77f9ced` (фикс CI) → … → **v0.3.0** (clipboard sync, view-only + ACL,
 адаптивное качество, DXGI + PipeWire, мульти-монитор, аудио). Пушьте так:
 
-1. Распакуйте архив в **новую** папку, например `D:\opacusr-0.2.0`.
+1. Распакуйте архив в **новую** папку, например `D:\opacusr-0.3.0`.
 2. В PowerShell 5.1 выполняйте команды **по одной** (без `&&`):
 
 ```powershell
-cd D:\opacusr-0.2.0
+cd D:\opacusr-0.3.0
 git remote set-url origin https://github.com/opacusio/opacusr.git
 git push origin main
 ```
@@ -91,6 +91,17 @@ git push origin main
    ```
 
    Release workflow соберёт deb/msi/tar.gz и опубликует GitHub Release.
+   MSI-шаг использует WiX v3-совместимый `wix/main.wxs` (версия продукта
+   берётся из тега автоматически).
+
+5. **Если тег `v0.2.0` уже ставился** и его Release упал на сборке MSI
+   (старый `main.wxs` был в синтаксисе WiX v4) — сам GitHub Release тогда
+   не публиковался (шаг publish был пропущен), так что сломанный тег
+   можно просто удалить, чтобы он не путался:
+
+   ```powershell
+   git push origin :refs/tags/v0.2.0
+   ```
 
 Старую папку с предыдущей версией после этого можно удалить — вся история
 git в новом архиве.
