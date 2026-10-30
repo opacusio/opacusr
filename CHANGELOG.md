@@ -37,6 +37,17 @@ SemVer-ish (breaking protocol changes bump the minor until 1.0).
   old configs load unchanged (serde defaults).
 - Workspace version bumped to 0.2.0.
 
+### Fixed
+
+- CI on Windows: `Win32Capture` now implements `Send` (safe: the `HWND`
+  is process-wide and GDI resources live within one capture call), an
+  explicit `Default` impl and a fully-initialised `RGBQUAD` satisfy
+  clippy; the unused `allow_test_fallback` on the Windows path is
+  silenced with an explicit `let _ =`.
+- CI on macOS: `Insert` / `NumLock` / `PrintScreen` key mappings are
+  compiled out (enigo 0.6 has no such `Key` variants on macOS); the
+  agent reports them as unsupported keys instead of failing the build.
+
 ## [0.1.0] — 2026-10-29
 
 ### Added

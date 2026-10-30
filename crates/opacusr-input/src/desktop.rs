@@ -25,7 +25,13 @@ impl DesktopInjector {
             OpKey::Tab => Key::Tab,
             OpKey::Backspace => Key::Backspace,
             OpKey::Delete => Key::Delete,
+            // enigo gates `Insert`, `Numlock` and `PrintScr` out on macOS
+            // (no reasonable CGEvent mapping); report them as unsupported
+            // there instead of failing to compile.
+            #[cfg(not(target_os = "macos"))]
             OpKey::Insert => Key::Insert,
+            #[cfg(target_os = "macos")]
+            OpKey::Insert => return Err(InputError::UnsupportedKey(OpKey::Insert)),
             OpKey::Home => Key::Home,
             OpKey::End => Key::End,
             OpKey::PageUp => Key::PageUp,
@@ -48,8 +54,14 @@ impl DesktopInjector {
             OpKey::F11 => Key::F11,
             OpKey::F12 => Key::F12,
             OpKey::CapsLock => Key::CapsLock,
+            #[cfg(not(target_os = "macos"))]
             OpKey::NumLock => Key::Numlock,
+            #[cfg(target_os = "macos")]
+            OpKey::NumLock => return Err(InputError::UnsupportedKey(OpKey::NumLock)),
+            #[cfg(not(target_os = "macos"))]
             OpKey::PrintScreen => Key::PrintScr,
+            #[cfg(target_os = "macos")]
+            OpKey::PrintScreen => return Err(InputError::UnsupportedKey(OpKey::PrintScreen)),
             OpKey::ContextMenu => {
                 return Err(InputError::UnsupportedKey(OpKey::ContextMenu));
             }

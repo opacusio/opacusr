@@ -9,7 +9,8 @@
 use windows_sys::Win32::Foundation::HWND;
 use windows_sys::Win32::Graphics::Gdi::{
     BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC, GetDIBits,
-    ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, SRCCOPY,
+    ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, RGBQUAD,
+    SRCCOPY,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{GetDesktopWindow, GetSystemMetrics};
 
@@ -21,6 +22,19 @@ const SM_CYSCREEN: i32 = 1;
 
 pub struct Win32Capture {
     desktop: HWND,
+}
+
+// SAFETY: `Win32Capture` only carries an `HWND` (a process-wide window
+// handle, not thread-affine) and every GDI resource used in [`capture`]
+// is acquired and released within that one call. The struct is moved
+// between threads only by the agent's host loop, which uses it from a
+// single thread at a time.
+unsafe impl Send for Win32Capture {}
+
+impl Default for Win32Capture {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Win32Capture {
@@ -67,7 +81,12 @@ impl ScreenCapture for Win32Capture {
                     biClrUsed: 0,
                     biClrImportant: 0,
                 },
-                bmiColors: [Default::default()],
+                bmiColors: [RGBQUAD {
+                    rgbBlue: 0,
+                    rgbGreen: 0,
+                    rgbRed: 0,
+                    rgbReserved: 0,
+                }],
             };
             let mut rgba = vec![0u8; (w as usize) * (h as usize) * 4];
             let got = if blit_ok != 0 {

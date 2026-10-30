@@ -126,6 +126,9 @@ pub fn platform_capture(allow_test_fallback: bool) -> Result<Box<dyn ScreenCaptu
     }
     #[cfg(windows)]
     {
+        // GDI capture is always available on Windows; the fallback flag
+        // only governs the Unix path below.
+        let _ = allow_test_fallback;
         return Ok(Box::new(crate::win32::Win32Capture::new()));
     }
     #[allow(unreachable_code)]
