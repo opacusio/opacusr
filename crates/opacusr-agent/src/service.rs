@@ -312,7 +312,10 @@ impl AgentService {
         let capture: Box<dyn ScreenCapture> = if self.demo {
             Box::new(opacusr_capture::test::TestSource::new(1280, 720))
         } else {
-            match opacusr_capture::platform_capture(false) {
+            match opacusr_capture::platform_capture(
+                false,
+                opacusr_capture::WinBackend::parse(&self.cfg.capture),
+            ) {
                 Ok(c) => c,
                 Err(e) => {
                     let _ = self

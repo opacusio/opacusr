@@ -98,6 +98,9 @@ pub struct AgentConfig {
     /// Audio capture device substring (`""` = system default; on Windows
     /// an empty value prefers WASAPI loopback of the default output).
     pub audio_device: String,
+    /// Windows capture backend: `auto` (DXGI, GDI fallback) | `gdi` | `dxgi`.
+    /// Ignored on other platforms.
+    pub capture: String,
 }
 
 impl Default for AgentConfig {
@@ -124,6 +127,7 @@ impl Default for AgentConfig {
             acl_rules: Vec::new(),
             audio: true,
             audio_device: String::new(),
+            capture: "auto".into(),
         }
     }
 }

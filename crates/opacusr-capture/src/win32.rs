@@ -11,11 +11,10 @@
 use windows_sys::Win32::Foundation::{HWND, RECT};
 use windows_sys::Win32::Graphics::Gdi::{
     BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC, GetDIBits,
-    GetMonitorInfoW, GetSystemMetrics, MonitorFromWindow, ReleaseDC, SelectObject, BITMAPINFO,
-    BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HDC, HMONITOR, MONITORINFO, MONITORINFOEXW, RGBQUAD,
-    SRCCOPY,
+    GetMonitorInfoW, ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS,
+    MONITORINFO, MONITORINFOEXW, RGBQUAD, SRCCOPY,
 };
-use windows_sys::Win32::UI::WindowsAndMessaging::GetDesktopWindow;
+use windows_sys::Win32::UI::WindowsAndMessaging::{GetDesktopWindow, GetSystemMetrics};
 
 use crate::source::{ScreenCapture, ScreenDesc};
 use crate::{bgra_to_rgba, CaptureError, Frame};

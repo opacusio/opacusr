@@ -18,6 +18,9 @@ pub mod source;
 pub mod x11;
 
 #[cfg(windows)]
+pub mod dxgi;
+
+#[cfg(windows)]
 pub mod win32;
 
 #[cfg(any(
@@ -107,10 +110,39 @@ pub fn resize_nearest(frame: &Frame, new_w: u32, new_h: u32) -> Frame {
     Frame::new(new_w, new_h, out)
 }
 
+/// Which capture backend to use on Windows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WinBackend {
+    /// Try DXGI Desktop Duplication, fall back to GDI.
+    Auto,
+    /// GDI `BitBlt` (always available, slower).
+    Gdi,
+    /// DXGI Desktop Duplication (fails on service sessions).
+    Dxgi,
+}
+
+impl WinBackend {
+    /// Parse the config value (`auto` | `gdi` | `dxgi`).
+    pub fn parse(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "gdi" => Self::Gdi,
+            "dxgi" => Self::Dxgi,
+            _ => Self::Auto,
+        }
+    }
+}
+
 /// Best backend for the current platform. Falls back to the test source
 /// **only** when `allow_test_fallback` is set (used by `--demo` mode and
 /// tests); production use should surface the error to the user instead.
-pub fn platform_capture(allow_test_fallback: bool) -> Result<Box<dyn ScreenCapture>, CaptureError> {
+/// `backend` selects the Windows capture backend (`auto` | `gdi` | `dxgi`).
+pub fn platform_capture(
+    allow_test_fallback: bool,
+    backend: WinBackend,
+) -> Result<Box<dyn ScreenCapture>, CaptureError> {
+    // `backend` only matters on Windows; reference it unconditionally so
+    // the unused_variables lint is satisfied on other platforms.
+    let _ = backend;
     #[cfg(all(feature = "x11", target_os = "linux"))]
     {
         match crate::x11::X11Capture::connect() {
@@ -126,6 +158,20 @@ pub fn platform_capture(allow_test_fallback: bool) -> Result<Box<dyn ScreenCaptu
     }
     #[cfg(windows)]
     {
+        if backend != WinBackend::Gdi {
+            match crate::dxgi::DxgiCapture::new() {
+                Ok(c) => {
+                    tracing::info!(target: "opacusr", "using DXGI Desktop Duplication");
+                    return Ok(Box::new(c));
+                }
+                Err(e) => {
+                    if backend == WinBackend::Dxgi {
+                        return Err(e);
+                    }
+                    tracing::warn!(target: "opacusr", "DXGI capture unavailable ({e}); falling back to GDI");
+                }
+            }
+        }
         // GDI capture is always available on Windows; the fallback flag
         // only governs the Unix path below.
         let _ = allow_test_fallback;
@@ -133,6 +179,7 @@ pub fn platform_capture(allow_test_fallback: bool) -> Result<Box<dyn ScreenCaptu
     }
     #[allow(unreachable_code)]
     {
+        let _ = backend;
         if allow_test_fallback {
             return Ok(Box::new(crate::test::TestSource::new(1280, 720)));
         }

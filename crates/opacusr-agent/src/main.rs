@@ -31,6 +31,9 @@ enum Cmd {
         /// Also accept direct TCP sessions (LAN mode).
         #[arg(long)]
         allow_lan: bool,
+        /// Windows capture backend: auto | gdi | dxgi (overrides config).
+        #[arg(long)]
+        capture: Option<String>,
     },
     /// Set the unattended access password (OS keychain, file fallback).
     Passwd {
@@ -65,7 +68,8 @@ async fn main() -> anyhow::Result<()> {
             name,
             demo,
             allow_lan,
-        } => run(server, name, demo, allow_lan).await,
+            capture,
+        } => run(server, name, demo, allow_lan, capture).await,
         Cmd::Passwd { file } => passwd(file),
         Cmd::PasswdClear => passwd_clear(),
         Cmd::Id { server } => id(server).await,
@@ -89,8 +93,12 @@ async fn run(
     name: Option<String>,
     demo: bool,
     allow_lan: bool,
+    capture: Option<String>,
 ) -> anyhow::Result<()> {
-    let cfg = load_cfg(server, name);
+    let mut cfg = load_cfg(server, name);
+    if let Some(c) = capture {
+        cfg.capture = c;
+    }
     let (tx, mut rx) = mpsc::unbounded_channel();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
