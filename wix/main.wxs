@@ -1,13 +1,26 @@
 <?xml version='1.0' encoding='utf-8'?>
+<?ifndef MsiVersion ?>
+<?define MsiVersion = "0.3.0" ?>
+<?endif?>
 <!--
-  OpacusR Windows MSI (WiX Toolset v3).
+  OpacusR Windows MSI (WiX Toolset v3.11 — the same version the Release
+  workflow installs). Authoring is strictly WiX v3: v4-only elements such
+  as <StandardDirectory> are NOT valid here, the classic TARGETDIR tree is
+  used instead (ProgramFiles64Folder / ProgramMenuFolder are Windows
+  Installer folder properties referenced by Directory Id).
+
   Build from the repository root on a Windows host:
 
       cargo build (release profile) for opacusr-app, opacusr-agent, opacusr-server
-      candle.exe -arch x64 wix\main.wxs -o build\
-      light.exe -ext WixUIExtension build\main.wixobj -o opacusr-0.2.0-x64.msi
+      candle.exe -arch x64 -dMsiVersion=0.3.0 wix\main.wxs -o build\main.wixobj
+      light.exe -ext WixUIExtension build\main.wixobj -o opacusr-0.3.0-x64.msi
 
-  (CI does exactly this; see .github/workflows/release.yml)
+  The product version comes from the -dMsiVersion preprocessor variable;
+  the Release workflow derives it from the pushed tag (see
+  .github/workflows/release.yml). Without it the <?ifndef> default above
+  applies. Components are marked Win64 because candle runs with
+  -arch x64 and the files land under ProgramFiles64Folder (otherwise
+  light fails ICE80).
 -->
 <Wix xmlns='http://schemas.microsoft.com/wix/2006/wi'>
     <Product
@@ -16,7 +29,7 @@
         UpgradeCode='c5e26ccb-434f-4f92-b458-45d633daa505'
         Language='1033'
         Codepage='1252'
-        Version='0.2.0'
+        Version='$(var.MsiVersion)'
         Manufacturer='OpacusR contributors'>
 
         <Package
@@ -43,38 +56,39 @@
         </UI>
         <WixVariable Id='WixUILicenseRtf' Value='assets\license.rtf'/>
 
-        <StandardDirectory Id='ProgramFiles64Folder'>
-            <Directory Id='INSTALLDIR' Name='OpacusR'>
-                <Directory Id='BinDir' Name='bin'/>
+        <Directory Id='TARGETDIR' Name='SourceDir'>
+            <Directory Id='ProgramFiles64Folder'>
+                <Directory Id='INSTALLDIR' Name='OpacusR'>
+                    <Directory Id='BinDir' Name='bin'/>
+                </Directory>
             </Directory>
-        </StandardDirectory>
+            <Directory Id='ProgramMenuFolder'>
+                <Directory Id='AppMenu' Name='OpacusR'>
+                    <Component Id='StartMenuShortcut' Guid='*' Win64='yes'>
+                        <Shortcut
+                            Id='ViewerStartMenu'
+                            Name='OpacusR'
+                            Description='OpacusR remote desktop'
+                            Target='[BinDir]opacusr.exe'
+                            WorkingDirectory='BinDir'
+                            Icon='opacusr.ico'/>
+                        <RemoveFolder Id='AppMenuDir' On='uninstall'/>
+                        <RegistryValue Root='HKCU' Key='Software\OpacusR' Name='shortcut' Type='integer' Value='1' KeyPath='yes'/>
+                    </Component>
+                </Directory>
+            </Directory>
+        </Directory>
 
         <ComponentGroup Id='ProductComponents' Directory='BinDir'>
-            <Component Id='ViewerExecutable' Guid='17cf64b6-5991-4f8a-8193-f78e2135a9f3'>
+            <Component Id='ViewerExecutable' Guid='17cf64b6-5991-4f8a-8193-f78e2135a9f3' Win64='yes'>
                 <File Id='OpacusRExe' Source='target\release\opacusr.exe' KeyPath='yes'/>
             </Component>
-            <Component Id='AgentExecutable' Guid='*'>
+            <Component Id='AgentExecutable' Guid='*' Win64='yes'>
                 <File Id='OpacusRAgentExe' Source='target\release\opacusr-agent.exe' KeyPath='yes'/>
             </Component>
-            <Component Id='ServerExecutable' Guid='*'>
+            <Component Id='ServerExecutable' Guid='*' Win64='yes'>
                 <File Id='OpacusRServerExe' Source='target\release\opacusr-server.exe' KeyPath='yes'/>
             </Component>
         </ComponentGroup>
-
-        <StandardDirectory Id='ProgramMenuFolder'>
-            <Directory Id='AppMenu' Name='OpacusR'>
-                <Component Id='StartMenuShortcut' Guid='*'>
-                    <Shortcut
-                        Id='ViewerStartMenu'
-                        Name='OpacusR'
-                        Description='OpacusR remote desktop'
-                        Target='[BinDir]opacusr.exe'
-                        WorkingDirectory='BinDir'
-                        Icon='opacusr.ico'/>
-                    <RemoveFolder Id='AppMenuDir' On='uninstall'/>
-                    <RegistryValue Root='HKCU' Key='Software\OpacusR' Name='shortcut' Type='integer' Value='1' KeyPath='yes'/>
-                </Component>
-            </Directory>
-        </StandardDirectory>
     </Product>
 </Wix>

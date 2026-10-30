@@ -78,7 +78,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force build | Out-Null
-          & wix\candle.exe -arch x64 wix\main.wxs -o build\main.wixobj
+          & wix\candle.exe -arch x64 -dMsiVersion=$($env:GITHUB_REF_NAME.Substring(1)) wix\main.wxs -o build\main.wixobj
           & wix\light.exe -ext WixUIExtension build\main.wixobj -o opacusr-$($env:GITHUB_REF_NAME.Substring(1))-x64.msi
       - name: Package zip
         shell: pwsh

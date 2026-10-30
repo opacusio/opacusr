@@ -60,6 +60,17 @@ cleanly with a version-mismatch message.
   (e.g. windows-gnu cross builds). Windows MSVC links the prebuilt opus
   shipped by `audiopus_sys`.
 
+### Fixed
+
+- Windows MSI: the WiX authoring used the WiX v4 element
+  `<StandardDirectory>`, which the WiX v3.11 toolchain installed by the
+  Release workflow rejects with CNDL0005 (and light then failed on the
+  missing `main.wixobj`, LGHT0103). Rewritten with the classic
+  `TARGETDIR` directory tree and all components marked `Win64` (avoids
+  ICE80 for files under `ProgramFiles64Folder`). The MSI product version
+  now comes from the release tag (`candle -dMsiVersion=<tag>` with a
+  fallback default), so it no longer has to be bumped by hand.
+
 ## [0.2.0] — 2026-10-30
 
 ### Added
