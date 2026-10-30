@@ -84,7 +84,7 @@ In the GUI: enter the signaling URL, connect, pick the host from the list (or ty
 
 ### Installing (packages)
 
-**Download:** [latest release](https://github.com/opacusio/opacusr/releases/latest) вЂ” `.deb` for Debian/Ubuntu, `.msi` / `.zip` for Windows, `.tar.gz` for macOS and portable Linux. Every asset has a SHA-256 checksum in `SHA256SUMS` (verify with `sha256sum -c SHA256SUMS`).
+**Download:** [latest release](https://github.com/opacusio/opacusr/releases/latest) — `.deb` for Debian/Ubuntu, `.msi` / `.zip` for Windows, `.tar.gz` for macOS and portable Linux. Every asset has a SHA-256 checksum in `SHA256SUMS` (verify with `sha256sum -c SHA256SUMS`).
 
 | Platform | Package | Notes |
 | --- | --- | --- |
