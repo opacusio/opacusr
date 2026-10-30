@@ -68,6 +68,8 @@ pub enum Command {
     SelectScreen(u32),
     /// Enable/disable live clipboard synchronization (both directions).
     ClipboardSync(bool),
+    /// Request the host to start/stop audio streaming.
+    Audio(bool),
     Quality {
         fps: u8,
         jpeg_quality: u8,
@@ -205,6 +207,9 @@ pub struct SessionClient {
     clipboard: Option<ClipboardHandle>,
     clip_sent: Option<String>,
     clip_applied: Option<String>,
+    /// Audio playback (created lazily on the first `AudioFrame`).
+    #[cfg(feature = "audio")]
+    player: Option<crate::audio::AudioPlayer>,
     /// Frames received since the last `LinkStats` report (for recv_fps).
     frames_since_stats: u32,
     stats_started: Instant,
@@ -433,6 +438,8 @@ impl SessionClient {
             clipboard,
             clip_sent: None,
             clip_applied: None,
+            #[cfg(feature = "audio")]
+            player: None,
             frames_since_stats: 0,
             stats_started: Instant::now(),
         };
@@ -540,6 +547,7 @@ impl SessionClient {
                 self.clipboard = if on { ClipboardHandle::spawn() } else { None };
                 return Ok(true); // no wire message — pure client-side state
             }
+            Command::Audio(on) => Message::AudioControl(message::AudioControl { enable: on }),
             Command::Quality {
                 fps,
                 jpeg_quality,
@@ -656,6 +664,27 @@ impl SessionClient {
                             recv_fps,
                         }))
                         .await;
+                }
+            }
+            Message::AudioFrame(frame) => {
+                #[cfg(feature = "audio")]
+                {
+                    if self.player.is_none() {
+                        match crate::audio::AudioPlayer::start() {
+                            Ok(p) => self.player = Some(p),
+                            Err(e) => {
+                                let _ =
+                                    self.events.send(ClientEvent::Notice(format!("audio: {e}")));
+                            }
+                        }
+                    }
+                    if let Some(p) = &self.player {
+                        p.push(frame.data);
+                    }
+                }
+                #[cfg(not(feature = "audio"))]
+                {
+                    let _ = frame;
                 }
             }
             Message::Bye(reason) => {

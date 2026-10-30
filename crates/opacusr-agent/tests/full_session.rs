@@ -100,6 +100,7 @@ async fn full_session_over_tcp() {
             clipboard_sync: true,
             adaptive_quality: true,
             audio: false,
+            audio_device: String::new(),
         };
         let session = SecureSession::new(Box::new(TcpTransport::from_stream(sock)), None);
         let injector = SharedInjector::new(host_input_log);

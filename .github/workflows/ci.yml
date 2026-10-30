@@ -36,11 +36,11 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
 
-      - name: Linux — install X11 dev packages
+      - name: Linux — install dev packages
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libx11-dev libxi-dev libxtst-dev
+          sudo apt-get install -y libx11-dev libxi-dev libxtst-dev libasound2-dev
 
       - name: Format
         run: cargo fmt --all --check

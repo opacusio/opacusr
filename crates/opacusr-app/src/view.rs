@@ -60,6 +60,9 @@ pub fn session_ui(ctx: &Context, s: &mut SessionHandle, cfg: &mut AgentConfig) {
             if ui.toggle_value(&mut s.clipboard_sync, "📋 sync").changed() {
                 let _ = s.commands.send(Command::ClipboardSync(s.clipboard_sync));
             }
+            if s.audio_available && ui.toggle_value(&mut s.audio_on, "🔊").changed() {
+                let _ = s.commands.send(Command::Audio(s.audio_on));
+            }
             ui.separator();
             let mut fps = cfg.fps as f32;
             let mut q = cfg.jpeg_quality as f32;

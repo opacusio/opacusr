@@ -307,6 +307,7 @@ impl AgentService {
             clipboard_sync: self.cfg.clipboard_sync,
             adaptive_quality: self.cfg.adaptive_quality,
             audio: self.cfg.audio,
+            audio_device: self.cfg.audio_device.clone(),
         };
         let host = SessionHost { cfg, events: tx };
         let capture: Box<dyn ScreenCapture> = if self.demo {

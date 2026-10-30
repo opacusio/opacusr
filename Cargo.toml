@@ -60,6 +60,8 @@ x11rb = { version = "0.13", features = ["randr"] }
 enigo = "0.6"
 arboard = "3"
 portable-pty = "0.8"
+cpal = "0.15"
+audiopus = "0.2"
 
 clap = { version = "4", features = ["derive"] }
 toml = "0.8"

@@ -21,7 +21,7 @@ jobs:
       - name: Install X11 dev packages
         run: |
           sudo apt-get update
-          sudo apt-get install -y libx11-dev libxi-dev libxtst-dev
+          sudo apt-get install -y libx11-dev libxi-dev libxtst-dev libasound2-dev
       - uses: actions/cache@v4
         with:
           path: |

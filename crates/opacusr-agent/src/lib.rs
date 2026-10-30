@@ -2,6 +2,8 @@
 //! input, serves file transfers and terminals, supports unattended access.
 
 pub mod adaptive;
+#[cfg(feature = "audio")]
+pub mod audio;
 pub mod config;
 pub mod keychain;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]

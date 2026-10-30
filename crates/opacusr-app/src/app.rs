@@ -36,6 +36,8 @@ pub struct SessionHandle {
     pub audio_available: bool,
     /// Live clipboard sync toggle (mirrors the client-side state).
     pub clipboard_sync: bool,
+    /// Audio requested from the host (button state).
+    pub audio_on: bool,
     pub panel_chat: bool,
     pub panel_files: bool,
     pub panel_term: bool,
@@ -63,6 +65,7 @@ impl SessionHandle {
             selected_screen: 0,
             audio_available: false,
             clipboard_sync: true,
+            audio_on: false,
             panel_chat: false,
             panel_files: true,
             panel_term: false,

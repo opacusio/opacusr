@@ -25,6 +25,15 @@ pub const PROTO_VERSION: u32 = 2;
 /// Application name used in handshakes and logs.
 pub const APP_NAME: &str = "OpacusR";
 
+/// Audio streaming parameters, fixed by the protocol: Opus, 48 kHz mono,
+/// 20 ms frames (960 samples), VoIP bitrate.
+pub mod audio {
+    pub const SAMPLE_RATE: u32 = 48_000;
+    pub const FRAME_MS: usize = 20;
+    pub const FRAME_SAMPLES: usize = SAMPLE_RATE as usize * FRAME_MS / 1000;
+    pub const BITRATE: i32 = 32_000;
+}
+
 /// Error type shared by protocol helpers.
 #[derive(Debug, thiserror::Error)]
 pub enum ProtoError {

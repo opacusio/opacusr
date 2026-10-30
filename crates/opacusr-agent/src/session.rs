@@ -46,6 +46,8 @@ pub struct SessionConfig {
     pub adaptive_quality: bool,
     /// Audio streaming offered to viewers.
     pub audio: bool,
+    /// Audio capture device filter (empty = default / Windows loopback).
+    pub audio_device: String,
 }
 
 /// Preferred video codec for outgoing streams (from `agent.toml` `codec`).
@@ -164,7 +166,7 @@ async fn run_session(
                     active: s.id == 0,
                 })
                 .collect(),
-            audio_available: cfg.audio,
+            audio_available: cfg.audio && cfg!(feature = "audio"),
         }))
         .await?;
     // Coordinate space the viewer currently maps its input against.
@@ -197,6 +199,10 @@ async fn run_session(
     };
     let mut clip_sent: Option<String> = None;
     let mut clip_applied: Option<String> = None;
+
+    // Audio stream (started/stopped via AudioControl from the viewer).
+    #[cfg(feature = "audio")]
+    let mut audio_stream: Option<crate::audio::HostAudioStream> = None;
 
     // Outbound queue (terminal output, engine replies, ...).
     let (out_tx, mut out_rx) = mpsc::unbounded_channel::<Message>();
@@ -342,11 +348,66 @@ async fn run_session(
                         }
                     }
                     Message::AudioControl(ac) => {
-                        // Real audio plumbing lands with the audio backend;
-                        // until then only the availability flag is advertised.
-                        if ac.enable && !cfg.audio {
+                        #[cfg(feature = "audio")]
+                        if cfg.audio {
+                            match (ac.enable, audio_stream.is_some()) {
+                                (true, false) => {
+                                    // Packet pump: number AudioFrames and
+                                    // push them onto the outbound queue.
+                                    let (pkt_tx, mut pkt_rx) =
+                                        mpsc::unbounded_channel::<Vec<u8>>();
+                                    let out = out_tx.clone();
+                                    tokio::spawn(async move {
+                                        let mut seq: u32 = 0;
+                                        while let Some(data) = pkt_rx.recv().await {
+                                            seq = seq.wrapping_add(1);
+                                            if out
+                                                .send(Message::AudioFrame(
+                                                    message::AudioFrame { seq, data },
+                                                ))
+                                                .is_err()
+                                            {
+                                                break;
+                                            }
+                                        }
+                                    });
+                                    match crate::audio::HostAudioStream::start(
+                                        &cfg.audio_device,
+                                        pkt_tx,
+                                    ) {
+                                        Ok(s) => {
+                                            let _ = events.send(HostEvent::Notice(
+                                                "audio streaming started".into(),
+                                            ));
+                                            audio_stream = Some(s);
+                                        }
+                                        Err(e) => {
+                                            let _ = events
+                                                .send(HostEvent::Notice(format!("audio: {e}")));
+                                        }
+                                    }
+                                }
+                                (false, true) => {
+                                    if let Some(s) = audio_stream.as_mut() {
+                                        s.stop();
+                                    }
+                                    audio_stream = None;
+                                    let _ = events
+                                        .send(HostEvent::Notice("audio streaming stopped".into()));
+                                }
+                                _ => {}
+                            }
+                        } else if ac.enable {
                             let _ = events.send(HostEvent::Notice(
-                                "audio requested but disabled in agent.toml".into()));
+                                "audio requested but disabled in agent.toml".into(),
+                            ));
+                        }
+                        #[cfg(not(feature = "audio"))]
+                        {
+                            let _ = ac;
+                            let _ = events.send(HostEvent::Notice(
+                                "audio requested but this build has no audio feature".into(),
+                            ));
                         }
                     }
                     Message::Pause(p) => paused = p,
