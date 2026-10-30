@@ -1,0 +1,45 @@
+[package]
+name = "opacusr-agent"
+description = "OpacusR host agent: capture, input, files, terminal, unattended access"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[[bin]]
+name = "opacusr-agent"
+path = "src/main.rs"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+opacusr-proto = { workspace = true }
+opacusr-crypto = { workspace = true }
+opacusr-transport = { workspace = true }
+opacusr-capture = { workspace = true }
+opacusr-codec = { workspace = true }
+opacusr-input = { workspace = true }
+tokio = { workspace = true }
+futures = { workspace = true }
+async-trait = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+clap = { workspace = true }
+serde = { workspace = true }
+toml = { workspace = true }
+dirs = { workspace = true }
+rand = { workspace = true }
+sha2 = { workspace = true }
+rpassword = "7"
+
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+portable-pty = { workspace = true }
+arboard = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+opacusr-client = { workspace = true }

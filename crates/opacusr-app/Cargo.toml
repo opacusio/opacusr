@@ -1,0 +1,34 @@
+[package]
+name = "opacusr-app"
+description = "OpacusR desktop GUI (egui): connect, view, control, chat, files, terminal"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[[bin]]
+name = "opacusr"
+path = "src/main.rs"
+
+[dependencies]
+opacusr-proto = { workspace = true }
+opacusr-crypto = { workspace = true }
+opacusr-transport = { workspace = true }
+opacusr-capture = { workspace = true }
+opacusr-codec = { workspace = true }
+opacusr-client = { workspace = true }
+opacusr-agent = { workspace = true }
+eframe = { workspace = true }
+egui = { workspace = true }
+tokio = { workspace = true }
+futures = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+dirs = { workspace = true }
+serde = { workspace = true }
+toml = { workspace = true }
+
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+arboard = { workspace = true }

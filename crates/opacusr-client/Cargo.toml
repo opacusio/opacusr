@@ -1,0 +1,28 @@
+[package]
+name = "opacusr-client"
+description = "OpacusR viewer session logic: frames, input, files, chat, terminal"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+opacusr-proto = { workspace = true }
+opacusr-crypto = { workspace = true }
+opacusr-transport = { workspace = true }
+opacusr-capture = { workspace = true }
+opacusr-codec = { workspace = true }
+tokio = { workspace = true }
+futures = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+sha2 = { workspace = true }
+dirs = { workspace = true }
+
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+arboard = { workspace = true }
+
+[dev-dependencies]
+rand = { workspace = true }

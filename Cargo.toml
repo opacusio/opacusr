@@ -1,0 +1,82 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/opacusr-proto",
+    "crates/opacusr-crypto",
+    "crates/opacusr-transport",
+    "crates/opacusr-capture",
+    "crates/opacusr-codec",
+    "crates/opacusr-input",
+    "crates/opacusr-agent",
+    "crates/opacusr-client",
+    "crates/opacusr-server",
+    "crates/opacusr-app",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+authors = ["OpacusR contributors"]
+repository = "https://github.com/opacusio/opacusr"
+homepage = "https://github.com/opacusio"
+description = "OpacusR — self-hosted open-source remote desktop (TeamViewer alternative)"
+
+[workspace.dependencies]
+opacusr-proto = { path = "crates/opacusr-proto", version = "0.1.0" }
+opacusr-crypto = { path = "crates/opacusr-crypto", version = "0.1.0" }
+opacusr-transport = { path = "crates/opacusr-transport", version = "0.1.0" }
+opacusr-capture = { path = "crates/opacusr-capture", version = "0.1.0" }
+opacusr-codec = { path = "crates/opacusr-codec", version = "0.1.0" }
+opacusr-input = { path = "crates/opacusr-input", version = "0.1.0" }
+opacusr-agent = { path = "crates/opacusr-agent", version = "0.1.0" }
+opacusr-client = { path = "crates/opacusr-client", version = "0.1.0" }
+opacusr-server = { path = "crates/opacusr-server", version = "0.1.0" }
+opacusr-app = { path = "crates/opacusr-app", version = "0.1.0" }
+
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time", "fs", "signal"] }
+futures = "0.3"
+serde = { version = "1", features = ["derive"] }
+bincode = "1"
+thiserror = "2"
+anyhow = "1"
+async-trait = "0.1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+rand = "0.8"
+zeroize = { version = "1", features = ["zeroize_derive"] }
+
+sha2 = "0.10"
+hmac = "0.12"
+hkdf = "0.12"
+argon2 = "0.5"
+chacha20poly1305 = { version = "0.10", features = ["std"] }
+
+axum = { version = "0.8", features = ["ws"] }
+tokio-tungstenite = "0.24"
+
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
+x11rb = { version = "0.13", features = ["randr"] }
+enigo = "0.6"
+arboard = "3"
+portable-pty = "0.8"
+
+clap = { version = "4", features = ["derive"] }
+toml = "0.8"
+dirs = "6"
+rpassword = "7"
+
+webrtc = "0.14"
+eframe = "0.29"
+egui = "0.29"
+
+tempfile = "3"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = true
+
+[profile.dev]
+incremental = false
+debug = 0

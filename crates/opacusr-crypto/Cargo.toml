@@ -1,0 +1,19 @@
+[package]
+name = "opacusr-crypto"
+description = "OpacusR password derivation and session encryption"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+opacusr-proto = { workspace = true }
+rand = { workspace = true }
+sha2 = { workspace = true }
+hmac = { workspace = true }
+hkdf = { workspace = true }
+argon2 = { workspace = true }
+chacha20poly1305 = { workspace = true }
+zeroize = { workspace = true }
+thiserror = { workspace = true }

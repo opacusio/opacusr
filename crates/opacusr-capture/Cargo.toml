@@ -1,0 +1,24 @@
+[package]
+name = "opacusr-capture"
+description = "OpacusR screen capture backends (X11, Windows GDI, macOS stub, test source)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+tracing = { workspace = true }
+x11rb = { workspace = true, optional = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[features]
+default = ["x11"]
+x11 = ["dep:x11rb"]

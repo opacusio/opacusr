@@ -1,0 +1,27 @@
+[package]
+name = "opacusr-transport"
+description = "OpacusR transports: TCP (LAN/tests), WebRTC data channels, relay, secure session"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+opacusr-proto = { workspace = true }
+opacusr-crypto = { workspace = true }
+tokio = { workspace = true }
+futures = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tokio-tungstenite = { workspace = true, features = ["rustls-tls-webpki-roots"] }
+webrtc = { workspace = true }
+serde_json = "1"
+bincode = { workspace = true }
+bytes = "1"
+sha2 = { workspace = true }
+
+[dev-dependencies]
+rand = { workspace = true }

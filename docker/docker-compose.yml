@@ -1,0 +1,49 @@
+# OpacusR self-hosted stack: signaling/relay server + STUN/TURN.
+#
+# Usage:
+#   cd docker
+#   # 1. Set a TURN secret:
+#   sed -i 's/CHANGE_ME_opacusr_turn_secret/'"$(openssl rand -hex 32)"'/' turnserver.conf
+#   # 2. Start:
+#   docker compose up -d
+#   # 3. Check:
+#   curl http://localhost:8080/health
+#
+# Then point OpacusR clients at:
+#   Signaling: ws://<host>:8080/signal
+#   Relay:     <host>:8081
+#   ICE:       stun:<host>:3478   and/or   turn:<host>:3478 (user "opacusr", dynamic secret)
+
+services:
+  signaling:
+    build:
+      context: ..
+      dockerfile: docker/server.Dockerfile
+    image: opacusr/server:latest
+    container_name: opacusr-signaling
+    restart: unless-stopped
+    ports:
+      - "8080:8080" # WebSocket signaling (ws://.../signal) + health (http://.../health)
+      - "8081:8081" # TCP relay fallback
+    environment:
+      RUST_LOG: ${RUST_LOG:-info}
+    healthcheck:
+      test: ["CMD-SHELL", "command -v curl >/dev/null && curl -fsS http://localhost:8080/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  coturn:
+    image: coturn/coturn:latest
+    container_name: opacusr-coturn
+    restart: unless-stopped
+    # coturn needs real peer addresses; host networking is the recommended setup.
+    # If host networking is not possible, publish 3478/udp+tcp and 49160-49200/udp
+    # and set external-ip=<public-ip> in turnserver.conf.
+    network_mode: host
+    volumes:
+      - ./turnserver.conf:/etc/coturn/turnserver.conf:ro
+    # Ports are bound directly by coturn when using host networking:
+    #   3478/udp+tcp  — STUN/TURN
+    #   49160-49200/udp — relay range

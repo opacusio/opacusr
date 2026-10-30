@@ -1,0 +1,18 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# Local agent state (never commit credentials)
+*.toml.orig
+opacusr.toml.local
+
+# Editor / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Build artifacts of packaging
+/dist/
+*.zip

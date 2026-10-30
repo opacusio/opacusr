@@ -1,0 +1,30 @@
+[package]
+name = "opacusr-server"
+description = "OpacusR signaling server (WebSocket) with TCP relay fallback"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[[bin]]
+name = "opacusr-server"
+path = "src/main.rs"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+opacusr-proto = { workspace = true }
+tokio = { workspace = true }
+futures = { workspace = true }
+axum = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+rand = { workspace = true }
+clap = { workspace = true }
+
+[dev-dependencies]
+opacusr-transport = { workspace = true }

@@ -1,0 +1,16 @@
+[package]
+name = "opacusr-input"
+description = "OpacusR input injection backends (mouse/keyboard)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+opacusr-proto = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+enigo = { workspace = true }
