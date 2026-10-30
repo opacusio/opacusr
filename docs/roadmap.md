@@ -1,23 +1,28 @@
 # OpacusR Roadmap
 
-Where OpacusR is heading after v0.1.0. Items are grouped by milestone; security items from [security.md](security.md) §9 are folded in where they belong.
+Where OpacusR is heading. Items are grouped by milestone; security items from [security.md](security.md) §9 are folded in where they belong.
+
+## Done
+
+- **v0.1.0** — WebRTC + TCP/relay transports, JPEG streaming, remote input, file transfer, chat, PTY terminal, unattended access, self-hosted signaling/relay, Docker Compose (server + coturn), CI on three OSes.
+- **v0.2.0** — H.264 codec (Cisco OpenH264, screen-content tuned, JPEG fallback, `codec` config), unattended password in the OS keychain (Windows Credential Manager / macOS Keychain / Linux Secret Service, 0600-file fallback), packaging: deb (agent + viewer with systemd unit and .desktop), Windows MSI (WiX), release pipeline producing tar.gz/zip/deb/msi on every `v*` tag.
 
 ## M1 — Media & experience (next)
 
-- **Better video codecs.** The `VideoEncoder`/`VideoDecoder` traits already isolate the codec. Add hardware-friendly H.264 (via `openh264` or platform encoders) and VP9/AV1 evaluation; add real keyframe/interval logic and quality adaptation driven by RTT and loss estimates.
+- **Quality adaptation** — drive quality/scale/fps from measured RTT (`Ping/Pong`) and send-queue depth; frame pacing.
 - **DXGI Desktop Duplication** capture on Windows (multi-monitor, cursor compositing, higher fps at lower CPU).
 - **Wayland capture** via PipeWire/xdg-desktop-portal on Linux.
 - **Clipboard sync** end-to-end (`ClipboardText` message exists; wire to platform clipboards with size limits).
-- **Frame pacing & bandwidth estimation** — adaptive jpeg quality/scale/fps from measured RTT (`Ping/Pong`) and send-queue depth.
 - **Session UX**: multi-monitor selection, fullscreen hotkeys, quality presets in the viewer UI.
+- **VP9/AV1 evaluation** behind the existing codec traits (web-optimized fallback for slow links).
+- **Audio streaming** (microphone + system sound, Opus over a dedicated WebRTC channel) — the single most requested remote-desktop feature after video.
 
 ## M2 — Trust & accounts
 
-- **OS keychain** for the unattended password (Windows Credential Manager, macOS Keychain, Secret Service), replacing plaintext `agent.toml` storage.
 - **Per-user access control**: multiple credentials per host with scopes (`view-only`, `no-files`, `no-terminal`), session logging with consent prompts.
 - **Auth rate limiting & lockout** in the agent; optional TOFU/pinned host fingerprints in the viewer.
 - **Per-session TURN credentials** minted by the signaling server (coturn REST API) instead of a shared secret.
-- **System integration**: systemd user unit for the agent, Windows service installer, macOS launchd agent, signed/notarized packages.
+- **Windows service / macOS launchd** installs for the agent (the systemd user unit and MSI already ship; service-mode is the remaining gap).
 
 ## M3 — Scale & operations
 
@@ -25,6 +30,7 @@ Where OpacusR is heading after v0.1.0. Items are grouped by milestone; security 
 - **TLS everywhere by default**: built-in `wss://` with ACME, or documented single-command reverse-proxy setup (Caddy).
 - **Metrics & admin UI**: Prometheus endpoint on the server, session/relay dashboards.
 - **Meeting-style features**: multi-viewer observation of one host (viewer count policies), session recording (opt-in, host-side).
+- **Auto-update** channel for desktop clients (check-on-start + in-app "update available" notice; signed artifacts already produced by the release pipeline).
 
 ## M4 — Mobile & embed
 

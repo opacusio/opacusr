@@ -5,7 +5,7 @@
 > 🇷🇺 Russian documentation: [README.ru.md](README.ru.md)
 
 - **License:** AGPL-3.0
-- **Status:** v0.1.0 — working core, actively developed
+- **Status:** v0.2.0 — working core, actively developed
 - **Platforms:** Linux (X11), Windows, macOS (partial), Android/iOS (skeleton)
 - **Repository home:** [github.com/opacusio](https://github.com/opacusio)
 
@@ -19,17 +19,19 @@ Commercial remote-desktop tools route your sessions through the vendor's cloud. 
 
 | Feature | State |
 | --- | --- |
-| Screen streaming (JPEG, adjustable quality / scale / fps) | ✅ |
+| Screen streaming — H.264 (Cisco OpenH264, screen-content tuned) with JPEG fallback; adjustable quality / scale / fps | ✅ |
 | Remote mouse & keyboard control | ✅ |
 | File transfer (chunked, resumable, SHA-256 verified) | ✅ |
 | Chat | ✅ |
 | Interactive terminal (PTY: ConPTY / openpty) | ✅ |
 | Unattended access (password, challenge-response) | ✅ |
+| Password in the OS keychain (Windows Credential Manager / macOS Keychain / Linux Secret Service), 0600-file fallback | ✅ |
 | WebRTC transport (webrtc-rs, DTLS-secured data channels) | ✅ |
 | TCP relay fallback + direct LAN TCP | ✅ |
 | E2E encryption on every transport (ChaCha20-Poly1305) | ✅ |
 | Signaling + relay self-hosted server | ✅ |
 | Docker Compose bundle (signaling + coturn) | ✅ |
+| Packages: deb (agent + viewer, systemd unit, .desktop) · MSI (WiX) · release CI | ✅ |
 
 ## Quick start
 
@@ -59,7 +61,7 @@ opacusr-agent id                # print this host's registered ID
 opacusr-agent config            # print config location & summary
 ```
 
-Settings live in `~/.config/opacusr/agent.toml` (Linux), `%APPDATA%\opacusr\agent.toml` (Windows), `~/Library/Application Support/opacusr/agent.toml` (macOS). Notable keys: `server_url`, `name`, `password`, `fps`, `jpeg_quality`, `scale_percent`, `auto_accept_files`, `download_dir`, `lan_port`, `ice_urls`.
+Settings live in `~/.config/opacusr/agent.toml` (Linux), `%APPDATA%\opacusr\agent.toml` (Windows), `~/Library/Application Support/opacusr/agent.toml` (macOS). Notable keys: `server_url`, `name`, `password` / `password_in_keychain`, `fps`, `jpeg_quality`, `scale_percent`, `auto_accept_files`, `download_dir`, `lan_port`, `ice_urls`, `codec` (`auto` | `h264` | `jpeg`).
 
 ### 3. Viewer side (the controller)
 
@@ -69,14 +71,24 @@ cargo run --release -p opacusr-app
 
 In the GUI: enter the signaling URL, connect, pick the host from the list (or type its ID), enter the access password, and the remote desktop opens. The session window includes the video stream, chat, file-transfer and terminal panels.
 
+### Installing (packages)
+
+| Platform | Package | Notes |
+| --- | --- | --- |
+| Debian/Ubuntu | `opacusr-app_*.deb`, `opacusr-agent_*.deb` | viewer ships a `.desktop` entry + icon; agent ships a systemd **user** unit (`systemctl --user enable --now opacusr-agent`) |
+| Windows | `opacusr-*-x64.msi` | installs viewer + agent + server into `Program Files\OpacusR\bin`, Start-menu shortcut, icon embedded |
+| macOS / portable | `.tar.gz` per release | unpack and run |
+
+Assets are produced automatically on every `v*` tag by [.github/workflows/release.yml](.github/workflows/release.yml) (Linux deb + tar.gz, Windows MSI + zip, macOS tar.gz). To build locally: `cargo deb -p opacusr-app -p opacusr-agent` (needs `cargo install cargo-deb`); MSI: see `wix/main.wxs` header.
+
 ### Building
 
 ```bash
 cargo build --release          # everything
-cargo test  --workspace        # 35 tests incl. a full E2E session
+cargo test  --workspace        # 40 tests incl. a full E2E session (H.264 in the loop)
 ```
 
-Rust 1.75+ (edition 2021). Linux builds need X11 client libraries (`libx11-dev`, `libxi-dev` on Debian/Ubuntu). Windows builds use GDI; macOS uses core-graphics where available (see [docs/platforms.md](docs/platforms.md)).
+Rust 1.75+ (edition 2021). Linux builds need X11 client libraries (`libx11-dev`, `libxi-dev` on Debian/Ubuntu); NASM is optional (speeds up the bundled OpenH264). Windows builds use GDI; macOS uses core-graphics where available (see [docs/platforms.md](docs/platforms.md)). Build without H.264: `cargo build --release -p opacusr-codec --no-default-features`.
 
 ## Architecture in one minute
 

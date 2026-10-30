@@ -14,10 +14,13 @@ pub struct CryptoEnvelope {
 }
 
 /// Protocol codec negotiated for the video stream. v0.1 ships JPEG full
-/// frames; the enum is the extension point for H.264/VP9/AV1.
+/// frames; v0.2 adds H.264 (Cisco OpenH264). New variants must be appended
+/// so bincode discriminants stay stable across versions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CodecId {
     Jpeg,
+    /// H.264 via the BSD-licensed Cisco OpenH264 implementation.
+    H264,
 }
 
 /// Modifier-key bitmask for [`KeyEvent`].

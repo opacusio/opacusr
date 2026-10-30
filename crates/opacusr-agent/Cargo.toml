@@ -36,6 +36,17 @@ rand = { workspace = true }
 sha2 = { workspace = true }
 rpassword = "7"
 
+# OS keychain for the unattended password. Windows/macOS use their native
+# stores; Linux uses the Secret Service (GNOME Keyring/KWallet) with a
+# *vendored* libdbus so no system dbus package is required. Headless Linux
+# without a secret service simply errors → the agent falls back to the
+# 0600 config file (see src/keychain.rs).
+[target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
+keyring = { version = "3", features = ["apple-native", "windows-native"] }
+
+[target.'cfg(all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android"))))'.dependencies]
+keyring = { version = "3", features = ["sync-secret-service", "crypto-rust", "vendored"] }
+
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 portable-pty = { workspace = true }
 arboard = { workspace = true }
@@ -43,3 +54,20 @@ arboard = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 opacusr-client = { workspace = true }
+
+[package.metadata.deb]
+maintainer = "OpacusR contributors <opacusio@users.noreply.github.com>"
+copyright = "2026, OpacusR contributors"
+license-file = ["../../LICENSE", "0"]
+extended-description = """\
+OpacusR host agent — accepts remote sessions, streams the screen, executes \
+input, serves file transfers, chat and an interactive terminal. Supports \
+unattended access protected by a challenge-response password check \
+(Argon2id + ChaCha20-Poly1305 end-to-end encryption)."""
+section = "net"
+priority = "optional"
+depends = "$auto, libx11-6, libxtst6, libxi6"
+assets = [
+    ["target/release/opacusr-agent", "usr/bin/opacusr-agent", "755"],
+    ["../../assets/opacusr-agent.service", "usr/lib/systemd/user/opacusr-agent.service", "644"],
+]

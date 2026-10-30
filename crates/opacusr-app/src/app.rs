@@ -226,7 +226,7 @@ impl App {
         cfg.fps = self.fps as u8;
         cfg.jpeg_quality = self.quality as u8;
         cfg.scale_percent = self.scale as u16;
-        let unattended = cfg.password.is_some();
+        let unattended = cfg.is_unattended();
         let (consent_tx, consent_rx) =
             std::sync::mpsc::channel::<(PeerId, String, std::sync::mpsc::Sender<bool>)>();
 
@@ -279,10 +279,29 @@ impl App {
             self.status_message = "Password too short (min 4 chars).".into();
             return;
         }
-        self.config.password = Some(p);
+        // Prefer the OS keychain; fall back to the 0600 config file.
+        match opacusr_agent::keychain::store_password(&p) {
+            Ok(()) => {
+                self.config.password = None;
+                self.config.password_in_keychain = true;
+            }
+            Err(e) => {
+                self.config.password = Some(p);
+                self.config.password_in_keychain = false;
+                self.status_message = format!("Keychain unavailable ({e}); using config file. ");
+            }
+        }
         self.host_password_input.clear();
         match self.config.save() {
-            Ok(path) => self.status_message = format!("Saved to {}", path.display()),
+            Ok(path) => {
+                if !self.status_message.is_empty() {
+                    self.status_message
+                        .push_str(&format!("Saved flag to {}", path.display()));
+                } else {
+                    self.status_message =
+                        format!("Saved to the OS keychain (flag in {})", path.display());
+                }
+            }
             Err(e) => self.status_message = format!("Save failed: {e}"),
         }
     }

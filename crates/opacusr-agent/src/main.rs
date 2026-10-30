@@ -30,8 +30,12 @@ enum Cmd {
         #[arg(long)]
         allow_lan: bool,
     },
-    /// Set the unattended access password (stored 0600 in the config).
-    Passwd,
+    /// Set the unattended access password (OS keychain, file fallback).
+    Passwd {
+        /// Store the password in the config file instead of the OS keychain.
+        #[arg(long)]
+        file: bool,
+    },
     /// Clear the unattended access password.
     PasswdClear,
     /// Register on the server and print the assigned ID.
@@ -60,7 +64,7 @@ async fn main() -> anyhow::Result<()> {
             demo,
             allow_lan,
         } => run(server, name, demo, allow_lan).await,
-        Cmd::Passwd => passwd(),
+        Cmd::Passwd { file } => passwd(file),
         Cmd::PasswdClear => passwd_clear(),
         Cmd::Id { server } => id(server).await,
         Cmd::Config => config_info(),
@@ -88,9 +92,14 @@ async fn run(
     let (tx, mut rx) = mpsc::unbounded_channel();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
-    let unattended = cfg.password.is_some();
+    let unattended = cfg.is_unattended();
     if unattended {
-        eprintln!("Unattended mode: sessions are accepted after a password check.");
+        let where_ = if cfg.password_in_keychain {
+            "OS keychain"
+        } else {
+            "config file"
+        };
+        eprintln!("Unattended mode: sessions are accepted after a password check ({where_}).");
     } else {
         eprintln!("Attended mode: every session needs your confirmation (set a password with `opacusr-agent passwd`).");
     }
@@ -196,7 +205,9 @@ fn prompt_consent(id: opacusr_proto::PeerId, name: &str) -> std::io::Result<bool
     Ok(line.trim().eq_ignore_ascii_case("y"))
 }
 
-fn passwd() -> anyhow::Result<()> {
+/// Store the unattended password: OS keychain when available (default),
+/// config-file fallback otherwise, or force the file with `force_file`.
+fn passwd(force_file: bool) -> anyhow::Result<()> {
     let mut cfg = AgentConfig::load();
     let p1 = rpassword::prompt_password("Set unattended password: ")?;
     let p2 = rpassword::prompt_password("Repeat password: ")?;
@@ -206,7 +217,29 @@ fn passwd() -> anyhow::Result<()> {
     if p1.len() < 4 {
         anyhow::bail!("password too short (min 4 chars)");
     }
+    if !force_file {
+        match opacusr_agent::keychain::store_password(&p1) {
+            Ok(()) => {
+                cfg.password = None;
+                cfg.password_in_keychain = true;
+                let path = cfg.save()?;
+                println!("Unattended password saved to the OS keychain (service 'opacusr').");
+                println!("Config flag updated: {}", path.display());
+                println!(
+                    "The agent will now accept sessions that pass this password without prompting."
+                );
+                return Ok(());
+            }
+            Err(e) => {
+                eprintln!("warning: {e}");
+                eprintln!("falling back to the config file (mode 0600 on unix)");
+            }
+        }
+    }
+    // File fallback (also clears a stale keychain flag).
+    let _ = opacusr_agent::keychain::delete_password();
     cfg.password = Some(p1);
+    cfg.password_in_keychain = false;
     let path = cfg.save()?;
     println!("Unattended password saved to {}", path.display());
     println!("The agent will now accept sessions that pass this password without prompting.");
@@ -215,7 +248,12 @@ fn passwd() -> anyhow::Result<()> {
 
 fn passwd_clear() -> anyhow::Result<()> {
     let mut cfg = AgentConfig::load();
+    // Remove from both stores; report keychain problems but stay successful.
+    if let Err(e) = opacusr_agent::keychain::delete_password() {
+        eprintln!("note: {e}");
+    }
     cfg.password = None;
+    cfg.password_in_keychain = false;
     cfg.save()?;
     println!("Unattended password cleared; attended mode (interactive consent) is active.");
     Ok(())
@@ -229,7 +267,7 @@ async fn id(server: Option<String>) -> anyhow::Result<()> {
             platform: opacusr_proto::Platform::current(),
             display_name: cfg.name.clone(),
             is_agent: true,
-            unattended: cfg.password.is_some(),
+            unattended: cfg.is_unattended(),
         },
     ))
     .await?;
@@ -251,6 +289,14 @@ fn config_info() -> anyhow::Result<()> {
     println!("quality:     {}", cfg.jpeg_quality);
     println!("scale:       {}%", cfg.scale_percent);
     println!("downloads:   {}", cfg.download_dir.display());
-    println!("unattended:  {}", cfg.password.is_some());
+    println!("codec:       {}", cfg.codec);
+    let storage = if cfg.password.is_some() {
+        "file"
+    } else if cfg.password_in_keychain {
+        "keychain"
+    } else {
+        "—"
+    };
+    println!("unattended:  {} ({storage})", cfg.is_unattended());
     Ok(())
 }

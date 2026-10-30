@@ -74,9 +74,9 @@ What the infrastructure *can* do: correlate peer IDs and timing, refuse service,
 
 **Out of scope:** compromises of the endpoints themselves (keyloggers, screen scrapers on the host), side channels, traffic-analysis-resistant cover traffic.
 
-## 7. Known limitations (v0.1.0)
+## 7. Known limitations (v0.2.0)
 
-1. **Password storage is plaintext in the agent config** (`agent.toml`, mode `0600`). It must be recoverable to compute Argon2id for every challenge; hashed storage would break unattended verification. OS keychain storage is the planned fix — see roadmap.
+1. **Password storage on Linux without a Secret Service.** On Windows and macOS the unattended password lives in the OS keychain (Credential Manager / Keychain). On Linux it goes to GNOME Keyring/KWallet via the Secret Service; when no provider runs (headless servers), the agent falls back to the `agent.toml` field (mode `0600`). It must be recoverable to compute Argon2id for every challenge; hashed storage would break unattended verification.
 2. **No per-user accounts / ACLs.** One access password per host. Role-based access ("view only", "no file transfer") is planned.
 3. **No rate limiting / lockout** on auth attempts yet — recommended mitigation while self-hosting: run the server behind a firewall/reverse proxy with rate limiting, and use a strong random password.
 4. **WebRTC DTLS certificates are ephemeral** (generated per connection by webrtc-rs). Combined with the password handshake this is acceptable, but pinned/fingerprinted certs would harden the first connection.
@@ -86,7 +86,7 @@ What the infrastructure *can* do: correlate peer IDs and timing, refuse service,
 ## 8. Operational hardening checklist (self-hosting)
 
 - Generate the access password with a password manager (≥ 20 random characters); `opacusr-agent passwd` prompts without echo.
-- Keep `agent.toml` permissions at `0600` (default on Unix); on Windows keep it under the user profile, not a shared location.
+- Let `opacusr-agent passwd` store the password in the OS keychain (default); use `passwd --file` only on systems without a keychain. Keep `agent.toml` permissions at `0600` (default on Unix) in that case; on Windows keep it under the user profile, not a shared location.
 - Terminate signaling on TLS in production: put `opacusr-server` behind Caddy/nginx (`wss://`) — the server itself speaks plain `ws://`, so TLS is the proxy's job.
 - Set a unique coturn `static-auth-secret` (`openssl rand -hex 32`); the bundled config already disables coturn's CLI, see `docker/turnserver.conf`.
 - Monitor `/health` and logs (`RUST_LOG=info`); every auth failure is logged by the agent.
@@ -94,7 +94,7 @@ What the infrastructure *can* do: correlate peer IDs and timing, refuse service,
 
 ## 9. Roadmap (security items)
 
-- OS keychain for the unattended password (Windows Credential Manager / macOS Keychain / Secret Service).
+- ~~OS keychain for the unattended password~~ **done in v0.2.0** (Windows Credential Manager / macOS Keychain / Secret Service with a vendored libdbus; file fallback).
 - Per-session TURN credential minting (coturn REST API) driven by the signaling server.
 - Optional TOFU/pinned host fingerprints shown in the viewer UI.
 - Auth attempt rate limiting and lockout in the agent.

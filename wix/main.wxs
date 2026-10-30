@@ -1,0 +1,80 @@
+<?xml version='1.0' encoding='utf-8'?>
+<!--
+  OpacusR Windows MSI (WiX Toolset v3).
+  Build from the repository root on a Windows host:
+
+      cargo build (release profile) for opacusr-app, opacusr-agent, opacusr-server
+      candle.exe -arch x64 wix\main.wxs -o build\
+      light.exe -ext WixUIExtension build\main.wixobj -o opacusr-0.2.0-x64.msi
+
+  (CI does exactly this; see .github/workflows/release.yml)
+-->
+<Wix xmlns='http://schemas.microsoft.com/wix/2006/wi'>
+    <Product
+        Name='OpacusR'
+        Id='*'
+        UpgradeCode='c5e26ccb-434f-4f92-b458-45d633daa505'
+        Language='1033'
+        Codepage='1252'
+        Version='0.2.0'
+        Manufacturer='OpacusR contributors'>
+
+        <Package
+            InstallerVersion='200'
+            Compressed='yes'
+            InstallScope='perMachine'
+            Description='OpacusR - self-hosted open-source remote desktop'
+            Manufacturer='OpacusR contributors'/>
+
+        <MajorUpgrade DowngradeErrorMessage='A newer version of [ProductName] is already installed.'/>
+        <MediaTemplate EmbedCab='yes'/>
+
+        <Icon Id='opacusr.ico' SourceFile='assets\opacusr.ico'/>
+        <Property Id='ARPPRODUCTICON' Value='opacusr.ico'/>
+        <Property Id='ARPHELPLINK' Value='https://github.com/opacusio/opacusr'/>
+
+        <Feature Id='ProductFeature' Title='OpacusR' Level='1'>
+            <ComponentGroupRef Id='ProductComponents'/>
+            <ComponentRef Id='StartMenuShortcut'/>
+        </Feature>
+
+        <UI>
+            <UIRef Id='WixUI_Minimal'/>
+        </UI>
+        <WixVariable Id='WixUILicenseRtf' Value='assets\license.rtf'/>
+
+        <StandardDirectory Id='ProgramFiles64Folder'>
+            <Directory Id='INSTALLDIR' Name='OpacusR'>
+                <Directory Id='BinDir' Name='bin'/>
+            </Directory>
+        </StandardDirectory>
+
+        <ComponentGroup Id='ProductComponents' Directory='BinDir'>
+            <Component Id='ViewerExecutable' Guid='17cf64b6-5991-4f8a-8193-f78e2135a9f3'>
+                <File Id='OpacusRExe' Source='target\release\opacusr.exe' KeyPath='yes'/>
+            </Component>
+            <Component Id='AgentExecutable' Guid='*'>
+                <File Id='OpacusRAgentExe' Source='target\release\opacusr-agent.exe' KeyPath='yes'/>
+            </Component>
+            <Component Id='ServerExecutable' Guid='*'>
+                <File Id='OpacusRServerExe' Source='target\release\opacusr-server.exe' KeyPath='yes'/>
+            </Component>
+        </ComponentGroup>
+
+        <StandardDirectory Id='ProgramMenuFolder'>
+            <Directory Id='AppMenu' Name='OpacusR'>
+                <Component Id='StartMenuShortcut' Guid='*'>
+                    <Shortcut
+                        Id='ViewerStartMenu'
+                        Name='OpacusR'
+                        Description='OpacusR remote desktop'
+                        Target='[BinDir]opacusr.exe'
+                        WorkingDirectory='BinDir'
+                        Icon='opacusr.ico'/>
+                    <RemoveFolder Id='AppMenuDir' On='uninstall'/>
+                    <RegistryValue Root='HKCU' Key='Software\OpacusR' Name='shortcut' Type='integer' Value='1' KeyPath='yes'/>
+                </Component>
+            </Directory>
+        </StandardDirectory>
+    </Product>
+</Wix>

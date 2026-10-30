@@ -95,6 +95,7 @@ async fn full_session_over_tcp() {
             scale_percent: 100,
             download_dir: host_downloads,
             auto_accept_files: true,
+            codec: opacusr_agent::session::CodecChoice::Auto,
         };
         let session = SecureSession::new(Box::new(TcpTransport::from_stream(sock)), None);
         let injector = SharedInjector::new(host_input_log);

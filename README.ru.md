@@ -5,7 +5,7 @@
 > 🇬🇧 English documentation: [README.md](README.md)
 
 - **Лицензия:** AGPL-3.0
-- **Статус:** v0.1.0 — рабочее ядро, активная разработка
+- **Статус:** v0.2.0 — рабочее ядро, активная разработка
 - **Платформы:** Linux (X11), Windows, macOS (частично), Android/iOS (каркас)
 - **Репозиторий:** [github.com/opacusio](https://github.com/opacusio)
 
@@ -19,17 +19,19 @@
 
 | Функция | Состояние |
 | --- | --- |
-| Трансляция экрана (JPEG, настройка качества / масштаба / fps) | ✅ |
+| Трансляция экрана — H.264 (Cisco OpenH264, настройки под экран) с фолбэком на JPEG; настройка качества / масштаба / fps | ✅ |
 | Управление мышью и клавиатурой | ✅ |
 | Передача файлов (чанками, с докачкой, проверка SHA-256) | ✅ |
 | Чат | ✅ |
 | Интерактивный терминал (PTY: ConPTY / openpty) | ✅ |
 | Unattended-доступ (пароль, challenge-response) | ✅ |
+| Пароль в OS-keychain (Windows Credential Manager / macOS Keychain / Linux Secret Service), фолбэк на файл 0600 | ✅ |
 | WebRTC-транспорт (webrtc-rs, DTLS-каналы) | ✅ |
 | TCP-relay fallback + прямой TCP в LAN | ✅ |
 | Сквозное шифрование на любом транспорте (ChaCha20-Poly1305) | ✅ |
 | Самохостинговый сервер signaling + relay | ✅ |
 | Docker Compose (signaling + coturn) | ✅ |
+| Пакеты: deb (agent + viewer, systemd unit, .desktop) · MSI (WiX) · release-CI | ✅ |
 
 ## Быстрый старт
 
@@ -59,7 +61,7 @@ opacusr-agent id                # показать ID этого хоста
 opacusr-agent config            # путь к конфигу и сводка
 ```
 
-Настройки лежат в `~/.config/opacusr/agent.toml` (Linux), `%APPDATA%\opacusr\agent.toml` (Windows), `~/Library/Application Support/opacusr/agent.toml` (macOS). Ключевые поля: `server_url`, `name`, `password`, `fps`, `jpeg_quality`, `scale_percent`, `auto_accept_files`, `download_dir`, `lan_port`, `ice_urls`.
+Настройки лежат в `~/.config/opacusr/agent.toml` (Linux), `%APPDATA%\opacusr\agent.toml` (Windows), `~/Library/Application Support/opacusr/agent.toml` (macOS). Ключевые поля: `server_url`, `name`, `password` / `password_in_keychain`, `fps`, `jpeg_quality`, `scale_percent`, `auto_accept_files`, `download_dir`, `lan_port`, `ice_urls`, `codec` (`auto` | `h264` | `jpeg`).
 
 ### 3. Сторона зрителя (кто управляет)
 
@@ -69,14 +71,24 @@ cargo run --release -p opacusr-app
 
 В GUI: введите URL signaling-сервера, подключитесь, выберите хост из списка (или введите его ID), введите пароль доступа — откроется удалённый рабочий стол. В окне сессии есть видеопоток, чат, панели передачи файлов и терминала.
 
+### Установка (пакеты)
+
+| Платформа | Пакет | Примечания |
+| --- | --- | --- |
+| Debian/Ubuntu | `opacusr-app_*.deb`, `opacusr-agent_*.deb` | у зрителя — `.desktop` и иконка; у агента — systemd **user**-юнит (`systemctl --user enable --now opacusr-agent`) |
+| Windows | `opacusr-*-x64.msi` | ставит viewer + agent + server в `Program Files\OpacusR\bin`, ярлык в меню Пуск, иконка вшита в exe |
+| macOS / portable | `.tar.gz` из релизов | распаковать и запустить |
+
+Артефакты собираются автоматически на каждый тег `v*` ([.github/workflows/release.yml](.github/workflows/release.yml): Linux deb + tar.gz, Windows MSI + zip, macOS tar.gz). Локально: `cargo deb -p opacusr-app -p opacusr-agent` (нужен `cargo install cargo-deb`); MSI — см. шапку `wix/main.wxs`.
+
 ### Сборка
 
 ```bash
 cargo build --release          # всё
-cargo test  --workspace        # 35 тестов, включая полный E2E-цикл сессии
+cargo test  --workspace        # 40 тестов, включая полный E2E-цикл (уже с H.264)
 ```
 
-Rust 1.75+ (edition 2021). Для сборки на Linux нужны клиентские библиотеки X11 (`libx11-dev`, `libxi-dev` на Debian/Ubuntu). Windows использует GDI; macOS — core-graphics там, где доступно (см. [docs/platforms.md](docs/platforms.md)).
+Rust 1.75+ (edition 2021). Для сборки на Linux нужны клиентские библиотеки X11 (`libx11-dev`, `libxi-dev` на Debian/Ubuntu); NASM опционален (ускоряет встроенный OpenH264). Windows использует GDI; macOS — core-graphics там, где доступно (см. [docs/platforms.md](docs/platforms.md)). Собрать без H.264: `cargo build --release -p opacusr-codec --no-default-features`.
 
 ## Архитектура за минуту
 
@@ -117,9 +129,10 @@ Rust 1.75+ (edition 2021). Для сборки на Linux нужны клиен�
 - Пароль никогда не передаётся; хост проверяет HMAC-доказательство знания пароля для одноразового nonce.
 - Ключи сессии уникальны для каждой сессии (сессионные соли); счётчики nonce защищают от повторов.
 - Relay-сервер не видит открытый текст — он пересылает запечатанные кадры.
+- Пароль unattended-доступа хранится в OS-keychain (Windows Credential Manager / macOS Keychain / Linux Secret Service); если keychain недоступен — в конфиге с правами `0600`.
 - Конфиги с учётными данными записываются с правами `0600`.
 
-Полная модель угроз и планы (OS-keychain, TURN-учётные данные, rate limiting) — в [docs/security.md](docs/security.md).
+Полная модель угроз и планы (TURN-учётные данные, rate limiting, view-only режимы) — в [docs/security.md](docs/security.md).
 
 ## Документация
 

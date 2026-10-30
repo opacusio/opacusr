@@ -89,10 +89,20 @@ pub fn host_ui(ctx: &Context, app: &mut App) {
 
             ui.label(egui::RichText::new("Unattended password").strong());
             ui.horizontal(|ui| {
-                if app.config.password.is_some() {
-                    ui.label(egui::RichText::new("● set (stored 0600 in the config)").color(egui::Color32::from_rgb(90, 200, 120)));
+                if app.config.is_unattended() {
+                    let storage = if app.config.password_in_keychain {
+                        "stored in the OS keychain"
+                    } else {
+                        "stored 0600 in the config"
+                    };
+                    ui.label(
+                        egui::RichText::new(format!("● set ({storage})"))
+                            .color(egui::Color32::from_rgb(90, 200, 120)),
+                    );
                     if ui.small_button("Clear").clicked() {
+                        let _ = opacusr_agent::keychain::delete_password();
                         app.config.password = None;
+                        app.config.password_in_keychain = false;
                         match app.config.save() {
                             Ok(p) => app.status_message = format!("Cleared (saved {}).", p.display()),
                             Err(e) => app.status_message = format!("Save failed: {e}"),
@@ -121,8 +131,16 @@ pub fn host_ui(ctx: &Context, app: &mut App) {
             ui.label(egui::RichText::new("Streaming").strong());
             ui.horizontal(|ui| {
                 ui.add(egui::Slider::new(&mut app.fps, 1.0..=60.0).text("fps"));
-                ui.add(egui::Slider::new(&mut app.quality, 20.0..=95.0).text("jpeg"));
+                ui.add(egui::Slider::new(&mut app.quality, 20.0..=95.0).text("quality"));
                 ui.add(egui::Slider::new(&mut app.scale, 25.0..=100.0).text("scale %"));
+                egui::ComboBox::from_id_salt("codec")
+                    .selected_text(app.config.codec.to_ascii_uppercase())
+                    .width(90.0)
+                    .show_ui(ui, |ui| {
+                        for opt in ["auto", "h264", "jpeg"] {
+                            ui.selectable_value(&mut app.config.codec, opt.to_string(), opt);
+                        }
+                    });
             });
             ui.end_row();
         });

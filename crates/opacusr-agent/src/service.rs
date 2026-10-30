@@ -17,7 +17,7 @@ use opacusr_transport::webrtc::{
 };
 
 use crate::config::AgentConfig;
-use crate::session::{HostEvent, SessionConfig, SessionHost};
+use crate::session::{CodecChoice, HostEvent, SessionConfig, SessionHost};
 
 /// Events surfaced to the UI / CLI.
 #[derive(Debug, Clone)]
@@ -121,7 +121,7 @@ impl AgentService {
                     let msg = msg?;
                     match msg {
                         SignalMessage::SessionIncoming(incoming) => {
-                            let accepted = if self.cfg.password.is_none() {
+                            let accepted = if !self.cfg.is_unattended() {
                                 false
                             } else if self.unattended {
                                 true
@@ -241,13 +241,14 @@ impl AgentService {
 
         // Per-session resources.
         let cfg = SessionConfig {
-            password: self.cfg.password.clone().unwrap_or_default(),
+            password: self.cfg.effective_password().unwrap_or_default(),
             display_name: self.cfg.name.clone(),
             fps: self.cfg.fps,
             jpeg_quality: self.cfg.jpeg_quality,
             scale_percent: self.cfg.scale_percent,
             download_dir: self.cfg.download_dir.clone(),
             auto_accept_files: self.cfg.auto_accept_files,
+            codec: CodecChoice::parse(&self.cfg.codec),
         };
         let host = SessionHost { cfg, events: tx };
         let capture: Box<dyn ScreenCapture> = if self.demo {

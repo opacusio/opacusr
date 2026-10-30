@@ -26,6 +26,36 @@ pub struct SessionConfig {
     pub scale_percent: u16,
     pub download_dir: PathBuf,
     pub auto_accept_files: bool,
+    pub codec: CodecChoice,
+}
+
+/// Preferred video codec for outgoing streams (from `agent.toml` `codec`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CodecChoice {
+    /// H.264 when the binary has the `h264` feature, JPEG otherwise.
+    #[default]
+    Auto,
+    Jpeg,
+    H264,
+}
+
+impl CodecChoice {
+    /// Parse the config value (`auto` | `jpeg` | `h264`); anything else → auto.
+    pub fn parse(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "jpeg" => Self::Jpeg,
+            "h264" | "h.264" => Self::H264,
+            _ => Self::Auto,
+        }
+    }
+
+    /// The codec actually streamed by this build.
+    pub fn resolve(self) -> CodecId {
+        match (self, opacusr_codec::H264_AVAILABLE) {
+            (Self::Jpeg, _) | (_, false) => CodecId::Jpeg,
+            (Self::Auto, true) | (Self::H264, true) => CodecId::H264,
+        }
+    }
 }
 
 /// Session lifecycle events for the UI / CLI.
@@ -95,16 +125,17 @@ async fn run_session(
     let (mut cur_w, mut cur_h) = capture.size().unwrap_or((1280, 720));
     let accept_w = cur_w;
     let accept_h = cur_h;
+    let codec = cfg.codec.resolve();
     session
         .send_msg(&Message::SessionAccept(SessionAccept {
             screen_w: accept_w,
             screen_h: accept_h,
-            codec: CodecId::Jpeg,
+            codec,
             fps_hint: cfg.fps,
         }))
         .await?;
 
-    let (mut encoder, _decoder) = make_pair(CodecId::Jpeg);
+    let (mut encoder, _decoder) = make_pair(codec);
     let mut ft = FtEngine::new();
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     let mut terms: HashMap<u32, crate::pty::TermSession> = HashMap::new();
@@ -143,8 +174,8 @@ async fn run_session(
                                     seq,
                                     width: frame.width,
                                     height: frame.height,
-                                    keyframe: true,
-                                    codec: CodecId::Jpeg,
+                                    keyframe: encoder.codec() == CodecId::Jpeg,
+                                    codec,
                                     data,
                                 });
                                 session.send_msg(&msg).await?;

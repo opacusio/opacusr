@@ -32,3 +32,23 @@ toml = { workspace = true }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 arboard = { workspace = true }
+
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
+
+[package.metadata.deb]
+maintainer = "OpacusR contributors <opacusio@users.noreply.github.com>"
+copyright = "2026, OpacusR contributors"
+license-file = ["../../LICENSE", "0"]
+extended-description = """\
+OpacusR viewer — connect to an OpacusR host, watch and control the remote \
+desktop, transfer files, chat and open a remote terminal. WebRTC data \
+channels with TCP relay fallback, end-to-end encrypted."""
+section = "net"
+priority = "optional"
+depends = "$auto, libx11-6, libxtst6, libxi6"
+assets = [
+    ["target/release/opacusr", "usr/bin/opacusr", "755"],
+    ["../../assets/opacusr.desktop", "usr/share/applications/opacusr.desktop", "644"],
+    ["../../assets/opacusr.png", "usr/share/icons/hicolor/256x256/apps/opacusr.png", "644"],
+]

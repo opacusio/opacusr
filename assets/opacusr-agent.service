@@ -1,0 +1,13 @@
+[Unit]
+Description=OpacusR host agent (unattended remote desktop)
+Documentation=https://github.com/opacusio/opacusr
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+ExecStart=/usr/bin/opacusr-agent run
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target

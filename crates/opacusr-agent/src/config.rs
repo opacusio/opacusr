@@ -22,8 +22,12 @@ pub struct AgentConfig {
     pub server_url: String,
     /// Name shown to viewers.
     pub name: String,
-    /// Unattended access password (plain — see module docs).
+    /// Unattended access password (plaintext fallback; prefer the keychain
+    /// via `password_in_keychain`). See `effective_password()`.
     pub password: Option<String>,
+    /// `true` = the unattended password lives in the OS keychain and
+    /// `password` is empty. Set by `opacusr-agent passwd`.
+    pub password_in_keychain: bool,
     /// Streaming frame rate cap.
     pub fps: u8,
     /// JPEG quality 1..=100.
@@ -36,10 +40,12 @@ pub struct AgentConfig {
     pub download_dir: PathBuf,
     /// TCP port for direct LAN sessions (`--allow-lan`).
     pub lan_port: u16,
-    /// STUN/TURN servers (space- or comma-separated URLs inside each entry
-    /// is not needed — one URL per entry; `user:pass@host` style TURN URLs
-    /// are parsed by the app layer).
+    /// STUN/TURN servers (one URL per entry; `user:pass@host` style TURN
+    /// URLs are parsed by the app layer).
     pub ice_urls: Vec<String>,
+    /// Video codec: `auto` (H.264 when built with it, else JPEG), `jpeg`,
+    /// or `h264` (falls back to JPEG when the feature is compiled out).
+    pub codec: String,
 }
 
 impl Default for AgentConfig {
@@ -51,6 +57,7 @@ impl Default for AgentConfig {
             server_url: "ws://127.0.0.1:8080/signal".into(),
             name: whoami_fallback(),
             password: None,
+            password_in_keychain: false,
             fps: opacusr_capture::source::CAPTURE_FPS_DEFAULT,
             jpeg_quality: 70,
             scale_percent: 100,
@@ -58,6 +65,7 @@ impl Default for AgentConfig {
             download_dir,
             lan_port: 54000,
             ice_urls: vec!["stun:stun.l.google.com:19302".into()],
+            codec: "auto".into(),
         }
     }
 }
@@ -109,6 +117,30 @@ impl AgentConfig {
             fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
         }
         Ok(path.clone())
+    }
+
+    /// The password the unattended mode actually verifies against:
+    /// the file field first (legacy), then the OS keychain when
+    /// `password_in_keychain` is set. `None` → attended mode.
+    pub fn effective_password(&self) -> Option<String> {
+        if let Some(p) = &self.password {
+            return Some(p.clone());
+        }
+        if self.password_in_keychain {
+            return match crate::keychain::load_password() {
+                Ok(p) => p,
+                Err(e) => {
+                    tracing::warn!(target: "opacusr", "{e}; unattended access disabled this run");
+                    None
+                }
+            };
+        }
+        None
+    }
+
+    /// Whether unattended access is configured (password exists somewhere).
+    pub fn is_unattended(&self) -> bool {
+        self.password.is_some() || self.password_in_keychain
     }
 }
 

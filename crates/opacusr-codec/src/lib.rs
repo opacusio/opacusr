@@ -1,13 +1,22 @@
 //! OpacusR video codecs.
 //!
-//! v0.1 ships a self-contained JPEG pipeline (full frames, quality 1..=100)
-//! — dependency-light and testable everywhere. The [`VideoEncoder`] /
-//! [`VideoDecoder`] traits are the extension point for inter-frame codecs
-//! (OpenH264, VP9, AV1) listed in docs/roadmap.md.
+//! JPEG: self-contained full-frame pipeline (quality 1..=100), testable
+//! everywhere. H.264 (feature `h264`, on by default): Cisco OpenH264 with
+//! inter-frame prediction, screen-content tuning and RGBA↔I420 conversion.
+//! The [`VideoEncoder`] / [`VideoDecoder`] traits remain the extension
+//! point for VP9/AV1 (docs/roadmap.md).
 
 use opacusr_capture::Frame;
 use opacusr_proto::message::CodecId;
 use thiserror::Error;
+
+#[cfg(feature = "h264")]
+pub mod h264;
+
+/// `true` when this binary can encode/decode H.264 (feature `h264`).
+/// Transport layers use it to decide which [`CodecId`] to announce.
+pub const H264_AVAILABLE: bool = cfg!(feature = "h264");
+
 /// Codec failures.
 #[derive(Debug, Error)]
 pub enum CodecError {
@@ -35,6 +44,16 @@ pub trait VideoDecoder: Send {
 pub fn make_pair(codec: CodecId) -> (Box<dyn VideoEncoder>, Box<dyn VideoDecoder>) {
     match codec {
         CodecId::Jpeg => (Box::new(JpegEncoder), Box::new(JpegDecoder)),
+        #[cfg(feature = "h264")]
+        CodecId::H264 => (
+            Box::new(h264::H264Encoder::new()),
+            Box::new(h264::H264Decoder::new()),
+        ),
+        #[cfg(not(feature = "h264"))]
+        CodecId::H264 => {
+            tracing::warn!(target: "opacusr", "H.264 requested but built without the `h264` feature; falling back to JPEG");
+            (Box::new(JpegEncoder), Box::new(JpegDecoder))
+        }
     }
 }
 

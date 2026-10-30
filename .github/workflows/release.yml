@@ -1,0 +1,140 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  linux:
+    name: Linux (deb + tar.gz)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install X11 dev packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libx11-dev libxi-dev libxtst-dev
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
+      - name: Build
+        run: cargo build --release -p opacusr-app -p opacusr-agent -p opacusr-server
+      - name: Test
+        run: cargo test --workspace
+      - name: Build debs
+        run: |
+          cargo install cargo-deb
+          cargo deb --no-build -p opacusr-agent
+          cargo deb --no-build -p opacusr-app
+      - name: Package tar.gz
+        run: |
+          mkdir -p dist/opacusr-${GITHUB_REF_NAME#v}-linux-x86_64
+          cp target/release/opacusr target/release/opacusr-agent target/release/opacusr-server \
+             dist/opacusr-${GITHUB_REF_NAME#v}-linux-x86_64/
+          cp README.md README.ru.md LICENSE dist/opacusr-${GITHUB_REF_NAME#v}-linux-x86_64/
+          tar -czf opacusr-${GITHUB_REF_NAME#v}-linux-x86_64.tar.gz -C dist opacusr-${GITHUB_REF_NAME#v}-linux-x86_64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-artifacts
+          path: |
+            opacusr-*-linux-x86_64.tar.gz
+            target/debian/*.deb
+
+  windows:
+    name: Windows (msi + zip)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
+      - name: Build
+        run: cargo build --release -p opacusr-app -p opacusr-agent -p opacusr-server
+      - name: Test
+        run: cargo test --workspace
+      - name: Install WiX Toolset v3
+        run: |
+          curl.exe -sLo wix311-binaries.zip https://github.com/wixtoolset/wix3/releases/download/wix3112rtm/wix311-binaries.zip
+          Expand-Archive -Path wix311-binaries.zip -DestinationPath wix
+          echo "$((Get-Location).Path)\wix" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Build MSI
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force build | Out-Null
+          & wix\candle.exe -arch x64 wix\main.wxs -o build\main.wixobj
+          & wix\light.exe -ext WixUIExtension build\main.wixobj -o opacusr-$($env:GITHUB_REF_NAME.Substring(1))-x64.msi
+      - name: Package zip
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist\opacusr-$($env:GITHUB_REF_NAME.Substring(1))-windows-x86_64 | Out-Null
+          Copy-Item target\release\opacusr.exe, target\release\opacusr-agent.exe, target\release\opacusr-server.exe, README.md, README.ru.md, LICENSE dist\opacusr-$($env:GITHUB_REF_NAME.Substring(1))-windows-x86_64\
+          Compress-Archive -Path dist\opacusr-* opacusr-$($env:GITHUB_REF_NAME.Substring(1))-windows-x86_64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-artifacts
+          path: |
+            opacusr-*-x64.msi
+            opacusr-*-windows-x86_64.zip
+
+  macos:
+    name: macOS (tar.gz, experimental)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
+      - name: Build
+        run: cargo build --release -p opacusr-app -p opacusr-agent -p opacusr-server
+      - name: Package tar.gz
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          mkdir -p dist/opacusr-${VER}-macos-aarch64
+          cp target/release/opacusr target/release/opacusr-agent target/release/opacusr-server \
+             dist/opacusr-${VER}-macos-aarch64/
+          cp README.md README.ru.md LICENSE dist/opacusr-${VER}-macos-aarch64/
+          tar -czf opacusr-${VER}-macos-aarch64.tar.gz -C dist opacusr-${VER}-macos-aarch64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-artifacts
+          path: opacusr-*-macos-aarch64.tar.gz
+
+  publish:
+    name: Publish GitHub Release
+    needs: [linux, windows, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+          path: dist
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.msi
+            dist/*.deb
+          generate_release_notes: true

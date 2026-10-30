@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=OpacusR
+GenericName=Remote Desktop
+Comment=Self-hosted open-source remote desktop (screen sharing, control, files, chat, terminal)
+Comment[ru]=Самохостинговый удалённый рабочий стол (экран, управление, файлы, чат, терминал)
+Exec=opacusr
+Icon=opacusr
+Terminal=false
+Categories=Network;RemoteAccess;
+Keywords=remote;desktop;rdp;vnc;opacusr;
+StartupWMClass=opacusr
