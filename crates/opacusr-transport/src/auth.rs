@@ -128,26 +128,6 @@ pub async fn host_handshake(
     gate: Option<&AuthGate>,
 ) -> std::result::Result<HostAuth, TransportError> {
     tokio::time::timeout(HANDSHAKE_TIMEOUT, async {
-        if let Some(gate) = gate {
-            if let GateDecision::Locked(wait) = gate.check() {
-                let secs = wait.as_secs().max(1);
-                tracing::warn!(target: "opacusr",
-                    "auth lockout active; refused a handshake ({secs} s left)");
-                let _ = session
-                    .send_msg(&Message::SessionReject(
-                        opacusr_proto::message::SessionReject {
-                            reason: format!(
-                                "authentication locked out after repeated failures; retry in {secs} s"
-                            ),
-                        },
-                    ))
-                    .await;
-                return Err(TransportError::Other(
-                    "authentication locked out".into(),
-                ));
-            }
-        }
-
         let viewer_hello = match session.recv_msg().await? {
             Message::Hello(h) => h,
             other => {
@@ -169,6 +149,29 @@ pub async fn host_handshake(
                 ))
                 .await;
             return Err(TransportError::Other("protocol version mismatch".into()));
+        }
+        // Gate check *after* the Hello is consumed: the rejection must go
+        // out on a drained socket, otherwise Windows answers with RST
+        // (unread data) and the viewer never sees the reason. The lockout
+        // still refuses before any challenge material is sent.
+        if let Some(gate) = gate {
+            if let GateDecision::Locked(wait) = gate.check() {
+                let secs = wait.as_secs().max(1);
+                tracing::warn!(target: "opacusr",
+                    "auth lockout active; refused a handshake ({secs} s left)");
+                let _ = session
+                    .send_msg(&Message::SessionReject(
+                        opacusr_proto::message::SessionReject {
+                            reason: format!(
+                                "authentication locked out after repeated failures; retry in {secs} s"
+                            ),
+                        },
+                    ))
+                    .await;
+                return Err(TransportError::Other(
+                    "authentication locked out".into(),
+                ));
+            }
         }
 
         let hello = Hello {
