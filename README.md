@@ -10,7 +10,7 @@
 > 🇷🇺 Russian documentation: [README.ru.md](README.ru.md)
 
 - **License:** AGPL-3.0
-- **Status:** v0.3.0 — working core, actively developed
+- **Status:** v0.3.1 — working core, actively developed
 - **Platforms:** Linux (X11 / Wayland via PipeWire), Windows (DXGI/GDI), macOS (partial), Android/iOS (skeleton)
 - **Repository home:** [github.com/opacusio](https://github.com/opacusio)
 

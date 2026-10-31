@@ -10,7 +10,7 @@
 > 🇬🇧 English documentation: [README.md](README.md)
 
 - **Лицензия:** AGPL-3.0
-- **Статус:** v0.3.0 — рабочее ядро, активная разработка
+- **Статус:** v0.3.1 — рабочее ядро, активная разработка
 - **Платформы:** Linux (X11 / Wayland через PipeWire), Windows (DXGI/GDI), macOS (частично), Android/iOS (каркас)
 - **Репозиторий:** [github.com/opacusio](https://github.com/opacusio)
 

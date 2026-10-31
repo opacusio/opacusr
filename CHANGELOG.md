@@ -4,6 +4,8 @@ All notable changes to OpacusR are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is
 SemVer-ish (breaking protocol changes bump the minor until 1.0).
 
+## [Unreleased]
+
 ## [0.3.1] — 2026-10-31
 
 Release engineering, documentation and community tooling. **No functional
