@@ -94,6 +94,17 @@ In the GUI: enter the signaling URL, connect, pick the host from the list (or ty
 
 Assets are produced automatically on every `v*` tag by [.github/workflows/release.yml](.github/workflows/release.yml) (Linux deb + tar.gz, Windows MSI + zip, macOS tar.gz). To build locally: `cargo deb -p opacusr-app -p opacusr-agent` (needs `cargo install cargo-deb`); MSI: see `wix/main.wxs` header.
 
+#### Verifying downloads (all OSes)
+
+Every release ships a `SHA256SUMS` file with a checksum per asset. Check your
+download before running anything:
+
+- Linux: `sha256sum -c SHA256SUMS` (in the folder with the downloaded files).
+- macOS: `shasum -a 256 -c SHA256SUMS` (same).
+- Windows (PowerShell): `Get-FileHash -Algorithm SHA256 .\opacusr-<ver>-x64.msi`
+  and compare the hash with the matching line in `SHA256SUMS`; or
+  `certutil -hashfile opacusr-<ver>-x64.msi SHA256` in cmd.
+
 #### macOS: first launch (Gatekeeper)
 
 Release binaries are **ad-hoc signed**: before packaging, the release workflow
@@ -119,6 +130,17 @@ xattr -cr opacusr-*-macos-aarch64/   # clear the quarantine flag on the extracte
 The signature travels inside the `.tar.gz`; only the quarantine flag that the
 browser adds on download triggers the prompt. `sha256sum -c SHA256SUMS` works
 as usual.
+
+#### Windows: first launch (SmartScreen)
+
+The MSI and the zip are not Authenticode-signed (no paid code-signing
+certificate - this is an AGPL project), so the first run of the installer may
+trigger SmartScreen: "Windows protected your PC". That is the expected
+behavior for any unsigned download, not a sign of a problem. To proceed:
+**More info** -> **Run anyway**. Trust anchors, in order of strength: verify
+the `SHA256SUMS` checksum (see above), or build from source -
+`cargo build --release`. After the first accepted run Windows remembers the
+choice for that file.
 
 ### Building
 

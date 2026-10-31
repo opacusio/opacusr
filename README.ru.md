@@ -94,6 +94,14 @@ cargo run --release -p opacusr-app
 
 Артефакты собираются автоматически на каждый тег `v*` ([.github/workflows/release.yml](.github/workflows/release.yml): Linux deb + tar.gz, Windows MSI + zip, macOS tar.gz). Локально: `cargo deb -p opacusr-app -p opacusr-agent` (нужен `cargo install cargo-deb`); MSI — см. шапку `wix/main.wxs`.
 
+#### Проверка загрузок (все ОС)
+
+К каждому релизу прилагается `SHA256SUMS` — контрольная сумма для каждого файла. Проверьте загрузку, прежде что-либо запускать:
+
+- Linux: `sha256sum -c SHA256SUMS` (в папке со скачанными файлами).
+- macOS: `shasum -a 256 -c SHA256SUMS` (там же).
+- Windows (PowerShell): `Get-FileHash -Algorithm SHA256 .\opacusr-<ver>-x64.msi` и сравните хеш со строкой в `SHA256SUMS`; либо `certutil -hashfile opacusr-<ver>-x64.msi SHA256` в cmd.
+
 #### macOS: первый запуск (Gatekeeper)
 
 Бинарники из релиза подписаны **ad-hoc**: перед упаковкой release-workflow
@@ -119,6 +127,10 @@ xattr -cr opacusr-*-macos-aarch64/   # снять карантинную мет�
 Подпись едет внутри `.tar.gz`; предупреждение вызывает только карантинная
 метка, которую ставит браузер при скачивании. `sha256sum -c SHA256SUMS`
 работает как обычно.
+
+#### Windows: первый запуск (SmartScreen)
+
+MSI и zip не подписаны Authenticode (платный сертификат подписи отсутствует — это AGPL-проект), поэтому первый запуск установщика может вызвать SmartScreen: «Система Windows защитила ваш компьютер». Это ожидаемое поведение для любой неподписанной загрузки, а не признак проблемы. Чтобы продолжить: **Подробнее** → **Выполнить в любом случае**. Якоря доверия, по убыванию силы: сверить контрольную сумму `SHA256SUMS` (см. выше) или собрать из исходников — `cargo build --release`. После первого подтверждённого запуска Windows запоминает выбор для этого файла.
 
 ### Сборка
 

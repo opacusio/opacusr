@@ -8,6 +8,13 @@ SemVer-ish (breaking protocol changes bump the minor until 1.0).
 
 ### Added
 
+- **Docs: checksum verification on every OS + Windows SmartScreen first run** —
+  README.md / README.ru.md gain per-OS verification commands (`sha256sum -c`,
+  `shasum -a 256 -c`, PowerShell `Get-FileHash`, `certutil -hashfile`) and the
+  expected SmartScreen prompt for the unsigned MSI with the More info ->
+  Run anyway steps.
+
+
 - **macOS: ad-hoc signing + Gatekeeper docs** — release binaries are ad-hoc
   codesigned (`codesign --force --sign -`) in the release workflow before
   packaging, so they run on Apple Silicon; README.md / README.ru.md document
