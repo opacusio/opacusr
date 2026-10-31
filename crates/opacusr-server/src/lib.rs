@@ -339,10 +339,13 @@ impl Limits {
     pub fn from_env() -> Self {
         Self {
             rate_max: env_parse("OPACUSR_RATE_MAX", Self::default().rate_max).max(1),
-            rate_window: Duration::from_secs((
-                env_parse("OPACUSR_RATE_WINDOW_SECS", Self::default().rate_window.as_secs())
-            )
-            .max(1)),
+            rate_window: Duration::from_secs(
+                (env_parse(
+                    "OPACUSR_RATE_WINDOW_SECS",
+                    Self::default().rate_window.as_secs(),
+                ))
+                .max(1),
+            ),
             max_peers: env_parse("OPACUSR_MAX_PEERS", Self::default().max_peers).max(1),
         }
     }
@@ -410,11 +413,7 @@ impl AppState {
     }
 
     /// Fully configured constructor (used by the binary).
-    pub fn with_options(
-        relay_port: u16,
-        limits: Limits,
-        turn: Option<TurnConfig>,
-    ) -> Self {
+    pub fn with_options(relay_port: u16, limits: Limits, turn: Option<TurnConfig>) -> Self {
         let limiter = ConnLimiter::new(limits.rate_max, limits.rate_window);
         Self {
             registry: Registry::default(),

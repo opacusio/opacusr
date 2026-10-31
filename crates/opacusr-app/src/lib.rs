@@ -4,8 +4,8 @@
 
 pub mod app;
 pub mod host_panel;
-pub mod view;
 pub mod update_banner;
+pub mod view;
 
 pub use app::App;
 

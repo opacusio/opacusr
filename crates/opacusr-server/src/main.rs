@@ -55,9 +55,9 @@ async fn main() -> anyhow::Result<()> {
             "turn credentials: minting enabled (ttl {}s, GET /turn)",
             t.ttl_secs
         ),
-        None => eprintln!(
-            "turn credentials: disabled (set OPACUSR_TURN_SECRET to enable GET /turn)"
-        ),
+        None => {
+            eprintln!("turn credentials: disabled (set OPACUSR_TURN_SECRET to enable GET /turn)")
+        }
     }
 
     let state = Arc::new(AppState::with_options(cli.relay_port, limits, turn));
