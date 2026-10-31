@@ -154,6 +154,20 @@ jobs:
           key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
       - name: Build
         run: cargo build --release -p opacusr-app -p opacusr-agent -p opacusr-server
+      - name: Ad-hoc codesign binaries
+        # A valid signature is mandatory on Apple Silicon: arm64 macOS kills
+        # a process whose Mach-O is unsigned or was modified after signing
+        # (e.g. stripped). Ad-hoc signing needs no Apple Developer identity
+        # and no notarization, and guarantees a valid signature inside the
+        # tar.gz. Gatekeeper still shows a one-time warning on the first
+        # launch of a quarantined download; the ways to clear it are
+        # documented in README.md / README.ru.md
+        # ("macOS: first launch (Gatekeeper)").
+        run: |
+          for bin in opacusr opacusr-agent opacusr-server; do
+            codesign --force --sign - "target/release/$bin"
+            codesign --verify --verbose=1 "target/release/$bin"
+          done
       - name: Smoke test
         run: |
           ./target/release/opacusr-agent --version

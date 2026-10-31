@@ -94,6 +94,32 @@ In the GUI: enter the signaling URL, connect, pick the host from the list (or ty
 
 Assets are produced automatically on every `v*` tag by [.github/workflows/release.yml](.github/workflows/release.yml) (Linux deb + tar.gz, Windows MSI + zip, macOS tar.gz). To build locally: `cargo deb -p opacusr-app -p opacusr-agent` (needs `cargo install cargo-deb`); MSI: see `wix/main.wxs` header.
 
+#### macOS: first launch (Gatekeeper)
+
+Release binaries are **ad-hoc signed**: before packaging, the release workflow
+runs `codesign --force --sign -` on each Mach-O. No Apple Developer ID and no
+notarization are involved (this is an AGPL project without a paid signing
+certificate). A valid signature - even an ad-hoc one - is mandatory on Apple
+Silicon: arm64 macOS kills a process whose binary is unsigned or was modified
+after signing (e.g. stripped). What remains is the standard one-time Gatekeeper
+check on the first launch of a quarantined download: *"opacusr-agent cannot be
+opened because the developer cannot be verified."* Any one of these clears it:
+
+```bash
+xattr -cr opacusr-*-macos-aarch64/   # clear the quarantine flag on the extracted files
+```
+
+- Right-click the binary, choose **Open**, then **Open** in the dialog (the
+  bypass is offered only on the first launch).
+- Or: System Settings -> **Privacy & Security** -> find the blocked-binary
+  notice -> **Open Anyway**.
+- Or: run the `xattr -cr` command above; the binary then starts like any
+  locally built one.
+
+The signature travels inside the `.tar.gz`; only the quarantine flag that the
+browser adds on download triggers the prompt. `sha256sum -c SHA256SUMS` works
+as usual.
+
 ### Building
 
 ```bash

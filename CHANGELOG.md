@@ -7,6 +7,13 @@ SemVer-ish (breaking protocol changes bump the minor until 1.0).
 ## [Unreleased]
 
 ### Added
+
+- **macOS: ad-hoc signing + Gatekeeper docs** — release binaries are ad-hoc
+  codesigned (`codesign --force --sign -`) in the release workflow before
+  packaging, so they run on Apple Silicon; README.md / README.ru.md document
+  the expected one-time Gatekeeper prompt and the ways to clear it (`xattr
+  -cr`, right-click Open, Privacy & Security -> Open Anyway).
+
 - Update check: the GUI app and the agent query GitHub for the latest published release at startup and show a notice when a newer version is available. No download and no auto-install; disable with OPACUSR_NO_UPDATE_CHECK=1.
 
 
