@@ -167,6 +167,20 @@ jobs:
           cd dist
           sha256sum * > SHA256SUMS
           cat SHA256SUMS
+      - name: Extract release notes from CHANGELOG.md
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          awk -v ver="$VER" '
+            $0 ~ "^## \\[" ver "\\]" { found=1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md > release_body.md
+          if [ ! -s release_body.md ]; then
+            echo "::error::No '## [$VER]' section in CHANGELOG.md - add it before tagging."
+            exit 1
+          fi
+          echo "--- release body ---"
+          cat release_body.md
       - uses: softprops/action-gh-release@v2
         with:
           files: |
@@ -175,4 +189,5 @@ jobs:
             dist/*.msi
             dist/*.deb
             dist/SHA256SUMS
+          body_path: release_body.md
           generate_release_notes: true

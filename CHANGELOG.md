@@ -4,6 +4,32 @@ All notable changes to OpacusR are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is
 SemVer-ish (breaking protocol changes bump the minor until 1.0).
 
+## [0.3.1] — 2026-10-31
+
+Release engineering, documentation and community tooling. **No functional
+changes to the `opacusr-agent`, `opacusr-server` or GUI app binaries** —
+upgrading is optional.
+
+### Added
+
+- All release artifacts now ship with a `SHA256SUMS` checksum file;
+  verify your download with `sha256sum -c SHA256SUMS`.
+- The Release workflow smoke-tests every build (`--version` for the agent
+  and server binaries) on Linux, Windows and macOS before publishing, so
+  a broken build can no longer reach a release.
+- `SECURITY.md`: security policy with private vulnerability reporting,
+  a 72-hour acknowledgment target, and the scope (transport crypto,
+  relay, password flow).
+- GitHub issue templates for bug reports and feature requests; blank
+  issues are disabled.
+- Categorized release-note configuration (`.github/release.yml`) and the
+  release body now generated from this changelog (`body_path`).
+
+### Changed
+
+- `README.md` / `README.ru.md`: added Release / CI / Release build /
+  License badges and a Download section.
+
 ## [0.3.0] — 2026-10-30
 
 Protocol version 2 (`SessionAccept` gained `view_only`/`screens`/
