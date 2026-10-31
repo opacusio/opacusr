@@ -22,6 +22,24 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libx11-dev libxi-dev libxtst-dev libasound2-dev
+      - name: Build and install Opus (static)
+        # audiopus_sys probes pkg-config first and only falls back to the
+        # vendored autotools build when no system Opus is found. That vendored
+        # build links a shared libopus.so.0 without an embedded rpath, so the
+        # binaries could not start ("libopus.so.0: cannot open shared object
+        # file") - the smoke test added in v0.3.1 caught this (the v0.3.0
+        # tar.gz had the same defect). Build Opus from the official source as
+        # a PIC static library into /usr/local instead: pkg-config then finds
+        # it and the linker picks libopus.a (no .so exists), which keeps the
+        # binaries and the tar.gz self-contained - the same approach as the
+        # macOS job.
+        run: |
+          curl -sL -o /tmp/opus.tar.gz https://downloads.xiph.org/releases/opus/opus-1.5.2.tar.gz
+          tar -xzf /tmp/opus.tar.gz -C /tmp
+          cd /tmp/opus-1.5.2
+          ./configure --prefix=/usr/local --disable-shared --enable-static --with-pic --disable-doc --disable-extra-programs
+          make -j3
+          sudo make install
       - uses: actions/cache@v4
         with:
           path: |

@@ -30,6 +30,15 @@ upgrading is optional.
 - `README.md` / `README.ru.md`: added Release / CI / Release build /
   License badges and a Download section.
 
+### Fixed
+
+- Linux: release binaries failed to start with "libopus.so.0: cannot open
+  shared object file" — they linked a vendored shared Opus without an
+  embedded runtime path. The new release smoke test caught this; the
+  v0.3.0 Linux tar.gz was affected the same way. Opus is now built as a
+  static PIC library (as on macOS), so the binaries, the tar.gz and the
+  .deb packages are self-contained and no longer require a system Opus.
+
 ## [0.3.0] — 2026-10-30
 
 Protocol version 2 (`SessionAccept` gained `view_only`/`screens`/
