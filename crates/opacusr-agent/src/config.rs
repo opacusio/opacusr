@@ -110,6 +110,10 @@ pub struct AgentConfig {
     pub auth_window_secs: u64,
     /// Base lockout (seconds) once the failure budget is spent.
     pub auth_lockout_secs: u64,
+    /// Fetch time-limited TURN credentials from the signaling server's
+    /// `GET /turn` (coturn REST API) for WebRTC sessions. Harmless when
+    /// the server does not mint (STUN-only fallback).
+    pub turn_api: bool,
 }
 
 impl Default for AgentConfig {
@@ -140,6 +144,7 @@ impl Default for AgentConfig {
             auth_max_attempts: 5,
             auth_window_secs: 300,
             auth_lockout_secs: 60,
+            turn_api: true,
         }
     }
 }

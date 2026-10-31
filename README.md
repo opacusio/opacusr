@@ -72,7 +72,7 @@ opacusr-agent id                # print this host's registered ID
 opacusr-agent config            # print config location & summary
 ```
 
-Settings live in `~/.config/opacusr/agent.toml` (Linux), `%APPDATA%\opacusr\agent.toml` (Windows), `~/Library/Application Support/opacusr/agent.toml` (macOS). Notable keys: `server_url`, `name`, `password` / `password_in_keychain`, `fps`, `jpeg_quality`, `scale_percent`, `auto_accept_files`, `download_dir`, `lan_port`, `ice_urls`, `codec` (`auto` | `h264` | `jpeg`), `clipboard_sync`, `adaptive_quality`, `audio`, `audio_device`, `capture` (`auto` | `gdi` | `dxgi`, Windows), `default_permission` (`full` | `view-only` | `deny`), `acl_rules` (per-viewer overrides), auth lockout: `auth_max_attempts` / `auth_window_secs` / `auth_lockout_secs` (defaults 5 / 300 / 60; `0` disables).
+Settings live in `~/.config/opacusr/agent.toml` (Linux), `%APPDATA%\opacusr\agent.toml` (Windows), `~/Library/Application Support/opacusr/agent.toml` (macOS). Notable keys: `server_url`, `name`, `password` / `password_in_keychain`, `fps`, `jpeg_quality`, `scale_percent`, `auto_accept_files`, `download_dir`, `lan_port`, `ice_urls`, `codec` (`auto` | `h264` | `jpeg`), `clipboard_sync`, `adaptive_quality`, `audio`, `audio_device`, `capture` (`auto` | `gdi` | `dxgi`, Windows), `default_permission` (`full` | `view-only` | `deny`), `acl_rules` (per-viewer overrides), auth lockout: `auth_max_attempts` / `auth_window_secs` / `auth_lockout_secs` (defaults 5 / 300 / 60; `0` disables), `turn_api` (fetch time-limited TURN credentials from the server's `GET /turn`; default on).
 
 ### 3. Viewer side (the controller)
 

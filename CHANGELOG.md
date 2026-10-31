@@ -12,6 +12,8 @@ SemVer-ish (breaking protocol changes bump the minor until 1.0).
 
 - **Agent-side auth lockout** — failed password proofs are counted per accept path (signaling / LAN): after `auth_max_attempts` (default 5) failures within `auth_window_secs` (default 300 s) the agent refuses new handshakes for `auth_lockout_secs` (default 60 s, doubling per consecutive lockout, capped at 15 min; `0` disables). The budget is shared across all peers of the path, so rotating peer IDs or display names no longer helps an online brute-force — with defaults it is capped at ~20 guesses per hour even under sustained attack. Tunables in `agent.toml`; every failure and lockout is logged.
 
+- **Automatic time-limited TURN credentials in clients** — the agent and the GUI viewer fetch the coturn REST pair from the server's `GET /turn` at WebRTC session setup (`turn_api = true` in `agent.toml`), cache it for the server-declared TTL (a 503 disables the fetch for the run), and fall back to STUN-only on any failure. Completes the `OPACUSR_TURN_SECRET` flow: coturn serves per-session credentials instead of a shared static secret.
+
 
 - **Docs: checksum verification on every OS + Windows SmartScreen first run** —
   README.md / README.ru.md gain per-OS verification commands (`sha256sum -c`,

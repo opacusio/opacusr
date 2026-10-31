@@ -22,7 +22,7 @@ Where OpacusR is heading. Items are grouped by milestone; security items from [s
 
 - **Strong ACL identities**: per-viewer keys / device fingerprints so rules do not depend on self-reported names (today the password is the real gate, see security.md).
 - ~~**Agent-side** auth rate limiting & lockout~~ **done (unreleased)** — per-path sliding-window counter with escalating lockout (security.md §8.3). Optional TOFU/pinned host fingerprints in the viewer remains.
-- **Automatic per-session TURN credential fetch** in clients (server-side minting at `GET /turn` is done).
+- ~~**Automatic per-session TURN credential fetch** in clients~~ **done (unreleased)** — both sides fetch `GET /turn` at session setup and cache by TTL; server-side minting shipped earlier.
 - **Windows service / macOS launchd** installs for the agent (the systemd user unit and MSI already ship; service-mode is the remaining gap).
 
 ## M3 — Scale & operations

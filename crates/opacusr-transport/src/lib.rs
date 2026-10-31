@@ -17,6 +17,7 @@ pub mod relay;
 pub mod secure;
 pub mod signaling;
 pub mod tcp;
+pub mod turn;
 pub mod update;
 pub mod webrtc;
 

@@ -16,6 +16,7 @@ use opacusr_transport::lockout::{AuthGate, AuthGateConfig};
 use opacusr_transport::secure::SecureSession;
 use opacusr_transport::signaling::SignalingClient;
 use opacusr_transport::tcp::TcpTransport;
+use opacusr_transport::turn::{TurnCredentialCache, TurnCredentials};
 use opacusr_transport::webrtc::{
     new_peer_connection, AnswerPending, IceServerConfig, WebRtcConfig,
 };
@@ -90,9 +91,19 @@ impl AgentService {
         // One auth gate for the whole signaling path (all sessions it
         // accepts share the failure budget — see crate::service docs).
         let gate = self.auth_gate();
+        // Time-limited TURN credentials, cached across sessions for the
+        // signaling path's TTL (no-op when turn_api is off).
+        let turn = if self.cfg.turn_api {
+            TurnCredentialCache::from_server_url(&self.cfg.server_url)
+        } else {
+            TurnCredentialCache::disabled()
+        };
         let mut backoff = std::time::Duration::from_secs(1);
         loop {
-            match self.serve_once(&mut consent, &mut shutdown, &gate).await {
+            match self
+                .serve_once(&mut consent, &mut shutdown, &gate, &turn)
+                .await
+            {
                 Ok(_) => return Ok(()), // graceful shutdown
                 Err(e) => {
                     let _ = self.events.send(AgentEvent::Notice(format!(
@@ -114,6 +125,7 @@ impl AgentService {
         consent: &mut impl FnMut(opacusr_proto::PeerId, &str, Platform) -> SessionDecision,
         shutdown: &mut tokio::sync::watch::Receiver<bool>,
         gate: &Arc<AuthGate>,
+        turn: &TurnCredentialCache,
     ) -> anyhow::Result<()> {
         let mut sig = SignalingClient::connect(&self.cfg.server_url).await?;
         sig.send(&SignalMessage::Register(Register {
@@ -203,8 +215,15 @@ impl AgentService {
                                         .copied()
                                         .unwrap_or(SessionDecision::Full)
                                         == SessionDecision::ViewOnly;
-                                    self.start_webrtc_session(&mut sig, from, &sdp, view_only, gate)
-                                        .await?;
+                                    self.start_webrtc_session(
+                                        &mut sig,
+                                        from,
+                                        &sdp,
+                                        view_only,
+                                        gate,
+                                        turn,
+                                    )
+                                    .await?;
                                 }
                                 PeerPayload::RelayUse { ticket, port } => {
                                     let view_only = decisions.get(&from)
@@ -242,19 +261,48 @@ impl AgentService {
         }))
     }
 
-    fn webrtc_config(&self) -> WebRtcConfig {
+    /// ICE configuration: the configured STUN entries plus, when minted
+    /// credentials are available, the server's coturn URIs as a TURN
+    /// entry (media can relay when direct paths fail).
+    fn webrtc_config(&self, turn: Option<&TurnCredentials>) -> WebRtcConfig {
         let mut ice = Vec::new();
         for url in &self.cfg.ice_urls {
-            // Support `turn://user:pass@host:port` style entries minimally:
-            // plain URLs only for now; TURN creds come from the app config
-            // (`turn_username`/`turn_password` are roadmap items).
+            // Plain STUN URLs only — the TURN entry (if any) comes from
+            // the server's `GET /turn` below, with matching credentials.
             if let Some(rest) = url.strip_prefix("stun:") {
                 ice.push(IceServerConfig::stun(&[&format!("stun:{rest}")]));
             } else {
                 ice.push(IceServerConfig::stun(&[url.as_str()]));
             }
         }
+        if let Some(t) = turn {
+            let uris: Vec<&str> = t.uris.iter().map(String::as_str).collect();
+            ice.push(IceServerConfig::turn(&uris, &t.username, &t.password));
+        }
         WebRtcConfig { ice_servers: ice }
+    }
+
+    /// Minted TURN credentials for the current signaling path, or `None`
+    /// (degrade to STUN-only) when disabled, cooling down or unreachable.
+    async fn turn_credentials(&self, turn: &TurnCredentialCache) -> Option<TurnCredentials> {
+        if !turn.enabled() {
+            return None;
+        }
+        let fetch = tokio::task::spawn_blocking({
+            let turn = turn.clone();
+            move || turn.get()
+        });
+        match tokio::time::timeout(Duration::from_secs(8), fetch).await {
+            Ok(Ok(creds)) => creds,
+            Ok(Err(e)) => {
+                tracing::warn!(target: "opacusr", "TURN fetch task failed: {e}");
+                None
+            }
+            Err(_) => {
+                tracing::warn!(target: "opacusr", "TURN credential fetch timed out; STUN-only");
+                None
+            }
+        }
     }
 
     async fn start_webrtc_session(
@@ -264,8 +312,10 @@ impl AgentService {
         offer_sdp: &str,
         view_only: bool,
         gate: &Arc<AuthGate>,
+        turn: &TurnCredentialCache,
     ) -> anyhow::Result<()> {
-        let pc = new_peer_connection(&self.webrtc_config()).await?;
+        let turn_creds = self.turn_credentials(turn).await;
+        let pc = new_peer_connection(&self.webrtc_config(turn_creds.as_ref())).await?;
         let mut pending = AnswerPending::new(pc);
         let answer = pending.accept_offer(offer_sdp).await?;
         sig.send(&SignalMessage::PeerSend(PeerSend {

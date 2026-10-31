@@ -155,7 +155,7 @@ impl App {
             return;
         }
 
-        let settings = SessionSettings {
+        let mut settings = SessionSettings {
             password,
             display_name: self.display_name.clone(),
             download_dir: self.config.download_dir.clone(),
@@ -203,8 +203,31 @@ impl App {
             };
             let server = self.server_url.clone();
             let choice = self.transport_choice;
+            let turn_api = self.config.turn_api;
             self.status_message = format!("Requesting session with host {host_id}…");
             self.rt.spawn(async move {
+                // Time-limited TURN credentials from the server's
+                // `GET /turn` (coturn REST API), when it mints them;
+                // any failure just leaves the STUN-only configuration.
+                if turn_api {
+                    if let Some(endpoint) = opacusr_transport::turn::turn_endpoint_of(&server) {
+                        let fetched = tokio::task::spawn_blocking(move || {
+                            opacusr_transport::turn::fetch_turn_credentials(&endpoint)
+                        })
+                        .await
+                        .ok();
+                        if let Some(Ok(creds)) = fetched {
+                            let uris: Vec<&str> = creds.uris.iter().map(String::as_str).collect();
+                            settings.webrtc.ice_servers.push(
+                                opacusr_transport::webrtc::IceServerConfig::turn(
+                                    &uris,
+                                    &creds.username,
+                                    &creds.password,
+                                ),
+                            );
+                        }
+                    }
+                }
                 match SessionClient::connect_via_server(&server, host_id, settings, choice).await {
                     Ok((client, mut events)) => {
                         ctx.request_repaint();
