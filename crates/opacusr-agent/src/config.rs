@@ -323,17 +323,20 @@ mod tests {
 
     #[test]
     fn endpoints_fall_back_to_server_url() {
-        let mut cfg = AgentConfig::default();
-        cfg.server_url = "ws://a/signal".into();
-        cfg.signaling_urls.clear();
+        let cfg = AgentConfig {
+            server_url: "ws://a/signal".into(),
+            ..Default::default()
+        };
         assert_eq!(cfg.signaling_endpoints(), vec!["ws://a/signal".to_string()]);
     }
 
     #[test]
     fn endpoints_keep_primary_first() {
-        let mut cfg = AgentConfig::default();
-        cfg.server_url = "ws://a/signal".into();
-        cfg.signaling_urls = vec!["ws://b/signal".into(), "ws://c/signal".into()];
+        let cfg = AgentConfig {
+            server_url: "ws://a/signal".into(),
+            signaling_urls: vec!["ws://b/signal".into(), "ws://c/signal".into()],
+            ..Default::default()
+        };
         assert_eq!(
             cfg.signaling_endpoints(),
             vec![
@@ -346,9 +349,11 @@ mod tests {
 
     #[test]
     fn endpoints_do_not_duplicate_primary() {
-        let mut cfg = AgentConfig::default();
-        cfg.server_url = "ws://a/signal".into();
-        cfg.signaling_urls = vec!["ws://a/signal".into(), "ws://b/signal".into()];
+        let cfg = AgentConfig {
+            server_url: "ws://a/signal".into(),
+            signaling_urls: vec!["ws://a/signal".into(), "ws://b/signal".into()],
+            ..Default::default()
+        };
         assert_eq!(
             cfg.signaling_endpoints(),
             vec!["ws://a/signal".to_string(), "ws://b/signal".to_string()]
@@ -357,8 +362,10 @@ mod tests {
 
     #[test]
     fn embedded_url_follows_port() {
-        let mut cfg = AgentConfig::default();
-        cfg.signal_listen_port = 9090;
+        let cfg = AgentConfig {
+            signal_listen_port: 9090,
+            ..Default::default()
+        };
         assert_eq!(cfg.embedded_signal_url(), "ws://127.0.0.1:9090/signal");
     }
 }
