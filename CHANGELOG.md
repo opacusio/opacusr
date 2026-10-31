@@ -9,6 +9,9 @@ SemVer-ish (breaking protocol changes bump the minor until 1.0).
 ### Added
 - Update check: the GUI app and the agent query GitHub for the latest published release at startup and show a notice when a newer version is available. No download and no auto-install; disable with OPACUSR_NO_UPDATE_CHECK=1.
 
+
+### Changed
+- Wayland hosts fail fast with a clear error (PipeWire portal feature or an X11 session; `OPACUSR_ALLOW_X11_ON_WAYLAND=1` forces the old behavior) instead of a silent blank XWayland capture, and agents print a startup warning under Wayland.
 ## [0.3.1] — 2026-10-31
 
 Release engineering, documentation and community tooling. **No functional

@@ -38,6 +38,34 @@ pub mod test;
 
 pub use source::{ScreenCapture, CAPTURE_FPS_DEFAULT};
 
+/// True when the process looks like it runs inside a Wayland session:
+/// `WAYLAND_DISPLAY`/`WAYLAND_SOCKET` is set, or `XDG_SESSION_TYPE` is
+/// `wayland`.
+pub fn is_wayland_session() -> bool {
+    if std::env::var_os("WAYLAND_DISPLAY").is_some()
+        || std::env::var_os("WAYLAND_SOCKET").is_some()
+    {
+        return true;
+    }
+    matches!(std::env::var("XDG_SESSION_TYPE").as_deref(), Ok("wayland"))
+}
+
+/// Non-fatal startup hint for hosts: under a Wayland session without the
+/// PipeWire capture feature, screen sharing cannot work. Surfaced to the
+/// UI / CLI when the service starts; `None` on other platforms.
+pub fn wayland_startup_warning() -> Option<String> {
+    #[cfg(all(target_os = "linux", not(feature = "pipewire")))]
+    {
+        if is_wayland_session() {
+            return Some(
+                "Wayland session detected: screen capture needs the PipeWire portal (build with --features opacusr-capture/pipewire) or an X11 session."
+                    .to_string(),
+            );
+        }
+    }
+    None
+}
+
 use thiserror::Error;
 
 /// Capture failures, unified across backends.
@@ -47,6 +75,8 @@ pub enum CaptureError {
     Unsupported,
     #[error("x11 error: {0}")]
     X11(String),
+    #[error("wayland: {0}")]
+    Wayland(String),
     #[error("win32 error: {0}")]
     Win32(String),
     #[error("screen changed shape mid-capture")]
@@ -167,12 +197,34 @@ pub fn platform_capture(
     }
     #[cfg(all(feature = "x11", target_os = "linux"))]
     {
+        // Native Wayland session without the PipeWire feature: an X11
+        // capture would only see XWayland windows (native apps stay
+        // blank), which is worse than failing with a clear message.
+        // Escape hatch: OPACUSR_ALLOW_X11_ON_WAYLAND=1.
+        if crate::is_wayland_session()
+            && std::env::var_os("OPACUSR_ALLOW_X11_ON_WAYLAND").is_none()
+        {
+            return Err(CaptureError::Wayland(
+                "Wayland session detected: screen capture needs the PipeWire portal \
+                (build with --features opacusr-capture/pipewire) or an X11 session \
+                (e.g. select 'Ubuntu on Xorg' at the login screen). \
+                Set OPACUSR_ALLOW_X11_ON_WAYLAND=1 to force the limited XWayland capture."
+                    .to_string(),
+            ));
+        }
+
         match crate::x11::X11Capture::connect() {
             Ok(c) => return Ok(Box::new(c)),
             Err(e) => {
                 if allow_test_fallback {
                     tracing::warn!(target: "opacusr", "X11 capture unavailable ({e}); using test source");
                     return Ok(Box::new(crate::test::TestSource::new(1280, 720)));
+                }
+                if crate::is_wayland_session() {
+                    return Err(CaptureError::Wayland(format!(
+                        "Wayland session: PipeWire portal unavailable and X11/XWayland capture failed ({e}). \
+                        Use an X11 session or build with --features opacusr-capture/pipewire."
+                    )));
                 }
                 return Err(e);
             }

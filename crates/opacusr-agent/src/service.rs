@@ -80,6 +80,9 @@ impl AgentService {
         mut consent: impl FnMut(opacusr_proto::PeerId, &str, Platform) -> SessionDecision + Send,
         mut shutdown: tokio::sync::watch::Receiver<bool>,
     ) -> anyhow::Result<()> {
+        if let Some(warning) = opacusr_capture::wayland_startup_warning() {
+            let _ = self.events.send(AgentEvent::Notice(warning));
+        }
         let mut backoff = std::time::Duration::from_secs(1);
         loop {
             match self.serve_once(&mut consent, &mut shutdown).await {
@@ -336,6 +339,9 @@ impl AgentService {
         port: u16,
         mut shutdown: tokio::sync::watch::Receiver<bool>,
     ) -> anyhow::Result<()> {
+        if let Some(warning) = opacusr_capture::wayland_startup_warning() {
+            let _ = self.events.send(AgentEvent::Notice(warning));
+        }
         let listener = tokio::net::TcpListener::bind(("0.0.0.0", port)).await?;
         let _ = self.events.send(AgentEvent::Notice(format!(
             "LAN listener on 0.0.0.0:{port}"
