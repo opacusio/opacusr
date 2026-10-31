@@ -6,6 +6,9 @@ SemVer-ish (breaking protocol changes bump the minor until 1.0).
 
 ## [Unreleased]
 
+### Added
+- Update check: the GUI app and the agent query GitHub for the latest published release at startup and show a notice when a newer version is available. No download and no auto-install; disable with OPACUSR_NO_UPDATE_CHECK=1.
+
 ## [0.3.1] — 2026-10-31
 
 Release engineering, documentation and community tooling. **No functional

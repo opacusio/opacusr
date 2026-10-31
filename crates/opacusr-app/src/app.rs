@@ -341,6 +341,8 @@ async fn forward_events(
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
+        crate::update_banner::ensure_started(ctx);
+        crate::update_banner::paint(ctx);
         // Keep repainting while a session streams.
         if self.session.is_some() {
             ctx.request_repaint_after(std::time::Duration::from_millis(16));

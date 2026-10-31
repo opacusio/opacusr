@@ -8,6 +8,7 @@ repository.workspace = true
 homepage.workspace = true
 
 [dependencies]
+ureq = { version = "2", default-features = false, features = ["tls"] }
 opacusr-proto = { workspace = true }
 opacusr-crypto = { workspace = true }
 tokio = { workspace = true }

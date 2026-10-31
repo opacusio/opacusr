@@ -23,16 +23,16 @@ homepage = "https://github.com/opacusio"
 description = "OpacusR — self-hosted open-source remote desktop (TeamViewer alternative)"
 
 [workspace.dependencies]
-opacusr-proto = { path = "crates/opacusr-proto", version = "0.3.0" }
-opacusr-crypto = { path = "crates/opacusr-crypto", version = "0.3.0" }
-opacusr-transport = { path = "crates/opacusr-transport", version = "0.3.0" }
-opacusr-capture = { path = "crates/opacusr-capture", version = "0.3.0" }
-opacusr-codec = { path = "crates/opacusr-codec", version = "0.3.0" }
-opacusr-input = { path = "crates/opacusr-input", version = "0.3.0" }
-opacusr-agent = { path = "crates/opacusr-agent", version = "0.3.0" }
-opacusr-client = { path = "crates/opacusr-client", version = "0.3.0" }
-opacusr-server = { path = "crates/opacusr-server", version = "0.3.0" }
-opacusr-app = { path = "crates/opacusr-app", version = "0.3.0" }
+opacusr-proto = { path = "crates/opacusr-proto", version = "0.3.1" }
+opacusr-crypto = { path = "crates/opacusr-crypto", version = "0.3.1" }
+opacusr-transport = { path = "crates/opacusr-transport", version = "0.3.1" }
+opacusr-capture = { path = "crates/opacusr-capture", version = "0.3.1" }
+opacusr-codec = { path = "crates/opacusr-codec", version = "0.3.1" }
+opacusr-input = { path = "crates/opacusr-input", version = "0.3.1" }
+opacusr-agent = { path = "crates/opacusr-agent", version = "0.3.1" }
+opacusr-client = { path = "crates/opacusr-client", version = "0.3.1" }
+opacusr-server = { path = "crates/opacusr-server", version = "0.3.1" }
+opacusr-app = { path = "crates/opacusr-app", version = "0.3.1" }
 
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time", "fs", "signal"] }
 futures = "0.3"

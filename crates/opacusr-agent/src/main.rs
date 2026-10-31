@@ -54,6 +54,7 @@ enum Cmd {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    opacusr_transport::update::spawn_update_notice();
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
