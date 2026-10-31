@@ -3859,6 +3859,7 @@ dependencies = [
  "opacusr-crypto",
  "opacusr-input",
  "opacusr-proto",
+ "opacusr-server",
  "opacusr-transport",
  "portable-pty",
  "rand 0.8.8",

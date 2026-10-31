@@ -211,6 +211,7 @@ Read [docs/security.md](docs/security.md) for the full threat model and roadmap 
 | [docs/serverless.md](docs/serverless.md) | Zero-infra networking: connecting without rented servers, automatic path selection |
 | [docs/platforms.md](docs/platforms.md) | Per-platform capture/input status and build notes |
 | [docs/roadmap.md](docs/roadmap.md) | Planned features: VP9/AV1, audio routing, mobile UI… |
+| [docs/comparison.md](docs/comparison.md) | Feature gap analysis vs TeamViewer / AnyDesk, prioritized improvements |
 
 ## Contributing
 

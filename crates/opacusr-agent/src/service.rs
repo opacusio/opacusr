@@ -35,6 +35,11 @@ pub enum SessionDecision {
     Reject,
 }
 
+/// Consent callback, shareable across all signaling endpoint tasks
+/// (fan-out registration calls it from whichever endpoint got the
+/// request first).
+pub type ConsentFn = dyn Fn(opacusr_proto::PeerId, &str, Platform) -> SessionDecision + Send + Sync;
+
 impl From<crate::config::Permission> for SessionDecision {
     fn from(p: crate::config::Permission) -> Self {
         match p {
@@ -80,34 +85,107 @@ pub struct AgentService {
 impl AgentService {
     /// Consent callback for attended mode (GUI dialog / CLI prompt).
     /// Returning [`SessionDecision::Reject`] refuses the session.
+    ///
+    /// Registers on **every** configured signaling endpoint
+    /// (`signaling_endpoints()` + the embedded listener when
+    /// `signal_listen` is on) simultaneously — one supervised task per
+    /// endpoint, reconnecting independently with backoff. Each endpoint
+    /// assigns its own ID; the loss of one endpoint never takes the
+    /// others down.
     pub async fn run(
         self,
-        mut consent: impl FnMut(opacusr_proto::PeerId, &str, Platform) -> SessionDecision + Send,
-        mut shutdown: tokio::sync::watch::Receiver<bool>,
+        consent: impl Fn(opacusr_proto::PeerId, &str, Platform) -> SessionDecision
+            + Send
+            + Sync
+            + 'static,
+        shutdown: tokio::sync::watch::Receiver<bool>,
     ) -> anyhow::Result<()> {
         if let Some(warning) = opacusr_capture::wayland_startup_warning() {
             let _ = self.events.send(AgentEvent::Notice(warning));
         }
-        // One auth gate for the whole signaling path (all sessions it
-        // accepts share the failure budget — see crate::service docs).
+        // One auth gate for the whole signaling path: every endpoint and
+        // every session it accepts shares the failure budget (see
+        // crate::service docs).
         let gate = self.auth_gate();
-        // Time-limited TURN credentials, cached across sessions for the
-        // signaling path's TTL (no-op when turn_api is off).
+
+        // Zero-infra mode: serve the registry + relay in-process and
+        // register on the local endpoint like on any other one.
+        let mut endpoints = self.cfg.signaling_endpoints();
+        if self.cfg.signal_listen {
+            match self.spawn_embedded_signaling().await {
+                Ok(()) => {
+                    let url = self.cfg.embedded_signal_url();
+                    if !endpoints.iter().any(|u| u == &url) {
+                        endpoints.push(url);
+                    }
+                }
+                Err(e) => {
+                    let _ = self.events.send(AgentEvent::Notice(format!(
+                        "embedded signaling unavailable: {e}"
+                    )));
+                }
+            }
+        }
+
+        let consent: Arc<ConsentFn> = Arc::new(consent);
+        let mut set = tokio::task::JoinSet::new();
+        for url in endpoints {
+            let svc = AgentService {
+                cfg: self.cfg.clone(),
+                events: self.events.clone(),
+                demo: self.demo,
+                unattended: self.unattended,
+            };
+            let consent = consent.clone();
+            let gate = gate.clone();
+            let shutdown = shutdown.clone();
+            set.spawn(async move { svc.endpoint_loop(url, consent, gate, shutdown).await });
+        }
+
+        // Tasks end only on shutdown (they retry errors internally), so
+        // an `Ok` here means the agent is shutting down. Everything else
+        // is a dead task; fail only when *all* endpoints are dead.
+        let mut last_err = None;
+        while let Some(res) = set.join_next().await {
+            match res {
+                Ok(Ok(())) => return Ok(()),
+                Ok(Err(e)) => last_err = Some(e),
+                Err(e) => last_err = Some(anyhow::anyhow!("endpoint task failed: {e}")),
+            }
+        }
+        match last_err {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
+    }
+
+    /// Supervised loop for one signaling endpoint: connect → register →
+    /// serve, reconnecting with capped backoff until shutdown. A flapping
+    /// endpoint never takes the other endpoints down.
+    async fn endpoint_loop(
+        &self,
+        url: String,
+        consent: Arc<ConsentFn>,
+        gate: Arc<AuthGate>,
+        mut shutdown: tokio::sync::watch::Receiver<bool>,
+    ) -> anyhow::Result<()> {
+        // Time-limited TURN credentials per endpoint, cached across
+        // sessions for that endpoint's TTL (no-op when turn_api is off).
         let turn = if self.cfg.turn_api {
-            TurnCredentialCache::from_server_url(&self.cfg.server_url)
+            TurnCredentialCache::from_server_url(&url)
         } else {
             TurnCredentialCache::disabled()
         };
         let mut backoff = std::time::Duration::from_secs(1);
         loop {
             match self
-                .serve_once(&mut consent, &mut shutdown, &gate, &turn)
+                .serve_once(&url, consent.as_ref(), &mut shutdown, &gate, &turn)
                 .await
             {
-                Ok(_) => return Ok(()), // graceful shutdown
+                Ok(()) => return Ok(()), // graceful shutdown
                 Err(e) => {
                     let _ = self.events.send(AgentEvent::Notice(format!(
-                        "server connection lost: {e}; retrying in {}s",
+                        "{url}: connection lost: {e}; retrying in {}s",
                         backoff.as_secs()
                     )));
                     tokio::select! {
@@ -120,14 +198,49 @@ impl AgentService {
         }
     }
 
+    /// Serve the signaling registry + TCP relay inside this process
+    /// (zero-infra mode, `signal_listen`): the same machinery as the
+    /// standalone `opacusr-server`, sharing its env knobs
+    /// (`OPACUSR_RATE_MAX`, `OPACUSR_MAX_PEERS`, `OPACUSR_TURN_SECRET`, …).
+    /// Expose it behind a free tunnel or a mesh VPN — docs/serverless.md.
+    async fn spawn_embedded_signaling(&self) -> anyhow::Result<()> {
+        use opacusr_server::{AppState, Limits, TurnConfig};
+        let http_addr: std::net::SocketAddr =
+            format!("0.0.0.0:{}", self.cfg.signal_listen_port).parse()?;
+        let relay_port = self
+            .cfg
+            .signal_listen_port
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("relay port overflow"))?;
+        let relay_addr: std::net::SocketAddr = format!("0.0.0.0:{relay_port}").parse()?;
+        let http = tokio::net::TcpListener::bind(http_addr).await?;
+        let relay = tokio::net::TcpListener::bind(relay_addr).await?;
+        let state = Arc::new(AppState::with_options(
+            relay_port,
+            Limits::from_env(),
+            TurnConfig::from_env(),
+        ));
+        tokio::spawn(async move {
+            if let Err(e) = opacusr_server::serve(http, relay, state).await {
+                tracing::warn!(target: "opacusr", "embedded signaling stopped: {e}");
+            }
+        });
+        let _ = self.events.send(AgentEvent::Notice(format!(
+            "embedded signaling on 0.0.0.0:{} (relay on {}); expose it via a tunnel and list the tunnel URL in `signaling_urls`",
+            self.cfg.signal_listen_port, relay_port
+        )));
+        Ok(())
+    }
+
     async fn serve_once(
         &self,
-        consent: &mut impl FnMut(opacusr_proto::PeerId, &str, Platform) -> SessionDecision,
+        url: &str,
+        consent: &ConsentFn,
         shutdown: &mut tokio::sync::watch::Receiver<bool>,
         gate: &Arc<AuthGate>,
         turn: &TurnCredentialCache,
     ) -> anyhow::Result<()> {
-        let mut sig = SignalingClient::connect(&self.cfg.server_url).await?;
+        let mut sig = SignalingClient::connect(url).await?;
         sig.send(&SignalMessage::Register(Register {
             platform: opacusr_proto::Platform::current(),
             display_name: self.cfg.name.clone(),
@@ -140,7 +253,7 @@ impl AgentService {
             SignalMessage::Welcome(w) => {
                 let _ = self.events.send(AgentEvent::Registered {
                     id: w.id,
-                    server: self.cfg.server_url.clone(),
+                    server: url.to_string(),
                 });
                 w.id
             }
@@ -230,7 +343,7 @@ impl AgentService {
                                         .copied()
                                         .unwrap_or(SessionDecision::Full)
                                         == SessionDecision::ViewOnly;
-                                    self.start_relay_session(from, ticket, port, view_only, gate)
+                                    self.start_relay_session(url, from, ticket, port, view_only, gate)
                                         .await?;
                                 }
                                 _ => {}
@@ -335,15 +448,17 @@ impl AgentService {
 
     async fn start_relay_session(
         &self,
+        url: &str,
         peer: opacusr_proto::PeerId,
         ticket: [u8; 16],
         port: u16,
         view_only: bool,
         gate: &Arc<AuthGate>,
     ) -> anyhow::Result<()> {
-        // Connect to the relay endpoint on the same host as the signaling
-        // server.
-        let host = relay_host_of(&self.cfg.server_url)?;
+        // Connect to the relay endpoint on the same host as THIS
+        // signaling endpoint (fan-out: every endpoint carries its own
+        // relay).
+        let host = relay_host_of(url)?;
         let relay = opacusr_transport::relay::RelayTransport::connect(
             &format!("{host}:{port}"),
             ticket,

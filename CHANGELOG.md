@@ -4,6 +4,32 @@ All notable changes to OpacusR are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is
 SemVer-ish (breaking protocol changes bump the minor until 1.0).
 
+## [Unreleased]
+
+### Added
+
+- **Zero-infra networking, phases 1–2** ([docs/serverless.md](docs/serverless.md)):
+  - **Multi-endpoint signaling fan-out on the agent** — `signaling_urls` in
+    `agent.toml`: the agent registers on every endpoint simultaneously, one
+    supervised reconnect loop per endpoint (capped exponential backoff), so a
+    flapping endpoint never takes the others down. Each endpoint assigns its
+    own ID; `opacusr-agent id` prints all of them. The signaling accept path
+    shares one auth-failure budget across all endpoints (lockout unchanged).
+  - **Embedded signaling server in the agent** — `signal_listen = true` (or
+    `opacusr-agent run --signal-listen`) serves the peer registry, `/health`,
+    `GET /turn` and the TCP relay inside the agent process
+    (`signal_listen_port`, relay on port +1; same env knobs as the standalone
+    server: `OPACUSR_RATE_MAX`, `OPACUSR_MAX_PEERS`, `OPACUSR_TURN_SECRET`).
+    The agent registers on the local endpoint automatically — no separate
+    server binary needed; expose it behind a free tunnel for remote access.
+  - **Viewer-side endpoint ladder** — the GUI tries the configured signaling
+    endpoints in order (per-endpoint TURN credential minting, 25 s budget
+    each) and the first handshake that completes wins; per-endpoint progress
+    and failures show up in the session status line.
+  - **Tunnel cookbook** — ready-to-copy cloudflared and Tailscale configs
+    for the zero-infra setup (docs/serverless.md §7).
+
+
 ## [0.4.0] — 2026-10-31
 
 ### Added

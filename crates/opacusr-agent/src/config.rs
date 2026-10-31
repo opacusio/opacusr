@@ -114,6 +114,18 @@ pub struct AgentConfig {
     /// `GET /turn` (coturn REST API) for WebRTC sessions. Harmless when
     /// the server does not mint (STUN-only fallback).
     pub turn_api: bool,
+    /// Extra signaling endpoints to register on simultaneously (fan-out).
+    /// When empty, only `server_url` is used. Every endpoint assigns its
+    /// own ID; viewers try their endpoints in order until one connects.
+    pub signaling_urls: Vec<String>,
+    /// Serve the signaling registry + TCP relay inside this agent
+    /// (`signal_listen_port` / +1). Zero-infra mode: expose it behind a
+    /// free tunnel (cloudflared / Tailscale Funnel) or a mesh VPN — see
+    /// docs/serverless.md. The agent registers on the local endpoint too.
+    pub signal_listen: bool,
+    /// HTTP/WS port for the embedded signaling server; the TCP relay
+    /// binds the next port (`+1`).
+    pub signal_listen_port: u16,
 }
 
 impl Default for AgentConfig {
@@ -145,7 +157,35 @@ impl Default for AgentConfig {
             auth_window_secs: 300,
             auth_lockout_secs: 60,
             turn_api: true,
+            signaling_urls: Vec::new(),
+            signal_listen: false,
+            signal_listen_port: 8080,
         }
+    }
+}
+
+impl AgentConfig {
+    /// Outbound signaling endpoints in registration order (fan-out):
+    /// the explicit `signaling_urls` list when set, otherwise the
+    /// single `server_url`. Does not include the embedded listener —
+    /// the service layer appends it when `signal_listen` succeeded.
+    pub fn signaling_endpoints(&self) -> Vec<String> {
+        if self.signaling_urls.is_empty() {
+            vec![self.server_url.clone()]
+        } else {
+            let mut urls = self.signaling_urls.clone();
+            // The primary URL (config field / UI text box) always stays
+            // first so upgrades of old configs keep their priority.
+            if !urls.iter().any(|u| u == &self.server_url) {
+                urls.insert(0, self.server_url.clone());
+            }
+            urls
+        }
+    }
+
+    /// `ws://127.0.0.1:port/signal` URL of the embedded signaling server.
+    pub fn embedded_signal_url(&self) -> String {
+        format!("ws://127.0.0.1:{}/signal", self.signal_listen_port)
     }
 }
 
@@ -279,5 +319,46 @@ mod tests {
     fn unknown_permission_falls_back_to_full() {
         assert_eq!(Permission::parse("nonsense"), Permission::Full);
         assert_eq!(Permission::parse("view-only"), Permission::ViewOnly);
+    }
+
+    #[test]
+    fn endpoints_fall_back_to_server_url() {
+        let mut cfg = AgentConfig::default();
+        cfg.server_url = "ws://a/signal".into();
+        cfg.signaling_urls.clear();
+        assert_eq!(cfg.signaling_endpoints(), vec!["ws://a/signal".to_string()]);
+    }
+
+    #[test]
+    fn endpoints_keep_primary_first() {
+        let mut cfg = AgentConfig::default();
+        cfg.server_url = "ws://a/signal".into();
+        cfg.signaling_urls = vec!["ws://b/signal".into(), "ws://c/signal".into()];
+        assert_eq!(
+            cfg.signaling_endpoints(),
+            vec![
+                "ws://a/signal".to_string(),
+                "ws://b/signal".to_string(),
+                "ws://c/signal".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn endpoints_do_not_duplicate_primary() {
+        let mut cfg = AgentConfig::default();
+        cfg.server_url = "ws://a/signal".into();
+        cfg.signaling_urls = vec!["ws://a/signal".into(), "ws://b/signal".into()];
+        assert_eq!(
+            cfg.signaling_endpoints(),
+            vec!["ws://a/signal".to_string(), "ws://b/signal".to_string()]
+        );
+    }
+
+    #[test]
+    fn embedded_url_follows_port() {
+        let mut cfg = AgentConfig::default();
+        cfg.signal_listen_port = 9090;
+        assert_eq!(cfg.embedded_signal_url(), "ws://127.0.0.1:9090/signal");
     }
 }

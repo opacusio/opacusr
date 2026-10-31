@@ -202,6 +202,7 @@ cargo build --release --no-default-features                 # без аудио 
 | [docs/serverless.md](docs/serverless.md) | Сеть без арендованных серверов: подключение и автоматический выбор пути |
 | [docs/platforms.md](docs/platforms.md) | Статус захвата/ввода по платформам, заметки о сборке |
 | [docs/roadmap.md](docs/roadmap.md) | Планы: VP9/AV1, маршрутизация аудио, мобильный UI… |
+| [docs/comparison.md](docs/comparison.md) | Сравнение с TeamViewer / AnyDesk: пробелы и приоритеты улучшений |
 
 ## Участие в разработке
 

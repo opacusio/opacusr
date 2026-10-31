@@ -30,8 +30,8 @@ Where OpacusR is heading. Items are grouped by milestone; security items from [s
 Design in [serverless.md](serverless.md); goal: a working connection with **0 ₽/mo** of rented infrastructure, with the clients automatically switching to the first path that works.
 
 - **Path ladder** (viewer `connect = "auto"`): LAN direct → P2P/STUN → TURN → TCP relay, with the active mode shown in the UI.
-- **Phase 1**: `signaling_urls` list on the agent (fan-out registration), viewer auto-connect ladder.
-- **Phase 2**: embedded signaling listener in the agent + tunnel cookbook (cloudflared / Tailscale Funnel).
+- ~~**Phase 1**: `signaling_urls` list on the agent (fan-out registration), viewer auto-connect ladder~~ **done** — supervised per-endpoint reconnect loops; the viewer tries endpoints in order with per-endpoint TURN minting.
+- ~~**Phase 2**: embedded signaling listener in the agent + tunnel cookbook (cloudflared / Tailscale Funnel)~~ **done** — `signal_listen = true` serves registry + relay + `/turn` in the agent; cookbook in [serverless.md](serverless.md) §7.
 - **Phase 3**: mDNS discovery (`hostname.local`) for LAN addresses.
 - **Phase 4**: manual offer/answer "meeting codes" as the fully serverless fallback.
 
@@ -48,6 +48,14 @@ Design in [serverless.md](serverless.md); goal: a working connection with **0 �
 - **Android**: MediaProjection capture, touch-input mapping, FFI bindings for `SessionClient`, published APKs.
 - **iOS**: ReplayKit broadcast capture, input bridging where iOS allows, TestFlight builds.
 - **Remote keyboard/text input polish** for touch (soft keyboard over `TextInput`).
+
+## Gap analysis (vs TeamViewer / AnyDesk)
+
+Full matrix in [comparison.md](comparison.md). Top of the list:
+
+- **P0**: lock host input during a session; address book + recent connections; session stats panel and fullscreen hotkeys (M1); drag-and-drop files.
+- **P1**: TOTP second factor for unattended access; opt-in session recording; TCP tunneling over the session channel; reboot-and-reconnect (needs service mode); proxy support for signaling.
+- **P2**: privacy mode (dummy display driver — research); remote printing (evaluate); mobile viewer (M4); in-app auto-update install.
 
 ## Always
 

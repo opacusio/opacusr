@@ -31,6 +31,10 @@ enum Cmd {
         /// Also accept direct TCP sessions (LAN mode).
         #[arg(long)]
         allow_lan: bool,
+        /// Serve the embedded signaling registry + relay in this process
+        /// (zero-infra mode; see docs/serverless.md).
+        #[arg(long)]
+        signal_listen: bool,
         /// Windows capture backend: auto | gdi | dxgi (overrides config).
         #[arg(long)]
         capture: Option<String>,
@@ -69,8 +73,9 @@ async fn main() -> anyhow::Result<()> {
             name,
             demo,
             allow_lan,
+            signal_listen,
             capture,
-        } => run(server, name, demo, allow_lan, capture).await,
+        } => run(server, name, demo, allow_lan, signal_listen, capture).await,
         Cmd::Passwd { file } => passwd(file),
         Cmd::PasswdClear => passwd_clear(),
         Cmd::Id { server } => id(server).await,
@@ -94,11 +99,15 @@ async fn run(
     name: Option<String>,
     demo: bool,
     allow_lan: bool,
+    signal_listen: bool,
     capture: Option<String>,
 ) -> anyhow::Result<()> {
     let mut cfg = load_cfg(server, name);
     if let Some(c) = capture {
         cfg.capture = c;
+    }
+    if signal_listen {
+        cfg.signal_listen = true;
     }
     let (tx, mut rx) = mpsc::unbounded_channel();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -278,7 +287,18 @@ fn passwd_clear() -> anyhow::Result<()> {
 
 async fn id(server: Option<String>) -> anyhow::Result<()> {
     let cfg = load_cfg(server, None);
-    let mut sig = opacusr_transport::signaling::SignalingClient::connect(&cfg.server_url).await?;
+    // Fan-out: every configured endpoint assigns its own ID.
+    for url in cfg.signaling_endpoints() {
+        match register_once(&cfg, &url).await {
+            Ok(id) => println!("{url} -> {id}"),
+            Err(e) => eprintln!("{url} -> error: {e}"),
+        }
+    }
+    Ok(())
+}
+
+async fn register_once(cfg: &AgentConfig, url: &str) -> anyhow::Result<opacusr_proto::PeerId> {
+    let mut sig = opacusr_transport::signaling::SignalingClient::connect(url).await?;
     sig.send(&opacusr_proto::signal::SignalMessage::Register(
         opacusr_proto::signal::Register {
             platform: opacusr_proto::Platform::current(),
@@ -289,11 +309,10 @@ async fn id(server: Option<String>) -> anyhow::Result<()> {
     ))
     .await?;
     match sig.recv().await? {
-        opacusr_proto::signal::SignalMessage::Welcome(w) => println!("{}", w.id),
+        opacusr_proto::signal::SignalMessage::Welcome(w) => Ok(w.id),
         opacusr_proto::signal::SignalMessage::Error { message } => anyhow::bail!(message),
         other => anyhow::bail!("unexpected reply: {other:?}"),
     }
-    Ok(())
 }
 
 fn config_info() -> anyhow::Result<()> {
@@ -301,6 +320,18 @@ fn config_info() -> anyhow::Result<()> {
     let cfg = AgentConfig::load();
     println!("config file: {}", path.display());
     println!("server:      {}", cfg.server_url);
+    println!(
+        "signaling:   {} endpoint(s)",
+        cfg.signaling_endpoints().len()
+    );
+    for u in cfg.signaling_endpoints() {
+        println!("  - {u}");
+    }
+    println!(
+        "embedded:    {} (port {}, relay +1)",
+        if cfg.signal_listen { "on" } else { "off" },
+        cfg.signal_listen_port
+    );
     println!("name:        {}", cfg.name);
     println!("fps:         {}", cfg.fps);
     println!("quality:     {}", cfg.jpeg_quality);

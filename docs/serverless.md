@@ -1,8 +1,10 @@
 # Zero-infra networking: connecting without renting servers
 
 How to use OpacusR without paying for a VPS, and how the clients should
-automatically pick the first working path. Status: **design** — phases 1–4
-are tracked in [roadmap.md](roadmap.md). Everything described here builds on
+automatically pick the first working path. Status: **phases 1–2 shipped** —
+multi-endpoint fan-out, the embedded signaling server in the agent and the
+viewer-side endpoint ladder are implemented; phases 3–4 are tracked in
+[roadmap.md](roadmap.md). Everything described here builds on
 pieces that already ship (LAN mode, WebRTC ICE, the TCP relay fallback,
 `GET /turn`); the new work is glue, not new transports.
 
@@ -107,18 +109,23 @@ tunneled host. Still, for UDP throughput the options are:
 
 ## 5. Implementation phases
 
-1. **Ladder + multi-URL signaling** — `signaling_urls: Vec<String>` in the
-   agent, viewer `connect = "auto"` with the L0→L1 probing order and a mode
-   indicator. Uses only existing crates; the largest change is refactoring
-   `SessionClient::connect` behind the path-selection loop.
-2. **Embedded signaling in the agent** — lift `opacusr-server`'s registry
-   into a library the agent can serve on `signal_listen_port`; fan-out
-   registration across all `signaling_urls`; tunnel cookbook (cloudflared
-   and Tailscale Funnel configs ready to copy).
-3. **mDNS discovery** — `_opacusr._tcp.local.` via `mdns-sd`; the viewer's
-   connect box accepts `hostname.local` and offers a picker of discovered
-   agents; removes the need to know IPs on LAN.
-4. **Manual signaling codes** — offer/answer paste flow as the L4
+1. **Ladder + multi-URL signaling** — **shipped**: `signaling_urls` in
+   `agent.toml` (the agent registers on every endpoint simultaneously, one
+   supervised reconnect loop per endpoint with capped backoff — a flapping
+   endpoint never takes the others down); the viewer tries its endpoints
+   in order (per-endpoint TURN minting, 25 s budget each) and the first
+   handshake that completes wins. Every endpoint assigns the agent its own
+   ID; `opacusr-agent id` prints all of them.
+2. **Embedded signaling in the agent** — **shipped**: `signal_listen = true`
+   (or `--signal-listen`) serves the registry, `/health`, `GET /turn` and
+   the TCP relay inside the agent process (`signal_listen_port`, relay on
+   port +1, same env knobs as the standalone server), and the agent
+   registers on the local endpoint like on any other. The tunnel cookbook
+   below makes it reachable from outside for free.
+3. **mDNS discovery** — planned: `_opacusr._tcp.local.` via `mdns-sd`; the
+   viewer's connect box accepts `hostname.local` and offers a picker of
+   discovered agents; removes the need to know IPs on LAN.
+4. **Manual signaling codes** — planned: offer/answer paste flow as the L4
    last-resort path; also unblocks debugging when tunnels/registries are
    broken.
 
@@ -136,3 +143,46 @@ tunneled host. Still, for UDP throughput the options are:
 - Manual codes (phase 4) must be shown with the same fingerprint warnings
   as SSH host keys on first use (TOFU is a roadmap item in
   [security.md](security.md) §10).
+
+## 7. Tunnel cookbook (phases 1–2, ready to copy)
+
+The agent serves everything itself; the tunnel only has to carry HTTPS
+(`wss://` signaling + `GET /turn`). Media does NOT ride the tunnel —
+WebRTC connects peer-to-peer (or via TURN, §4).
+
+**Cloudflare Tunnel (free, no account for quick tunnels):**
+
+```bash
+# on the agent machine — prints a https://<something>.trycloudflare.com URL
+cloudflared tunnel --url http://localhost:8080
+```
+
+Put that URL (with `wss://` instead of `https://`) into both sides:
+
+```toml
+# agent.toml
+signal_listen = true
+signal_listen_port = 8080
+signaling_urls = ["wss://<something>.trycloudflare.com/signal"]
+```
+
+The viewer enters the same URL in its endpoint list (GUI settings or
+`signaling_urls`) and connects by the agent's ID shown for that endpoint.
+Named tunnels (free Cloudflare account) give a stable hostname instead of
+the per-run random one.
+
+**Tailscale (free personal plan, nothing public):**
+
+```bash
+# on the agent machine, after `tailscale up`
+tailscale serve --bg 8080   # https://<machine>.<tailnet>.ts.net → localhost:8080
+```
+
+Point `signaling_urls` at `wss://<machine>.<tailnet>.ts.net/signal` on both
+sides. Traffic never leaves the tailnet; `tailscale funnel 8080` makes it
+public if ever needed. The LAN mode (`ip:port`) also works over the
+100.x.y.z addresses with zero extra setup.
+
+**Verification:** `curl https://<tunnel>/health` must answer
+`opacusr-server <version> — peers: N`; `opacusr-agent id` lists one ID per
+endpoint; the GUI status line shows which endpoint of the ladder connected.

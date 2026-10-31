@@ -18,6 +18,7 @@ path = "src/lib.rs"
 opacusr-proto = { workspace = true }
 opacusr-crypto = { workspace = true }
 opacusr-transport = { workspace = true }
+opacusr-server = { workspace = true }
 opacusr-capture = { workspace = true }
 opacusr-codec = { workspace = true }
 opacusr-input = { workspace = true }

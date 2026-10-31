@@ -155,21 +155,38 @@ impl App {
             return;
         }
 
-        let mut settings = SessionSettings {
-            password,
-            display_name: self.display_name.clone(),
-            download_dir: self.config.download_dir.clone(),
-            auto_accept_files: true,
-            clipboard_sync: self.config.clipboard_sync,
-            webrtc: opacusr_transport::webrtc::WebRtcConfig {
-                ice_servers: self
-                    .config
-                    .ice_urls
-                    .iter()
-                    .map(|u| opacusr_transport::webrtc::IceServerConfig::stun(&[u.as_str()]))
-                    .collect(),
-            },
-        };
+        // Base values shared by every connection attempt; settings are
+        // built per attempt because each signaling endpoint mints its
+        // own TURN credentials.
+        let base_ice: Vec<opacusr_transport::webrtc::IceServerConfig> = self
+            .config
+            .ice_urls
+            .iter()
+            .map(|u| opacusr_transport::webrtc::IceServerConfig::stun(&[u.as_str()]))
+            .collect();
+        let display_name = self.display_name.clone();
+        let download_dir = self.config.download_dir.clone();
+        let clipboard_sync = self.config.clipboard_sync;
+        let make_settings =
+            move |turn: Option<opacusr_transport::turn::TurnCredentials>| -> SessionSettings {
+                let mut ice = base_ice.clone();
+                if let Some(t) = turn {
+                    let uris: Vec<&str> = t.uris.iter().map(String::as_str).collect();
+                    ice.push(opacusr_transport::webrtc::IceServerConfig::turn(
+                        &uris,
+                        &t.username,
+                        &t.password,
+                    ));
+                }
+                SessionSettings {
+                    password: password.clone(),
+                    display_name: display_name.clone(),
+                    download_dir: download_dir.clone(),
+                    auto_accept_files: true,
+                    clipboard_sync,
+                    webrtc: opacusr_transport::webrtc::WebRtcConfig { ice_servers: ice },
+                }
+            };
 
         let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel();
         let (ui_events_tx, ui_events_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -180,7 +197,7 @@ impl App {
             let addr = input.clone();
             self.status_message = format!("Connecting to {addr}…");
             self.rt.spawn(async move {
-                match SessionClient::connect_direct(&addr, settings).await {
+                match SessionClient::connect_direct(&addr, make_settings(None)).await {
                     Ok((client, mut events)) => {
                         ctx.request_repaint();
                         let run_task = tokio::spawn(client.run(cmd_rx));
@@ -201,45 +218,84 @@ impl App {
                     return;
                 }
             };
-            let server = self.server_url.clone();
+            // Connection ladder over the configured signaling endpoints:
+            // the agent may register on several (fan-out — see
+            // docs/serverless.md), so the viewer tries each URL in order
+            // and the first endpoint that completes the handshake wins.
+            let mut urls = if self.config.signaling_urls.is_empty() {
+                vec![self.server_url.clone()]
+            } else {
+                let mut u = self.config.signaling_urls.clone();
+                if !u.iter().any(|x| x == &self.server_url) {
+                    u.insert(0, self.server_url.clone());
+                }
+                u
+            };
+            urls.dedup();
             let choice = self.transport_choice;
             let turn_api = self.config.turn_api;
-            self.status_message = format!("Requesting session with host {host_id}…");
+            self.status_message = format!(
+                "Requesting session with host {host_id} over {} endpoint(s)…",
+                urls.len()
+            );
             self.rt.spawn(async move {
-                // Time-limited TURN credentials from the server's
-                // `GET /turn` (coturn REST API), when it mints them;
-                // any failure just leaves the STUN-only configuration.
-                if turn_api {
-                    if let Some(endpoint) = opacusr_transport::turn::turn_endpoint_of(&server) {
-                        let fetched = tokio::task::spawn_blocking(move || {
-                            opacusr_transport::turn::fetch_turn_credentials(&endpoint)
-                        })
-                        .await
-                        .ok();
-                        if let Some(Ok(creds)) = fetched {
-                            let uris: Vec<&str> = creds.uris.iter().map(String::as_str).collect();
-                            settings.webrtc.ice_servers.push(
-                                opacusr_transport::webrtc::IceServerConfig::turn(
-                                    &uris,
-                                    &creds.username,
-                                    &creds.password,
-                                ),
-                            );
+                let mut cmd_rx = Some(cmd_rx);
+                let mut last_err = String::from("no endpoints configured");
+                for (i, url) in urls.iter().enumerate() {
+                    let _ = ui_events_tx.send(ClientEvent::Notice(format!(
+                        "endpoint {}/{}: {url}",
+                        i + 1,
+                        urls.len()
+                    )));
+                    // Time-limited TURN credentials from THIS endpoint's
+                    // `GET /turn` (coturn REST API), when it mints them;
+                    // any failure just leaves the STUN-only configuration.
+                    let mut turn = None;
+                    if turn_api {
+                        if let Some(endpoint) = opacusr_transport::turn::turn_endpoint_of(url) {
+                            let fetched = tokio::task::spawn_blocking(move || {
+                                opacusr_transport::turn::fetch_turn_credentials(&endpoint)
+                            })
+                            .await
+                            .ok();
+                            if let Some(Ok(creds)) = fetched {
+                                turn = Some(creds);
+                            }
+                        }
+                    }
+                    let settings = make_settings(turn);
+                    match tokio::time::timeout(
+                        std::time::Duration::from_secs(25),
+                        SessionClient::connect_via_server(url, host_id, settings, choice),
+                    )
+                    .await
+                    {
+                        Ok(Ok((client, mut events))) => {
+                            ctx.request_repaint();
+                            if let Some(cmd_rx) = cmd_rx.take() {
+                                let run_task = tokio::spawn(client.run(cmd_rx));
+                                forward_events(&mut events, &ui_events_tx).await;
+                                let _ = run_task.await;
+                            }
+                            return;
+                        }
+                        Ok(Err(e)) => {
+                            last_err = format!("{url}: {e}");
+                            let _ = ui_events_tx.send(ClientEvent::Notice(
+                                "endpoint failed, trying the next one…".into(),
+                            ));
+                        }
+                        Err(_) => {
+                            last_err = format!("{url}: timed out");
+                            let _ = ui_events_tx.send(ClientEvent::Notice(
+                                "endpoint timed out, trying the next one…".into(),
+                            ));
                         }
                     }
                 }
-                match SessionClient::connect_via_server(&server, host_id, settings, choice).await {
-                    Ok((client, mut events)) => {
-                        ctx.request_repaint();
-                        let run_task = tokio::spawn(client.run(cmd_rx));
-                        forward_events(&mut events, &ui_events_tx).await;
-                        let _ = run_task.await;
-                    }
-                    Err(e) => {
-                        let _ =
-                            ui_events_tx.send(ClientEvent::Closed(format!("connect failed: {e}")));
-                    }
-                }
+                let _ = ui_events_tx.send(ClientEvent::Closed(format!(
+                    "all signaling endpoints failed ({last_err})"
+                )));
             });
         }
 
