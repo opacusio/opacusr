@@ -2,6 +2,9 @@
 //! requests and consent, negotiates WebRTC/relay, and spawns
 //! [`SessionHost`]s. Optionally also listens for direct LAN sessions.
 
+use std::sync::Arc;
+use std::time::Duration;
+
 use tokio::sync::mpsc;
 
 use opacusr_capture::ScreenCapture;
@@ -9,6 +12,7 @@ use opacusr_input::InputInjector;
 use opacusr_proto::signal::PeerPayload;
 use opacusr_proto::signal::*;
 use opacusr_proto::Platform;
+use opacusr_transport::lockout::{AuthGate, AuthGateConfig};
 use opacusr_transport::secure::SecureSession;
 use opacusr_transport::signaling::SignalingClient;
 use opacusr_transport::tcp::TcpTransport;
@@ -83,9 +87,12 @@ impl AgentService {
         if let Some(warning) = opacusr_capture::wayland_startup_warning() {
             let _ = self.events.send(AgentEvent::Notice(warning));
         }
+        // One auth gate for the whole signaling path (all sessions it
+        // accepts share the failure budget — see crate::service docs).
+        let gate = self.auth_gate();
         let mut backoff = std::time::Duration::from_secs(1);
         loop {
-            match self.serve_once(&mut consent, &mut shutdown).await {
+            match self.serve_once(&mut consent, &mut shutdown, &gate).await {
                 Ok(_) => return Ok(()), // graceful shutdown
                 Err(e) => {
                     let _ = self.events.send(AgentEvent::Notice(format!(
@@ -106,6 +113,7 @@ impl AgentService {
         &self,
         consent: &mut impl FnMut(opacusr_proto::PeerId, &str, Platform) -> SessionDecision,
         shutdown: &mut tokio::sync::watch::Receiver<bool>,
+        gate: &Arc<AuthGate>,
     ) -> anyhow::Result<()> {
         let mut sig = SignalingClient::connect(&self.cfg.server_url).await?;
         sig.send(&SignalMessage::Register(Register {
@@ -195,14 +203,16 @@ impl AgentService {
                                         .copied()
                                         .unwrap_or(SessionDecision::Full)
                                         == SessionDecision::ViewOnly;
-                                    self.start_webrtc_session(&mut sig, from, &sdp, view_only).await?;
+                                    self.start_webrtc_session(&mut sig, from, &sdp, view_only, gate)
+                                        .await?;
                                 }
                                 PeerPayload::RelayUse { ticket, port } => {
                                     let view_only = decisions.get(&from)
                                         .copied()
                                         .unwrap_or(SessionDecision::Full)
                                         == SessionDecision::ViewOnly;
-                                    self.start_relay_session(from, ticket, port, view_only).await?;
+                                    self.start_relay_session(from, ticket, port, view_only, gate)
+                                        .await?;
                                 }
                                 _ => {}
                             }
@@ -218,6 +228,18 @@ impl AgentService {
                 }
             }
         }
+    }
+
+    /// One auth gate per accept path: failed proofs are shared across all
+    /// sessions of that path, so rotating peer IDs / display names do not
+    /// reset the brute-force budget.
+    fn auth_gate(&self) -> Arc<AuthGate> {
+        Arc::new(AuthGate::new(AuthGateConfig {
+            max_attempts: self.cfg.auth_max_attempts,
+            window: Duration::from_secs(self.cfg.auth_window_secs),
+            lockout: Duration::from_secs(self.cfg.auth_lockout_secs),
+            max_lockout: Duration::from_secs(15 * 60),
+        }))
     }
 
     fn webrtc_config(&self) -> WebRtcConfig {
@@ -241,6 +263,7 @@ impl AgentService {
         peer: opacusr_proto::PeerId,
         offer_sdp: &str,
         view_only: bool,
+        gate: &Arc<AuthGate>,
     ) -> anyhow::Result<()> {
         let pc = new_peer_connection(&self.webrtc_config()).await?;
         let mut pending = AnswerPending::new(pc);
@@ -252,7 +275,11 @@ impl AgentService {
         .await?;
         let transport = pending.finish().await?;
         let _ = self.events.send(AgentEvent::SessionStarted { peer });
-        self.spawn_host(SecureSession::new(Box::new(transport), None), view_only);
+        self.spawn_host(
+            SecureSession::new(Box::new(transport), None),
+            view_only,
+            gate,
+        );
         Ok(())
     }
 
@@ -262,6 +289,7 @@ impl AgentService {
         ticket: [u8; 16],
         port: u16,
         view_only: bool,
+        gate: &Arc<AuthGate>,
     ) -> anyhow::Result<()> {
         // Connect to the relay endpoint on the same host as the signaling
         // server.
@@ -273,11 +301,11 @@ impl AgentService {
         )
         .await?;
         let _ = self.events.send(AgentEvent::SessionStarted { peer });
-        self.spawn_host(SecureSession::new(Box::new(relay), None), view_only);
+        self.spawn_host(SecureSession::new(Box::new(relay), None), view_only, gate);
         Ok(())
     }
 
-    fn spawn_host(&self, session: SecureSession, view_only: bool) {
+    fn spawn_host(&self, session: SecureSession, view_only: bool, gate: &Arc<AuthGate>) {
         // Event pump: HostEvent → AgentEvent for the UI.
         let (tx, rx) = mpsc::unbounded_channel();
         let events = self.events.clone();
@@ -298,7 +326,9 @@ impl AgentService {
 
         // Per-session resources.
         let cfg = SessionConfig {
-            password: self.cfg.effective_password().unwrap_or_default(),
+            // `None` (nothing configured) rejects handshakes outright —
+            // an empty password must never become the session secret.
+            password: self.cfg.effective_password(),
             display_name: self.cfg.name.clone(),
             fps: self.cfg.fps,
             jpeg_quality: self.cfg.jpeg_quality,
@@ -311,6 +341,7 @@ impl AgentService {
             adaptive_quality: self.cfg.adaptive_quality,
             audio: self.cfg.audio,
             audio_device: self.cfg.audio_device.clone(),
+            auth_gate: Some(gate.clone()),
         };
         let host = SessionHost { cfg, events: tx };
         let capture: Box<dyn ScreenCapture> = if self.demo {
@@ -342,6 +373,8 @@ impl AgentService {
         if let Some(warning) = opacusr_capture::wayland_startup_warning() {
             let _ = self.events.send(AgentEvent::Notice(warning));
         }
+        // LAN path has its own gate (separate budget from signaling).
+        let gate = self.auth_gate();
         let listener = tokio::net::TcpListener::bind(("0.0.0.0", port)).await?;
         let _ = self.events.send(AgentEvent::Notice(format!(
             "LAN listener on 0.0.0.0:{port}"
@@ -360,7 +393,7 @@ impl AgentService {
                     let view_only = SessionDecision::from(
                         self.cfg.permission_for(""),
                     ) == SessionDecision::ViewOnly;
-                    self.spawn_host(SecureSession::new(Box::new(transport), None), view_only);
+                    self.spawn_host(SecureSession::new(Box::new(transport), None), view_only, &gate);
                 }
             }
         }

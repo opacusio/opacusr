@@ -10,6 +10,8 @@ SemVer-ish (breaking protocol changes bump the minor until 1.0).
 
 - **Server hardening: rate limits + time-limited TURN credentials** — per-IP limits on new signaling connections and `/turn` requests (`OPACUSR_RATE_MAX`, default 20 per 10 s), a registered-peer cap (`OPACUSR_MAX_PEERS`, default 1024), relay-ticket caps (8 per peer, 4096 server-wide), and `GET /turn` minting coturn REST-API credentials from `OPACUSR_TURN_SECRET` (HMAC-SHA1, `OPACUSR_TURN_TTL_SECS`).
 
+- **Agent-side auth lockout** — failed password proofs are counted per accept path (signaling / LAN): after `auth_max_attempts` (default 5) failures within `auth_window_secs` (default 300 s) the agent refuses new handshakes for `auth_lockout_secs` (default 60 s, doubling per consecutive lockout, capped at 15 min; `0` disables). The budget is shared across all peers of the path, so rotating peer IDs or display names no longer helps an online brute-force — with defaults it is capped at ~20 guesses per hour even under sustained attack. Tunables in `agent.toml`; every failure and lockout is logged.
+
 
 - **Docs: checksum verification on every OS + Windows SmartScreen first run** —
   README.md / README.ru.md gain per-OS verification commands (`sha256sum -c`,
@@ -29,6 +31,10 @@ SemVer-ish (breaking protocol changes bump the minor until 1.0).
 
 ### Changed
 - Wayland hosts fail fast with a clear error (PipeWire portal feature or an X11 session; `OPACUSR_ALLOW_X11_ON_WAYLAND=1` forces the old behavior) instead of a silent blank XWayland capture, and agents print a startup warning under Wayland.
+
+### Fixed
+- **An agent with no configured password no longer accepts an empty one.** The host previously verified proofs against an empty string when no unattended password was set (`effective_password().unwrap_or_default()`), so a viewer submitting an empty password could authenticate in attended mode (e.g. direct LAN sessions). Now the missing password propagates as `None` and the handshake is rejected with "no password configured on the host".
+
 ## [0.3.1] — 2026-10-31
 
 Release engineering, documentation and community tooling. **No functional

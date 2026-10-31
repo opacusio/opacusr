@@ -12,6 +12,7 @@ use opacusr_capture::test::TestSource;
 use opacusr_client::session::{ClientEvent, Command, SessionClient, SessionSettings};
 use opacusr_input::{InputError, InputInjector, RecordingInjector};
 use opacusr_proto::message::{MouseButtonId, OpKey};
+use opacusr_transport::lockout::{AuthGate, AuthGateConfig};
 use opacusr_transport::secure::SecureSession;
 use opacusr_transport::tcp::TcpTransport;
 
@@ -88,7 +89,7 @@ async fn full_session_over_tcp() {
     let host = tokio::spawn(async move {
         let (sock, _) = listener.accept().await.unwrap();
         let cfg = SessionConfig {
-            password: PASSWORD.into(),
+            password: Some(PASSWORD.into()),
             display_name: "e2e-host".into(),
             fps: 60,
             jpeg_quality: 80,
@@ -101,6 +102,7 @@ async fn full_session_over_tcp() {
             adaptive_quality: true,
             audio: false,
             audio_device: String::new(),
+            auth_gate: Some(Arc::new(AuthGate::new(AuthGateConfig::default()))),
         };
         let session = SecureSession::new(Box::new(TcpTransport::from_stream(sock)), None);
         let injector = SharedInjector::new(host_input_log);

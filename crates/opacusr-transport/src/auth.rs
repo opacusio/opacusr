@@ -15,6 +15,7 @@ use opacusr_crypto::{auth_proof, ct_eq, derive_psk, derive_session_key, random_b
 use opacusr_proto::message::{AuthChallenge, AuthResponse, AuthResult, Hello, KdfParams};
 use opacusr_proto::Message;
 
+use crate::lockout::{AuthGate, GateDecision};
 use crate::{SecureSession, TransportError};
 
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -113,13 +114,40 @@ pub struct HostAuth {
 }
 
 /// Host side of the handshake. `password: Option<&str>` — `None` rejects
-/// the session outright (no unattended password configured).
+/// the session outright (no unattended password configured; an empty
+/// string is *not* accepted either — pass `None` when nothing is set).
+///
+/// `gate: Option<&AuthGate>` — shared auth-failure limiter. When set, the
+/// handshake is refused before any challenge material is sent while the
+/// gate is locked, and wrong proofs are recorded (a wrong proof is the
+/// only thing that counts — see [`crate::lockout`]).
 pub async fn host_handshake(
     session: &mut SecureSession,
     password: Option<&str>,
     display_name: &str,
+    gate: Option<&AuthGate>,
 ) -> std::result::Result<HostAuth, TransportError> {
     tokio::time::timeout(HANDSHAKE_TIMEOUT, async {
+        if let Some(gate) = gate {
+            if let GateDecision::Locked(wait) = gate.check() {
+                let secs = wait.as_secs().max(1);
+                tracing::warn!(target: "opacusr",
+                    "auth lockout active; refused a handshake ({secs} s left)");
+                let _ = session
+                    .send_msg(&Message::SessionReject(
+                        opacusr_proto::message::SessionReject {
+                            reason: format!(
+                                "authentication locked out after repeated failures; retry in {secs} s"
+                            ),
+                        },
+                    ))
+                    .await;
+                return Err(TransportError::Other(
+                    "authentication locked out".into(),
+                ));
+            }
+        }
+
         let viewer_hello = match session.recv_msg().await? {
             Message::Hello(h) => h,
             other => {
@@ -190,6 +218,14 @@ pub async fn host_handshake(
         let (ok, error) = if ct_eq(&expected, &response.proof) {
             (true, None)
         } else {
+            if let Some(gate) = gate {
+                match gate.record_failure() {
+                    Some(lock) => tracing::warn!(target: "opacusr",
+                        "auth failed: wrong password (lockout engaged for {} s)",
+                        lock.as_secs()),
+                    None => tracing::warn!(target: "opacusr", "auth failed: wrong password"),
+                }
+            }
             (false, Some("wrong password".to_string()))
         };
         let session_salt = random_bytes::<16>();
@@ -202,6 +238,9 @@ pub async fn host_handshake(
             .await?;
         if !ok {
             return Err(TransportError::Other("viewer failed authentication".into()));
+        }
+        if let Some(gate) = gate {
+            gate.record_success();
         }
 
         let key = derive_session_key(&psk, &session_salt);

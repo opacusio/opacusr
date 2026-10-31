@@ -101,6 +101,15 @@ pub struct AgentConfig {
     /// Windows capture backend: `auto` (DXGI, GDI fallback) | `gdi` | `dxgi`.
     /// Ignored on other platforms.
     pub capture: String,
+    /// Auth lockout: failed password proofs allowed within
+    /// `auth_window_secs` before new handshakes are refused for
+    /// `auth_lockout_secs` (doubling per consecutive lockout, capped at
+    /// 15 minutes). `0` disables the gate (not recommended).
+    pub auth_max_attempts: u32,
+    /// Sliding window (seconds) over which failed proofs are counted.
+    pub auth_window_secs: u64,
+    /// Base lockout (seconds) once the failure budget is spent.
+    pub auth_lockout_secs: u64,
 }
 
 impl Default for AgentConfig {
@@ -128,6 +137,9 @@ impl Default for AgentConfig {
             audio: true,
             audio_device: String::new(),
             capture: "auto".into(),
+            auth_max_attempts: 5,
+            auth_window_secs: 300,
+            auth_lockout_secs: 60,
         }
     }
 }

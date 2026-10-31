@@ -12,12 +12,13 @@
 pub mod auth;
 pub mod chunk;
 pub mod ft;
+pub mod lockout;
 pub mod relay;
 pub mod secure;
 pub mod signaling;
 pub mod tcp;
-pub mod webrtc;
 pub mod update;
+pub mod webrtc;
 
 pub use opacusr_proto::{message::Message, signal::*, Channel, PeerId, ProtoError, PROTO_VERSION};
 pub use secure::SecureSession;

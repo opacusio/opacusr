@@ -11,6 +11,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use tokio::sync::mpsc;
 
@@ -22,6 +23,7 @@ use opacusr_proto::message::{self, ByeReason, CodecId, SessionAccept};
 use opacusr_proto::{Message, Platform};
 use opacusr_transport::auth::host_handshake;
 use opacusr_transport::ft::{FtEngine, FtEvent};
+use opacusr_transport::lockout::AuthGate;
 use opacusr_transport::secure::SecureSession;
 use opacusr_transport::TransportError;
 
@@ -30,7 +32,9 @@ use crate::adaptive::AdaptiveQuality;
 /// Tunables for one host session.
 #[derive(Debug, Clone)]
 pub struct SessionConfig {
-    pub password: String,
+    /// Session password; `None` rejects the handshake outright — never
+    /// pass an empty string for "no password configured".
+    pub password: Option<String>,
     pub display_name: String,
     pub fps: u8,
     pub jpeg_quality: u8,
@@ -48,6 +52,9 @@ pub struct SessionConfig {
     pub audio: bool,
     /// Audio capture device filter (empty = default / Windows loopback).
     pub audio_device: String,
+    /// Shared auth-failure limiter (rate limiting + lockout). One instance
+    /// per accept path (signaling / LAN), shared by all its sessions.
+    pub auth_gate: Option<Arc<AuthGate>>,
 }
 
 /// Preferred video codec for outgoing streams (from `agent.toml` `codec`).
@@ -139,7 +146,13 @@ async fn run_session(
     injector: &mut dyn InputInjector,
 ) -> Result<String, TransportError> {
     // --- handshake ---------------------------------------------------------
-    let auth = host_handshake(session, Some(&cfg.password), &cfg.display_name).await?;
+    let auth = host_handshake(
+        session,
+        cfg.password.as_deref(),
+        &cfg.display_name,
+        cfg.auth_gate.as_deref(),
+    )
+    .await?;
     let _ = events.send(HostEvent::Started {
         viewer: auth.viewer_hello.display_name.clone(),
         platform: auth.viewer_hello.platform,

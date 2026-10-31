@@ -72,7 +72,7 @@ opacusr-agent id                # показать ID этого хоста
 opacusr-agent config            # путь к конфигу и сводка
 ```
 
-Настройки лежат в `~/.config/opacusr/agent.toml` (Linux), `%APPDATA%\opacusr\agent.toml` (Windows), `~/Library/Application Support/opacusr/agent.toml` (macOS). Ключевые поля: `server_url`, `name`, `password` / `password_in_keychain`, `fps`, `jpeg_quality`, `scale_percent`, `auto_accept_files`, `download_dir`, `lan_port`, `ice_urls`, `codec` (`auto` | `h264` | `jpeg`), `clipboard_sync`, `adaptive_quality`, `audio`, `audio_device`, `capture` (`auto` | `gdi` | `dxgi`, Windows), `default_permission` (`full` | `view-only` | `deny`), `acl_rules` (переопределения по зрителям).
+Настройки лежат в `~/.config/opacusr/agent.toml` (Linux), `%APPDATA%\opacusr\agent.toml` (Windows), `~/Library/Application Support/opacusr/agent.toml` (macOS). Ключевые поля: `server_url`, `name`, `password` / `password_in_keychain`, `fps`, `jpeg_quality`, `scale_percent`, `auto_accept_files`, `download_dir`, `lan_port`, `ice_urls`, `codec` (`auto` | `h264` | `jpeg`), `clipboard_sync`, `adaptive_quality`, `audio`, `audio_device`, `capture` (`auto` | `gdi` | `dxgi`, Windows), `default_permission` (`full` | `view-only` | `deny`), `acl_rules` (переопределения по зрителям), блокировка подбора пароля: `auth_max_attempts` / `auth_window_secs` / `auth_lockout_secs` (по умолчанию 5 / 300 / 60; `0` — отключить).
 
 ### 3. Сторона зрителя (кто управляет)
 
