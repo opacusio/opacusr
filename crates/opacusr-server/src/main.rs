@@ -4,7 +4,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use clap::Parser;
-use opacusr_server::AppState;
+use opacusr_server::{AppState, Limits, TurnConfig};
 
 /// OpacusR signaling & relay server.
 #[derive(Debug, Parser)]
@@ -48,7 +48,19 @@ async fn main() -> anyhow::Result<()> {
     eprintln!("│ tcp relay      : {relay_addr}                 ");
     eprintln!("└──────────────────────────────────────────────┘");
 
-    let state = Arc::new(AppState::new(cli.relay_port));
+    let limits = Limits::from_env();
+    let turn = TurnConfig::from_env();
+    match &turn {
+        Some(t) => eprintln!(
+            "turn credentials: minting enabled (ttl {}s, GET /turn)",
+            t.ttl_secs
+        ),
+        None => eprintln!(
+            "turn credentials: disabled (set OPACUSR_TURN_SECRET to enable GET /turn)"
+        ),
+    }
+
+    let state = Arc::new(AppState::with_options(cli.relay_port, limits, turn));
     opacusr_server::serve(http, relay, state).await?;
     Ok(())
 }

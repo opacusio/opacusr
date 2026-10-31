@@ -8,6 +8,9 @@ SemVer-ish (breaking protocol changes bump the minor until 1.0).
 
 ### Added
 
+- **Server hardening: rate limits + time-limited TURN credentials** — per-IP limits on new signaling connections and `/turn` requests (`OPACUSR_RATE_MAX`, default 20 per 10 s), a registered-peer cap (`OPACUSR_MAX_PEERS`, default 1024), relay-ticket caps (8 per peer, 4096 server-wide), and `GET /turn` minting coturn REST-API credentials from `OPACUSR_TURN_SECRET` (HMAC-SHA1, `OPACUSR_TURN_TTL_SECS`).
+
+
 - **Docs: checksum verification on every OS + Windows SmartScreen first run** —
   README.md / README.ru.md gain per-OS verification commands (`sha256sum -c`,
   `shasum -a 256 -c`, PowerShell `Get-FileHash`, `certutil -hashfile`) and the

@@ -7,6 +7,7 @@ Where OpacusR is heading. Items are grouped by milestone; security items from [s
 - **v0.1.0** — WebRTC + TCP/relay transports, JPEG streaming, remote input, file transfer, chat, PTY terminal, unattended access, self-hosted signaling/relay, Docker Compose (server + coturn), CI on three OSes.
 - **v0.2.0** — H.264 codec (Cisco OpenH264, screen-content tuned, JPEG fallback, `codec` config), unattended password in the OS keychain (Windows Credential Manager / macOS Keychain / Linux Secret Service, 0600-file fallback), packaging: deb (agent + viewer with systemd unit and .desktop), Windows MSI (WiX), release pipeline producing tar.gz/zip/deb/msi on every `v*` tag.
 - **v0.3.0** — clipboard sync (both directions, echo-suppressed), view-only mode + ACL policy, adaptive quality (RTT/FPS tiers with hysteresis), DXGI Desktop Duplication (Windows) and PipeWire portal capture (Wayland, experimental), multi-monitor selection, audio streaming (WASAPI loopback on Windows, cpal mic on Linux/macOS, Opus 48 kHz mono).
+- **main (unreleased)** — startup update check, Wayland fail-fast error, macOS ad-hoc codesign + Gatekeeper first-launch docs, download verification docs (SHA256SUMS + SmartScreen), server hardening: per-IP rate limits, peer/relay-ticket caps, time-limited TURN credentials (`GET /turn`).
 
 ## M1 — Media & experience (next)
 
@@ -20,8 +21,8 @@ Where OpacusR is heading. Items are grouped by milestone; security items from [s
 ## M2 — Trust & accounts
 
 - **Strong ACL identities**: per-viewer keys / device fingerprints so rules do not depend on self-reported names (today the password is the real gate, see security.md).
-- **Auth rate limiting & lockout** in the agent; optional TOFU/pinned host fingerprints in the viewer.
-- **Per-session TURN credentials** minted by the signaling server (coturn REST API) instead of a shared secret.
+- **Agent-side** auth rate limiting & lockout (server-side connection/ticket limits are done); optional TOFU/pinned host fingerprints in the viewer.
+- **Automatic per-session TURN credential fetch** in clients (server-side minting at `GET /turn` is done).
 - **Windows service / macOS launchd** installs for the agent (the systemd user unit and MSI already ship; service-mode is the remaining gap).
 
 ## M3 — Scale & operations

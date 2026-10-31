@@ -86,9 +86,9 @@ What the infrastructure *can* do: correlate peer IDs and timing, refuse service,
 
 1. **Password storage on Linux without a Secret Service.** On Windows and macOS the unattended password lives in the OS keychain (Credential Manager / Keychain). On Linux it goes to GNOME Keyring/KWallet via the Secret Service; when no provider runs (headless servers), the agent falls back to the `agent.toml` field (mode `0600`). It must be recoverable to compute Argon2id for every challenge; hashed storage would break unattended verification.
 2. **ACL identities are self-reported names.** See §7 — strong per-viewer identities are planned.
-3. **No rate limiting / lockout** on auth attempts yet — recommended mitigation while self-hosting: run the server behind a firewall/reverse proxy with rate limiting, and use a strong random password.
+3. **No agent-side auth lockout.** The *server* now rate-limits new signaling connections and `/turn` requests per IP (`OPACUSR_RATE_MAX` per `OPACUSR_RATE_WINDOW_SECS`, default 20 per 10 s), caps concurrently registered peers (`OPACUSR_MAX_PEERS`, default 1024) and outstanding relay tickets (8 per peer, 4096 server-wide). The password handshake itself still has no per-host attempt lockout — use a strong random password; a reverse proxy with stricter limits adds defense in depth.
 4. **WebRTC DTLS certificates are ephemeral** (generated per connection by webrtc-rs). Combined with the password handshake this is acceptable, but pinned/fingerprinted certs would harden the first connection.
-5. **TURN credentials** (when using coturn) are shared static/time-limited secrets at the deployment layer; OpacusR does not yet broker per-session TURN credentials.
+5. **TURN credentials** (when using coturn) can be time-limited: set `OPACUSR_TURN_SECRET` to coturn's `static-auth-secret` and the server mints short-lived credentials at `GET /turn` (coturn REST API: HMAC-SHA1 over the expiry timestamp, `OPACUSR_TURN_TTL_SECS`). Clients do not fetch these automatically yet — per-session client integration is on the roadmap.
 6. **Strict in-order crypto** means a transport that reorders frames (none today) would require a resync mechanism before use.
 
 ## 9. Operational hardening checklist (self-hosting)
@@ -97,14 +97,16 @@ What the infrastructure *can* do: correlate peer IDs and timing, refuse service,
 - Let `opacusr-agent passwd` store the password in the OS keychain (default); use `passwd --file` only on systems without a keychain. Keep `agent.toml` permissions at `0600` (default on Unix) in that case; on Windows keep it under the user profile, not a shared location.
 - Terminate signaling on TLS in production: put `opacusr-server` behind Caddy/nginx (`wss://`) — the server itself speaks plain `ws://`, so TLS is the proxy's job.
 - Set a unique coturn `static-auth-secret` (`openssl rand -hex 32`); the bundled config already disables coturn's CLI, see `docker/turnserver.conf`.
+- Give the signaling server the same TURN secret (`OPACUSR_TURN_SECRET` in `docker/.env`) so it mints time-limited credentials at `GET /turn` — fetch those instead of sharing the static secret.
+- Tune the built-in limits for the deployment: `OPACUSR_MAX_PEERS` (1024), `OPACUSR_RATE_MAX` (20), `OPACUSR_RATE_WINDOW_SECS` (10).
 - Monitor `/health` and logs (`RUST_LOG=info`); every auth failure is logged by the agent.
 - Restrict the relay port (8081) and signaling (8080) at the firewall to the networks that need them.
 
 ## 10. Roadmap (security items)
 
 - ~~OS keychain for the unattended password~~ **done in v0.2.0** (Windows Credential Manager / macOS Keychain / Secret Service with a vendored libdbus; file fallback).
-- Per-session TURN credential minting (coturn REST API) driven by the signaling server.
+- ~~Per-session TURN credential minting (coturn REST API) driven by the signaling server~~ — **server-side minting shipped** (`GET /turn` with `OPACUSR_TURN_SECRET`); automatic per-session fetch in clients is the remainder.
 - Optional TOFU/pinned host fingerprints shown in the viewer UI.
-- Auth attempt rate limiting and lockout in the agent.
+- Auth attempt rate limiting and lockout in the agent (server-side connection and ticket limits shipped — see §8).
 - View-only / scoped permission modes.
 - Sliding-window replay resync (enables future datagram transports).

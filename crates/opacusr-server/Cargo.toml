@@ -25,6 +25,10 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 rand = { workspace = true }
 clap = { workspace = true }
+serde = { workspace = true }
+hmac = { workspace = true }
+sha1 = { workspace = true }
+base64 = { workspace = true }
 
 [dev-dependencies]
 opacusr-transport = { workspace = true }

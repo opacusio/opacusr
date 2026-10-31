@@ -38,6 +38,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-uti
 futures = "0.3"
 serde = { version = "1", features = ["derive"] }
 bincode = "1"
+base64 = "0.22"
 thiserror = "2"
 anyhow = "1"
 async-trait = "0.1"
@@ -51,8 +52,9 @@ hmac = "0.12"
 hkdf = "0.12"
 argon2 = "0.5"
 chacha20poly1305 = { version = "0.10", features = ["std"] }
+sha1 = "0.10"
 
-axum = { version = "0.8", features = ["ws"] }
+axum = { version = "0.8", features = ["ws", "json"] }
 tokio-tungstenite = "0.24"
 
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
