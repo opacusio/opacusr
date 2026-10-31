@@ -10,7 +10,7 @@
 > 🇷🇺 Russian documentation: [README.ru.md](README.ru.md)
 
 - **License:** AGPL-3.0
-- **Status:** v0.3.1 — working core, actively developed
+- **Status:** v0.4.0 — working core, actively developed
 - **Platforms:** Linux (X11 / Wayland via PipeWire), Windows (DXGI/GDI), macOS (partial), Android/iOS (skeleton)
 - **Repository home:** [github.com/opacusio](https://github.com/opacusio)
 
@@ -208,6 +208,7 @@ Read [docs/security.md](docs/security.md) for the full threat model and roadmap 
 | [docs/architecture.md](docs/architecture.md) | Crates, data flow, transports, threading model |
 | [docs/protocol.md](docs/protocol.md) | Framing, signaling handshake, session handshake, message reference |
 | [docs/security.md](docs/security.md) | Crypto design, threat model, known limitations |
+| [docs/serverless.md](docs/serverless.md) | Zero-infra networking: connecting without rented servers, automatic path selection |
 | [docs/platforms.md](docs/platforms.md) | Per-platform capture/input status and build notes |
 | [docs/roadmap.md](docs/roadmap.md) | Planned features: VP9/AV1, audio routing, mobile UI… |
 

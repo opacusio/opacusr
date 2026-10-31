@@ -4,7 +4,7 @@ All notable changes to OpacusR are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is
 SemVer-ish (breaking protocol changes bump the minor until 1.0).
 
-## [Unreleased]
+## [0.4.0] — 2026-10-31
 
 ### Added
 
@@ -29,6 +29,8 @@ SemVer-ish (breaking protocol changes bump the minor until 1.0).
   -cr`, right-click Open, Privacy & Security -> Open Anyway).
 
 - Update check: the GUI app and the agent query GitHub for the latest published release at startup and show a notice when a newer version is available. No download and no auto-install; disable with OPACUSR_NO_UPDATE_CHECK=1.
+
+- **Docs: zero-infra networking design** ([docs/serverless.md](docs/serverless.md)) — how to run OpacusR without renting servers: automatic connection ladder (LAN direct → P2P/STUN → TURN → TCP relay), signaling embedded in the agent behind free tunnels (cloudflared / Tailscale Funnel), mesh-VPN mode, mDNS discovery and manual "meeting code" fallback; phased implementation plan.
 
 
 ### Changed

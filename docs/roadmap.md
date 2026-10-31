@@ -7,7 +7,7 @@ Where OpacusR is heading. Items are grouped by milestone; security items from [s
 - **v0.1.0** — WebRTC + TCP/relay transports, JPEG streaming, remote input, file transfer, chat, PTY terminal, unattended access, self-hosted signaling/relay, Docker Compose (server + coturn), CI on three OSes.
 - **v0.2.0** — H.264 codec (Cisco OpenH264, screen-content tuned, JPEG fallback, `codec` config), unattended password in the OS keychain (Windows Credential Manager / macOS Keychain / Linux Secret Service, 0600-file fallback), packaging: deb (agent + viewer with systemd unit and .desktop), Windows MSI (WiX), release pipeline producing tar.gz/zip/deb/msi on every `v*` tag.
 - **v0.3.0** — clipboard sync (both directions, echo-suppressed), view-only mode + ACL policy, adaptive quality (RTT/FPS tiers with hysteresis), DXGI Desktop Duplication (Windows) and PipeWire portal capture (Wayland, experimental), multi-monitor selection, audio streaming (WASAPI loopback on Windows, cpal mic on Linux/macOS, Opus 48 kHz mono).
-- **main (unreleased)** — startup update check, Wayland fail-fast error, macOS ad-hoc codesign + Gatekeeper first-launch docs, download verification docs (SHA256SUMS + SmartScreen), server hardening: per-IP rate limits, peer/relay-ticket caps, time-limited TURN credentials (`GET /turn`), agent-side auth lockout (sliding-window failure counter with escalating lockout).
+- **v0.4.0** — startup update check, Wayland fail-fast error, macOS ad-hoc codesign + Gatekeeper first-launch docs, download verification docs (SHA256SUMS + SmartScreen), server hardening: per-IP rate limits, peer/relay-ticket caps, time-limited TURN credentials (`GET /turn`), agent-side auth lockout (sliding-window failure counter with escalating lockout), zero-infra networking design ([serverless.md](serverless.md)).
 
 ## M1 — Media & experience (next)
 
@@ -21,9 +21,19 @@ Where OpacusR is heading. Items are grouped by milestone; security items from [s
 ## M2 — Trust & accounts
 
 - **Strong ACL identities**: per-viewer keys / device fingerprints so rules do not depend on self-reported names (today the password is the real gate, see security.md).
-- ~~**Agent-side** auth rate limiting & lockout~~ **done (unreleased)** — per-path sliding-window counter with escalating lockout (security.md §8.3). Optional TOFU/pinned host fingerprints in the viewer remains.
-- ~~**Automatic per-session TURN credential fetch** in clients~~ **done (unreleased)** — both sides fetch `GET /turn` at session setup and cache by TTL; server-side minting shipped earlier.
+- ~~**Agent-side** auth rate limiting & lockout~~ **done (v0.4.0)** — per-path sliding-window counter with escalating lockout (security.md §8.3). Optional TOFU/pinned host fingerprints in the viewer remains.
+- ~~**Automatic per-session TURN credential fetch** in clients~~ **done (v0.4.0)** — both sides fetch `GET /turn` at session setup and cache by TTL; server-side minting shipped earlier.
 - **Windows service / macOS launchd** installs for the agent (the systemd user unit and MSI already ship; service-mode is the remaining gap).
+
+## Zero-infra networking (no rented servers)
+
+Design in [serverless.md](serverless.md); goal: a working connection with **0 ₽/mo** of rented infrastructure, with the clients automatically switching to the first path that works.
+
+- **Path ladder** (viewer `connect = "auto"`): LAN direct → P2P/STUN → TURN → TCP relay, with the active mode shown in the UI.
+- **Phase 1**: `signaling_urls` list on the agent (fan-out registration), viewer auto-connect ladder.
+- **Phase 2**: embedded signaling listener in the agent + tunnel cookbook (cloudflared / Tailscale Funnel).
+- **Phase 3**: mDNS discovery (`hostname.local`) for LAN addresses.
+- **Phase 4**: manual offer/answer "meeting codes" as the fully serverless fallback.
 
 ## M3 — Scale & operations
 

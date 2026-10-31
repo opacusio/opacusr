@@ -10,7 +10,7 @@
 > 🇬🇧 English documentation: [README.md](README.md)
 
 - **Лицензия:** AGPL-3.0
-- **Статус:** v0.3.1 — рабочее ядро, активная разработка
+- **Статус:** v0.4.0 — рабочее ядро, активная разработка
 - **Платформы:** Linux (X11 / Wayland через PipeWire), Windows (DXGI/GDI), macOS (частично), Android/iOS (каркас)
 - **Репозиторий:** [github.com/opacusio](https://github.com/opacusio)
 
@@ -199,6 +199,7 @@ cargo build --release --no-default-features                 # без аудио 
 | [docs/architecture.md](docs/architecture.md) | Крейты, потоки данных, транспорты, модель потоков |
 | [docs/protocol.md](docs/protocol.md) | Framing, signaling-рукопожатие, сессионное рукопожатие, справочник сообщений |
 | [docs/security.md](docs/security.md) | Криптографическая схема, модель угроз, известные ограничения |
+| [docs/serverless.md](docs/serverless.md) | Сеть без арендованных серверов: подключение и автоматический выбор пути |
 | [docs/platforms.md](docs/platforms.md) | Статус захвата/ввода по платформам, заметки о сборке |
 | [docs/roadmap.md](docs/roadmap.md) | Планы: VP9/AV1, маршрутизация аудио, мобильный UI… |
 
