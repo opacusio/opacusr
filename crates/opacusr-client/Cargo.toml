@@ -25,11 +25,13 @@ dirs = { workspace = true }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 arboard = { workspace = true }
-cpal = { workspace = true }
+# Optional so hosts without ALSA dev headers can build with
+# `--no-default-features`.
+cpal = { workspace = true, optional = true }
 
 [dev-dependencies]
 rand = { workspace = true }
 
 [features]
 default = ["audio"]
-audio = ["dep:audiopus"]
+audio = ["dep:audiopus", "dep:cpal"]

@@ -38,6 +38,10 @@ enum Cmd {
         /// Windows capture backend: auto | gdi | dxgi (overrides config).
         #[arg(long)]
         capture: Option<String>,
+        /// Lock this machine's keyboard/mouse while a viewer has full
+        /// control (overrides config; view-only sessions never lock).
+        #[arg(long)]
+        lock_input: bool,
     },
     /// Set the unattended access password (OS keychain, file fallback).
     Passwd {
@@ -75,7 +79,8 @@ async fn main() -> anyhow::Result<()> {
             allow_lan,
             signal_listen,
             capture,
-        } => run(server, name, demo, allow_lan, signal_listen, capture).await,
+            lock_input,
+        } => run(server, name, demo, allow_lan, signal_listen, capture, lock_input).await,
         Cmd::Passwd { file } => passwd(file),
         Cmd::PasswdClear => passwd_clear(),
         Cmd::Id { server } => id(server).await,
@@ -101,6 +106,7 @@ async fn run(
     allow_lan: bool,
     signal_listen: bool,
     capture: Option<String>,
+    lock_input: bool,
 ) -> anyhow::Result<()> {
     let mut cfg = load_cfg(server, name);
     if let Some(c) = capture {
@@ -108,6 +114,9 @@ async fn run(
     }
     if signal_listen {
         cfg.signal_listen = true;
+    }
+    if lock_input {
+        cfg.lock_input = true;
     }
     let (tx, mut rx) = mpsc::unbounded_channel();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -122,6 +131,9 @@ async fn run(
         eprintln!("Unattended mode: sessions are accepted after a password check ({where_}).");
     } else {
         eprintln!("Attended mode: every session needs your confirmation (set a password with `opacusr-agent passwd`).");
+    }
+    if cfg.lock_input {
+        eprintln!("Input lock: the host keyboard/mouse will be locked while a viewer has full control.");
     }
 
     let service = AgentService {

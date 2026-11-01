@@ -26,7 +26,7 @@ in polish, host-side ergonomics and enterprise niceties.
 | Clipboard sync | ✅ | ✅ | ✅ | shipped (echo-suppressed) |
 | Audio streaming | ✅ | ✅ | ✅ | shipped (WASAPI loopback / cpal, Opus) |
 | Unattended access + password | ✅ | ✅ | ✅ | shipped (keychain-stored) |
-| **Lock host's physical input** | ✅ | ✅ | ❌ | **gap — M1 candidate** (Windows `BlockInput`, X11 grabs; Wayland restricted) |
+| **Lock host's physical input** | ✅ | ✅ | ✅ | **shipped (v0.5.0)** — Windows LL hooks swallow physical events (injected remote input passes), Linux evdev grabs; Ctrl+Alt+Del stays available; view-only never locks |
 | Session recording | ✅ | ✅ | ❌ | **gap — M1/M3 candidate** (host-side, opt-in) |
 | Two-factor auth (TOTP) for unattended | ✅ | ✅ | ❌ | **gap — M2 candidate** (next to the keychain password) |
 | TCP tunneling / port forwarding | ✅ (VPN) | ✅ | ❌ | **gap — M2/M3 candidate** (reuse SecureSession framing) |
@@ -63,7 +63,7 @@ in polish, host-side ergonomics and enterprise niceties.
 
 **P0 — small, high user-visible value**
 
-1. Lock host input while a viewer is connected (toggle + policy).
+1. ~~Lock host input while a viewer is connected~~ — shipped in v0.5.0 (`--lock-input` / GUI checkbox, TeamViewer-style).
 2. Address book: saved hosts (name → endpoints + ID), recent connections.
 3. Session stats panel + fullscreen hotkeys (already M1; ship them).
 4. Drag-and-drop files onto the viewer window.

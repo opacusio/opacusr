@@ -102,6 +102,7 @@ async fn full_session_over_tcp() {
             adaptive_quality: true,
             audio: false,
             audio_device: String::new(),
+            lock_input: false,
             auth_gate: Some(Arc::new(AuthGate::new(AuthGateConfig::default()))),
         };
         let session = SecureSession::new(Box::new(TcpTransport::from_stream(sock)), None);

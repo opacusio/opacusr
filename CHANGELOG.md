@@ -8,6 +8,18 @@ SemVer-ish (breaking protocol changes bump the minor until 1.0).
 
 ### Added
 
+- **Host physical-input lock** (`--lock-input` / `lock_input` in `agent.toml` / GUI
+  checkbox) — TeamViewer-style: while a viewer has full control the host's
+  physical keyboard/mouse is swallowed while input injected through the session
+  still passes. Windows uses low-level hooks (only non-injected events are
+  dropped; **Ctrl+Alt+Del stays available**), Linux grabs `/dev/input/event*`
+  (`EVIOCGRAB`, needs the `input` group). View-only sessions never lock; the
+  lock is fail-open (a platform that cannot take it warns and continues) and
+  crash-safe (released on drop and on process death). macOS: not yet.
+- **Audio-free builds** — `cpal` is optional behind the existing `audio`
+  feature on both the agent and the client, so `cargo build
+  --no-default-features` and the test suite work on hosts without ALSA dev
+  headers (the GUI opts back in via `features = ["audio"]`).
 - **Zero-infra networking, phases 1–2** ([docs/serverless.md](docs/serverless.md)):
   - **Multi-endpoint signaling fan-out on the agent** — `signaling_urls` in
     `agent.toml`: the agent registers on every endpoint simultaneously, one

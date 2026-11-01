@@ -17,7 +17,9 @@ opacusr-crypto = { workspace = true }
 opacusr-transport = { workspace = true }
 opacusr-capture = { workspace = true }
 opacusr-codec = { workspace = true }
-opacusr-client = { workspace = true }
+# The workspace entry carries `default-features = false` so hosts without
+# ALSA headers can build the agent tests; the GUI opts back into audio.
+opacusr-client = { workspace = true, features = ["audio"] }
 opacusr-agent = { workspace = true }
 eframe = { workspace = true }
 egui = { workspace = true }

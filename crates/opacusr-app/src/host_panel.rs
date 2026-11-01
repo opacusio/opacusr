@@ -199,6 +199,18 @@ pub fn host_ui(ctx: &Context, app: &mut App) {
             ui.label(egui::RichText::new("Audio").strong());
             ui.checkbox(&mut app.config.audio, "offer audio streaming to viewers");
             ui.end_row();
+
+            ui.label(egui::RichText::new("Input lock").strong());
+            ui.checkbox(
+                &mut app.config.lock_input,
+                "lock physical keyboard/mouse while a viewer controls this machine",
+            );
+            ui.end_row();
+            crate::hint(
+                ui,
+                "TeamViewer-style: remote input passes, local input is swallowed. \
+                 Ctrl+Alt+Del stays available on Windows. View-only sessions never lock.",
+            );
         });
 
         ui.add_space(12.0);

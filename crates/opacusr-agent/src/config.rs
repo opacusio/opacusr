@@ -126,6 +126,11 @@ pub struct AgentConfig {
     /// HTTP/WS port for the embedded signaling server; the TCP relay
     /// binds the next port (`+1`).
     pub signal_listen_port: u16,
+    /// TeamViewer-style: swallow this machine's physical keyboard/mouse
+    /// input while a viewer has full control. Injected remote input still
+    /// passes; view-only sessions never lock; Ctrl+Alt+Del stays available
+    /// on Windows. Best-effort per platform (docs/platforms.md); fail-open.
+    pub lock_input: bool,
 }
 
 impl Default for AgentConfig {
@@ -160,6 +165,7 @@ impl Default for AgentConfig {
             signaling_urls: Vec::new(),
             signal_listen: false,
             signal_listen_port: 8080,
+            lock_input: false,
         }
     }
 }

@@ -30,7 +30,7 @@ opacusr-capture = { path = "crates/opacusr-capture", version = "0.4.0" }
 opacusr-codec = { path = "crates/opacusr-codec", version = "0.4.0" }
 opacusr-input = { path = "crates/opacusr-input", version = "0.4.0" }
 opacusr-agent = { path = "crates/opacusr-agent", version = "0.4.0" }
-opacusr-client = { path = "crates/opacusr-client", version = "0.4.0" }
+opacusr-client = { path = "crates/opacusr-client", version = "0.4.0", default-features = false }
 opacusr-server = { path = "crates/opacusr-server", version = "0.4.0" }
 opacusr-app = { path = "crates/opacusr-app", version = "0.4.0" }
 

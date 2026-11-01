@@ -52,6 +52,10 @@ pub struct SessionConfig {
     pub audio: bool,
     /// Audio capture device filter (empty = default / Windows loopback).
     pub audio_device: String,
+    /// Swallow the host's physical keyboard/mouse while the viewer has
+    /// full control (TeamViewer-style; view-only sessions never lock,
+    /// fail-open when the platform cannot take the lock).
+    pub lock_input: bool,
     /// Shared auth-failure limiter (rate limiting + lockout). One instance
     /// per accept path (signaling / LAN), shared by all its sessions.
     pub auth_gate: Option<Arc<AuthGate>>,
@@ -113,6 +117,25 @@ impl SessionHost {
     ) {
         let cfg = self.cfg;
         let events = self.events;
+
+        // TeamViewer-style physical input lock for full-control sessions.
+        // The guard covers every exit path below; if the lock cannot be
+        // taken the session continues unlocked with a notice (fail-open).
+        let _input_lock = if cfg.lock_input && !cfg.view_only {
+            match opacusr_input::lock::HostInputLock::enable() {
+                Ok(lock) => {
+                    let _ = events.send(HostEvent::Notice("physical input locked".into()));
+                    Some(lock)
+                }
+                Err(e) => {
+                    let _ = events
+                        .send(HostEvent::Notice(format!("input lock unavailable: {e}")));
+                    None
+                }
+            }
+        } else {
+            None
+        };
 
         let outcome = run_session(
             &cfg,

@@ -9,6 +9,8 @@ Where OpacusR is heading. Items are grouped by milestone; security items from [s
 - **v0.3.0** — clipboard sync (both directions, echo-suppressed), view-only mode + ACL policy, adaptive quality (RTT/FPS tiers with hysteresis), DXGI Desktop Duplication (Windows) and PipeWire portal capture (Wayland, experimental), multi-monitor selection, audio streaming (WASAPI loopback on Windows, cpal mic on Linux/macOS, Opus 48 kHz mono).
 - **v0.4.0** — startup update check, Wayland fail-fast error, macOS ad-hoc codesign + Gatekeeper first-launch docs, download verification docs (SHA256SUMS + SmartScreen), server hardening: per-IP rate limits, peer/relay-ticket caps, time-limited TURN credentials (`GET /turn`), agent-side auth lockout (sliding-window failure counter with escalating lockout), zero-infra networking design ([serverless.md](serverless.md)).
 
+- **v0.5.0 (unreleased)** — zero-infra networking phases 1–2 shipped: agent `signaling_urls` fan-out, embedded signaling (`--signal-listen`: registry + relay + `/turn` in the agent), viewer `connect = "auto"` endpoint ladder; **host physical-input lock** (`--lock-input` / GUI checkbox, TeamViewer-style: Windows LL hooks swallow physical events while injected remote input passes, Linux evdev grabs, Ctrl+Alt+Del stays available, view-only sessions never lock, fail-open, crash-safe); `--no-default-features` builds for hosts without audio dev headers.
+
 ## M1 — Media & experience (next)
 
 - **Audio polish**: Linux system-sound capture without manual device picking (PipeWire monitor), Windows per-device selection, viewer-side volume/mute, WASAPI loopback auto-recovery after default-device changes.
@@ -53,7 +55,7 @@ Design in [serverless.md](serverless.md); goal: a working connection with **0 �
 
 Full matrix in [comparison.md](comparison.md). Top of the list:
 
-- **P0**: lock host input during a session; address book + recent connections; session stats panel and fullscreen hotkeys (M1); drag-and-drop files.
+- **P0**: ~~lock host input during a session~~ (done, v0.5.0); address book + recent connections; session stats panel and fullscreen hotkeys (M1); drag-and-drop files.
 - **P1**: TOTP second factor for unattended access; opt-in session recording; TCP tunneling over the session channel; reboot-and-reconnect (needs service mode); proxy support for signaling.
 - **P2**: privacy mode (dummy display driver — research); remote printing (evaluate); mobile viewer (M4); in-app auto-update install.
 

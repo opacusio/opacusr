@@ -44,6 +44,10 @@ pub use desktop::DesktopInjector;
 
 pub mod clipboard;
 
+/// TeamViewer-style physical input lock (Windows LL hooks / Linux evdev
+/// grabs). Engaged by full-control sessions when `lock_input` is set.
+pub mod lock;
+
 /// No-op injector (mobile viewer-side builds, tests).
 #[derive(Debug, Default)]
 pub struct NullInjector;

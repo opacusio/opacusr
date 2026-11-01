@@ -506,6 +506,7 @@ impl AgentService {
             adaptive_quality: self.cfg.adaptive_quality,
             audio: self.cfg.audio,
             audio_device: self.cfg.audio_device.clone(),
+            lock_input: self.cfg.lock_input,
             auth_gate: Some(gate.clone()),
         };
         let host = SessionHost { cfg, events: tx };
