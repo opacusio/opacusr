@@ -64,6 +64,8 @@ pub enum AgentEvent {
     },
     SessionStarted {
         peer: opacusr_proto::PeerId,
+        /// Push host-side commands (file sends) into the live session.
+        commands: mpsc::UnboundedSender<crate::session::HostCommand>,
     },
     SessionEnded {
         reason: String,
@@ -437,9 +439,9 @@ impl AgentService {
         }))
         .await?;
         let transport = pending.finish().await?;
-        let _ = self.events.send(AgentEvent::SessionStarted { peer });
         self.spawn_host(
             SecureSession::new(Box::new(transport), None),
+            peer,
             view_only,
             gate,
         );
@@ -465,12 +467,22 @@ impl AgentService {
             opacusr_transport::relay::RelayRole::Host,
         )
         .await?;
-        let _ = self.events.send(AgentEvent::SessionStarted { peer });
-        self.spawn_host(SecureSession::new(Box::new(relay), None), view_only, gate);
+        self.spawn_host(
+            SecureSession::new(Box::new(relay), None),
+            peer,
+            view_only,
+            gate,
+        );
         Ok(())
     }
 
-    fn spawn_host(&self, session: SecureSession, view_only: bool, gate: &Arc<AuthGate>) {
+    fn spawn_host(
+        &self,
+        session: SecureSession,
+        peer: opacusr_proto::PeerId,
+        view_only: bool,
+        gate: &Arc<AuthGate>,
+    ) {
         // Event pump: HostEvent → AgentEvent for the UI.
         let (tx, rx) = mpsc::unbounded_channel();
         let events = self.events.clone();
@@ -509,7 +521,18 @@ impl AgentService {
             lock_input: self.cfg.lock_input,
             auth_gate: Some(gate.clone()),
         };
-        let host = SessionHost { cfg, events: tx };
+        // Per-session command channel: the UI pushes HostCommands (file
+        // sends) into the live session through it.
+        let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
+        let _ = self.events.send(AgentEvent::SessionStarted {
+            peer,
+            commands: cmd_tx,
+        });
+        let host = SessionHost {
+            cfg,
+            events: tx,
+            commands: cmd_rx,
+        };
         let capture: Box<dyn ScreenCapture> = if self.demo {
             Box::new(opacusr_capture::test::TestSource::new(1280, 720))
         } else {

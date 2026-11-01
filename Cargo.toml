@@ -75,6 +75,7 @@ eframe = "0.29"
 egui = "0.29"
 
 tempfile = "3"
+rfd = "0.15"
 
 [profile.release]
 opt-level = 3

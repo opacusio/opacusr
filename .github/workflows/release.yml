@@ -21,7 +21,7 @@ jobs:
       - name: Install X11 dev packages
         run: |
           sudo apt-get update
-          sudo apt-get install -y libx11-dev libxi-dev libxtst-dev libasound2-dev
+          sudo apt-get install -y libx11-dev libxi-dev libxtst-dev libasound2-dev libgtk-3-dev
       - name: Build and install Opus (static)
         # audiopus_sys probes pkg-config first and only falls back to the
         # vendored autotools build when no system Opus is found. That vendored

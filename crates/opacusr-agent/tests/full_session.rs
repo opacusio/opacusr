@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use tokio::sync::mpsc;
 
-use opacusr_agent::session::{HostEvent, SessionConfig, SessionHost};
+use opacusr_agent::session::{HostCommand, HostEvent, SessionConfig, SessionHost};
 use opacusr_capture::test::TestSource;
 use opacusr_client::session::{ClientEvent, Command, SessionClient, SessionSettings};
 use opacusr_input::{InputError, InputInjector, RecordingInjector};
@@ -83,6 +83,7 @@ async fn full_session_over_tcp() {
     let addr = listener.local_addr().unwrap().to_string();
 
     let (host_events_tx, mut host_events_rx) = mpsc::unbounded_channel();
+    let (host_cmd_tx, host_cmd_rx) = mpsc::unbounded_channel();
     let input_log: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let host_input_log = input_log.clone();
     let host_downloads = downloads.clone();
@@ -110,6 +111,7 @@ async fn full_session_over_tcp() {
         SessionHost {
             cfg,
             events: host_events_tx,
+            commands: host_cmd_rx,
         }
         .run(
             session,
@@ -235,6 +237,30 @@ async fn full_session_over_tcp() {
     })
     .await;
     assert!(ft_done.is_ok(), "file transfer did not complete in time");
+
+    // File transfer: host → viewer, driven through the host command channel.
+    host_cmd_tx
+        .send(HostCommand::SendFile(upload.clone()))
+        .unwrap();
+    let (path, verified) = tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            match events.recv().await {
+                Some(opacusr_client::ClientEvent::FtReceivedDone { path, verified }) => {
+                    break (path, verified);
+                }
+                Some(_) => continue,
+                None => break (std::path::PathBuf::new(), false),
+            }
+        }
+    })
+    .await
+    .expect("host→viewer transfer did not complete in time");
+    assert!(verified, "sha256 mismatch on the host→viewer transfer");
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        payload,
+        "host→viewer contents differ"
+    );
 
     // Remote terminal: open, run a command, see its output.
     cmd_tx

@@ -366,6 +366,13 @@ fn files_panel(ui: &mut egui::Ui, s: &mut SessionHandle) {
         "Drag & drop files anywhere on the window to send them to the host.",
     );
     ui.horizontal(|ui| {
+        if ui.button("⬆ Send files…").clicked() {
+            if let Some(paths) = rfd::FileDialog::new().pick_files() {
+                for p in paths {
+                    let _ = s.commands.send(Command::PushFile(p));
+                }
+            }
+        }
         if ui.button("📤 Send clipboard → host").clicked() {
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             if let Ok(mut cb) = arboard::Clipboard::new() {

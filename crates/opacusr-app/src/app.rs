@@ -6,6 +6,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 use opacusr_agent::config::AgentConfig;
 use opacusr_agent::service::{AgentEvent, AgentService, SessionDecision};
+use opacusr_agent::session::HostCommand;
 use opacusr_client::addressbook::{
     fmt_duration, fmt_ts, now_secs, AddressBook, HistoryEntry, Outcome,
 };
@@ -90,6 +91,10 @@ pub struct HostHandle {
     pub my_id: Option<PeerId>,
     pub notices: Vec<String>,
     pub consent: Option<(PeerId, String, std::sync::mpsc::Sender<SessionDecision>)>,
+    /// Command handle for the ACTIVE session (send files, ...).
+    pub commands: Option<UnboundedSender<HostCommand>>,
+    /// True between SessionStarted and SessionEnded.
+    pub session_active: bool,
 }
 
 pub struct App {
@@ -400,6 +405,8 @@ impl App {
             my_id: None,
             notices: Vec::new(),
             consent: None,
+            commands: None,
+            session_active: false,
         });
         self.host_consent_rx = Some(consent_rx);
         self.host_shutdown = Some(shutdown_tx);
@@ -496,6 +503,8 @@ impl eframe::App for App {
                 match ev {
                     AgentEvent::Registered { id, .. } => h.my_id = Some(id),
                     AgentEvent::SessionEnded { reason } => {
+                        h.commands = None;
+                        h.session_active = false;
                         h.notices.push(format!("session ended: {reason}"))
                     }
                     AgentEvent::Notice(text) => {
@@ -504,7 +513,11 @@ impl eframe::App for App {
                             h.notices.drain(..100);
                         }
                     }
-                    AgentEvent::IncomingRequest { .. } | AgentEvent::SessionStarted { .. } => {}
+                    AgentEvent::IncomingRequest { .. } => {}
+                    AgentEvent::SessionStarted { commands, .. } => {
+                        h.commands = Some(commands);
+                        h.session_active = true;
+                    }
                 }
             }
         }

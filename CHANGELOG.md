@@ -16,6 +16,11 @@ SemVer-ish (breaking protocol changes bump the minor until 1.0).
 - **Connection history** — the last 100 connection attempts with UTC
   timestamp, target, outcome (connected/failed) and session duration;
   viewable and clearable in the Connect tab.
+- **Host → viewer file send** — while a session is live the Host tab offers
+  `⬆ Send file to viewer`: a per-session command channel feeds
+  `HostCommand::SendFile` into the agent session loop and the same FtEngine
+  drives the push (sha256-verified on arrival). The viewer's Files panel
+  gains a `⬆ Send files…` picker next to drag & drop.
 
 ## [0.5.0] — 2026-11-01
 

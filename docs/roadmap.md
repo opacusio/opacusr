@@ -55,7 +55,7 @@ Design in [serverless.md](serverless.md); goal: a working connection with **0 �
 
 Full matrix in [comparison.md](comparison.md). Top of the list:
 
-- **P0**: ~~lock host input during a session~~ (done, v0.5.0); address book + recent connections; session stats panel and fullscreen hotkeys (M1); drag-and-drop files.
+- **P0**: ~~lock host input during a session~~ (done, v0.5.0); ~~address book + recent connections~~ (done, v0.6.0 WIP); ~~drag-and-drop files~~ (done: both directions + file pickers; folder drops → P1); session stats panel and fullscreen hotkeys (M1).
 - **P1**: TOTP second factor for unattended access; opt-in session recording; TCP tunneling over the session channel; reboot-and-reconnect (needs service mode); proxy support for signaling.
 - **P2**: privacy mode (dummy display driver — research); remote printing (evaluate); mobile viewer (M4); in-app auto-update install.
 

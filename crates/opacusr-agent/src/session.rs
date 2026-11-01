@@ -100,10 +100,20 @@ pub enum HostEvent {
     Notice(String),
 }
 
+/// Commands the host UI can push into a live session.
+#[derive(Debug, Clone)]
+pub enum HostCommand {
+    /// Send a local file to the connected viewer.
+    SendFile(std::path::PathBuf),
+}
+
 /// Everything needed to run one session.
 pub struct SessionHost {
     pub cfg: SessionConfig,
     pub events: mpsc::UnboundedSender<HostEvent>,
+    /// Commands from the host UI (send files, ...). The UI may drop the
+    /// sender — the loop then simply never fires the command branch.
+    pub commands: mpsc::UnboundedReceiver<HostCommand>,
 }
 
 impl SessionHost {
@@ -117,6 +127,7 @@ impl SessionHost {
     ) {
         let cfg = self.cfg;
         let events = self.events;
+        let mut commands = self.commands;
 
         // TeamViewer-style physical input lock for full-control sessions.
         // The guard covers every exit path below; if the lock cannot be
@@ -139,6 +150,7 @@ impl SessionHost {
         let outcome = run_session(
             &cfg,
             &events,
+            &mut commands,
             &mut session,
             capture.as_mut(),
             injector.as_mut(),
@@ -163,6 +175,7 @@ const CLIPBOARD_MAX_BYTES: usize = opacusr_input::clipboard::CLIPBOARD_MAX_BYTES
 async fn run_session(
     cfg: &SessionConfig,
     events: &mpsc::UnboundedSender<HostEvent>,
+    commands: &mut mpsc::UnboundedReceiver<HostCommand>,
     session: &mut SecureSession,
     capture: &mut dyn ScreenCapture,
     injector: &mut dyn InputInjector,
@@ -295,6 +308,32 @@ async fn run_session(
                         session.send_msg(&Message::ClipboardText(
                             message::ClipboardText { text },
                         )).await?;
+                    }
+                }
+            }
+            Some(cmd) = commands.recv(), if !commands.is_closed() => {
+                match cmd {
+                    HostCommand::SendFile(path) => {
+                        if cfg.view_only {
+                            let _ = events.send(HostEvent::Notice(
+                                "view-only session: sending files is disabled".into(),
+                            ));
+                            continue;
+                        }
+                        match ft.start_push(&path) {
+                            Ok(Message::FtOffer(offer)) => {
+                                let _ = events.send(HostEvent::Notice(format!(
+                                    "sending {} to the viewer…",
+                                    path.display()
+                                )));
+                                session.send_msg(&Message::FtOffer(offer)).await?;
+                            }
+                            Ok(_) => {}
+                            Err(e) => {
+                                let _ =
+                                    events.send(HostEvent::Notice(format!("send file: {e}")));
+                            }
+                        }
                     }
                 }
             }

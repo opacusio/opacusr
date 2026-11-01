@@ -55,6 +55,32 @@ pub fn host_ui(ctx: &Context, app: &mut App) {
 
         let running = app.host.is_some();
 
+        // ---- active session: send a file to the viewer ----
+        if let Some(h) = &app.host {
+            if h.session_active {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Session active").strong());
+                    let enabled = h.commands.is_some();
+                    if ui
+                        .add_enabled(enabled, egui::Button::new("⬆ Send file to viewer"))
+                        .clicked()
+                    {
+                        if let Some(path) = rfd::FileDialog::new().pick_file() {
+                            if let Some(tx) =
+                                app.host.as_ref().and_then(|h| h.commands.as_ref())
+                            {
+                                let _ = tx.send(
+                                    opacusr_agent::session::HostCommand::SendFile(path),
+                                );
+                            }
+                        }
+                    }
+                    crate::hint(ui, "the viewer receives it into its download folder");
+                });
+                ui.add_space(6.0);
+            }
+        }
+
         // ---- status card ----
         egui::Frame::group(ui.style()).show(ui, |ui| {
             ui.horizontal(|ui| {
