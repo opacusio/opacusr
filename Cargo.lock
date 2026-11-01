@@ -3931,9 +3931,11 @@ dependencies = [
  "opacusr-proto",
  "opacusr-transport",
  "rand 0.8.8",
+ "serde",
  "sha2",
  "thiserror 2.0.21",
  "tokio",
+ "toml 0.8.23",
  "tracing",
 ]
 

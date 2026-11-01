@@ -6,6 +6,9 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 use opacusr_agent::config::AgentConfig;
 use opacusr_agent::service::{AgentEvent, AgentService, SessionDecision};
+use opacusr_client::addressbook::{
+    fmt_duration, fmt_ts, now_secs, AddressBook, HistoryEntry, Outcome,
+};
 use opacusr_client::session::{
     ClientEvent, Command, SessionClient, SessionSettings, TransportChoice,
 };
@@ -114,6 +117,18 @@ pub struct App {
     pub config: AgentConfig,
     pub status_message: String,
     pub host_password_input: String,
+
+    /// Saved contacts + connection history (`addressbook.toml`).
+    pub book: AddressBook,
+    // Address-book form state.
+    new_label: String,
+    new_target: String,
+    new_endpoint: String,
+    show_history: bool,
+    /// History ts of the current connection attempt.
+    cur_hist_ts: Option<u64>,
+    /// Unix ts when the current attempt actually connected (for duration).
+    cur_connected_at: Option<u64>,
 }
 
 impl App {
@@ -140,6 +155,13 @@ impl App {
             config,
             status_message: "Ready.".into(),
             host_password_input: String::new(),
+            book: AddressBook::load(),
+            new_label: String::new(),
+            new_target: String::new(),
+            new_endpoint: String::new(),
+            show_history: false,
+            cur_hist_ts: None,
+            cur_connected_at: None,
         }
     }
 
@@ -147,7 +169,7 @@ impl App {
     // Viewer
     // ------------------------------------------------------------------
 
-    fn connect_clicked(&mut self) {
+    fn connect_clicked(&mut self, label: Option<String>) {
         let input = self.peer_id_input.replace([' ', '-'], "");
         let password = self.password_input.clone();
         if password.is_empty() {
@@ -299,6 +321,20 @@ impl App {
             });
         }
 
+        // History: remember the attempt; the outcome is filled in by the
+        // Connected/Closed event handlers below.
+        let ts = now_secs();
+        self.book.push_history(HistoryEntry {
+            ts,
+            label,
+            target: input,
+            outcome: Outcome::Unknown,
+            duration_secs: None,
+        });
+        let _ = self.book.save();
+        self.cur_hist_ts = Some(ts);
+        self.cur_connected_at = None;
+
         self.session = Some(SessionHandle::new(cmd_tx, ui_events_rx));
     }
 
@@ -306,8 +342,21 @@ impl App {
         if let Some(s) = self.session.as_mut() {
             let _ = s.commands.send(Command::Disconnect);
         }
+        self.finish_attempt();
         self.session = None;
         self.status_message = "Disconnected.".into();
+    }
+
+    /// Finalize the history entry of the current attempt, if any.
+    fn finish_attempt(&mut self) {
+        if let Some(ts) = self.cur_hist_ts.take() {
+            let (outcome, duration) = match self.cur_connected_at.take() {
+                Some(t0) => (Outcome::Connected, Some(now_secs().saturating_sub(t0))),
+                None => (Outcome::Failed, None),
+            };
+            self.book.finish_history(ts, outcome, duration);
+            let _ = self.book.save();
+        }
     }
 
     // ------------------------------------------------------------------
@@ -488,6 +537,13 @@ impl eframe::App for App {
                         "connected to {host_name}{}",
                         if view_only { " (view only)" } else { "" }
                     );
+                    self.cur_connected_at = Some(now_secs());
+                    if let Some(ts) = self.cur_hist_ts {
+                        self.book.mark_outcome(ts, Outcome::Connected);
+                    }
+                    let typed = self.peer_id_input.replace([' ', '-'], "");
+                    self.book.touch_by_target(&typed);
+                    let _ = self.book.save();
                 }
                 ClientEvent::Frame(frame) => {
                     let img = egui::ColorImage::from_rgba_unmultiplied(
@@ -546,7 +602,17 @@ impl eframe::App for App {
                     }
                 }
                 ClientEvent::Notice(t) => sess.status = t,
-                ClientEvent::Closed(reason) => sess.status = format!("closed: {reason}"),
+                ClientEvent::Closed(reason) => {
+                    sess.status = format!("closed: {reason}");
+                    if let Some(ts) = self.cur_hist_ts.take() {
+                        let (outcome, duration) = match self.cur_connected_at.take() {
+                            Some(t0) => (Outcome::Connected, Some(now_secs().saturating_sub(t0))),
+                            None => (Outcome::Failed, None),
+                        };
+                        self.book.finish_history(ts, outcome, duration);
+                        let _ = self.book.save();
+                    }
+                }
             }
         }
 
@@ -658,11 +724,15 @@ impl App {
                         .min_size([160.0, 40.0].into()),
                 );
                 if connect.clicked() {
-                    self.connect_clicked();
+                    self.connect_clicked(None);
                 }
             });
 
             ui.add_space(24.0);
+            ui.separator();
+            self.book_ui(ui);
+
+            ui.add_space(16.0);
             ui.separator();
             ui.label(egui::RichText::new("How it works").strong());
             crate::hint(
@@ -672,5 +742,165 @@ impl App {
                  over WebRTC/DTLS, with a TCP relay fallback when direct P2P is blocked.",
             );
         });
+    }
+
+    // ------------------------------------------------------------------
+    // Address book + connection history
+    // ------------------------------------------------------------------
+
+    fn book_ui(&mut self, ui: &mut egui::Ui) {
+        ui.label(egui::RichText::new("Address book").strong());
+        egui::Grid::new("book_add_grid")
+            .num_columns(2)
+            .spacing([12.0, 6.0])
+            .show(ui, |ui| {
+                ui.label("Label");
+                ui.add_sized(
+                    [430.0, 24.0],
+                    egui::TextEdit::singleline(&mut self.new_label).hint_text("My laptop"),
+                );
+                ui.end_row();
+
+                ui.label("Target");
+                ui.add_sized(
+                    [430.0, 24.0],
+                    egui::TextEdit::singleline(&mut self.new_target)
+                        .hint_text("9-digit ID or ip:port"),
+                );
+                ui.end_row();
+
+                ui.label("Endpoint");
+                ui.add_sized(
+                    [430.0, 24.0],
+                    egui::TextEdit::singleline(&mut self.new_endpoint)
+                        .hint_text("optional — signaling URL tried first (wss://…/signal)"),
+                );
+                ui.end_row();
+            });
+        if ui.button("💾 Save contact").clicked() {
+            let target = self.new_target.replace([' ', '-'], "");
+            if target.is_empty() {
+                self.status_message = "Contact needs a target: 9-digit ID or ip:port".into();
+            } else {
+                let label = {
+                    let l = self.new_label.trim();
+                    if l.is_empty() {
+                        target.clone()
+                    } else {
+                        l.to_string()
+                    }
+                };
+                let endpoint = {
+                    let e = self.new_endpoint.trim();
+                    if e.is_empty() {
+                        None
+                    } else {
+                        Some(e.to_string())
+                    }
+                };
+                self.book.upsert(label, target, endpoint);
+                self.new_label.clear();
+                self.new_target.clear();
+                self.new_endpoint.clear();
+                self.status_message = "Contact saved.".into();
+                let _ = self.book.save();
+            }
+        }
+
+        ui.add_space(8.0);
+        if self.book.contacts().is_empty() {
+            crate::hint(ui, "No saved contacts yet.");
+        } else {
+            let ids: Vec<String> = self
+                .book
+                .sorted_contacts()
+                .into_iter()
+                .map(|c| c.id)
+                .collect();
+            egui::ScrollArea::vertical()
+                .max_height(170.0)
+                .show(ui, |ui| {
+                    for id in ids {
+                        let Some(c) = self.book.contacts().iter().find(|c| c.id == id).cloned()
+                        else {
+                            continue;
+                        };
+                        ui.horizontal(|ui| {
+                            if ui
+                                .button(if c.favorite { "★" } else { "☆" })
+                                .on_hover_text("Favorite")
+                                .clicked()
+                            {
+                                self.book.set_favorite(&c.id, !c.favorite);
+                                let _ = self.book.save();
+                            }
+                            ui.label(egui::RichText::new(&c.label).strong());
+                            ui.label(egui::RichText::new(&c.target).weak());
+                            if let Some(ep) = &c.endpoint {
+                                ui.label(egui::RichText::new(ep).small().weak());
+                            }
+                            if ui.button("▶").on_hover_text("Connect").clicked() {
+                                if let Some(ep) = c.endpoint.clone() {
+                                    self.server_url = ep;
+                                }
+                                self.peer_id_input = c.target.clone();
+                                let label = c.label.clone();
+                                self.connect_clicked(Some(label));
+                            }
+                            if ui.button("✕").on_hover_text("Remove").clicked() {
+                                self.book.remove(&c.id);
+                                let _ = self.book.save();
+                            }
+                        });
+                    }
+                });
+        }
+
+        ui.add_space(12.0);
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("History").strong());
+            if ui
+                .button(if self.show_history { "hide" } else { "show" })
+                .clicked()
+            {
+                self.show_history = !self.show_history;
+            }
+            if self.show_history && ui.button("clear").clicked() {
+                self.book.clear_history();
+                let _ = self.book.save();
+            }
+        });
+        if self.show_history {
+            if self.book.history().is_empty() {
+                crate::hint(ui, "No connection history yet.");
+            } else {
+                egui::ScrollArea::vertical()
+                    .max_height(140.0)
+                    .show(ui, |ui| {
+                        for h in self.book.history() {
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    egui::RichText::new(fmt_ts(h.ts)).weak().small().monospace(),
+                                );
+                                if let Some(label) = &h.label {
+                                    ui.label(egui::RichText::new(label).small());
+                                }
+                                ui.label(egui::RichText::new(&h.target).small());
+                                let dot = match h.outcome {
+                                    Outcome::Connected => egui::RichText::new("● connected")
+                                        .color(egui::Color32::from_rgb(80, 200, 120)),
+                                    Outcome::Failed => egui::RichText::new("● failed")
+                                        .color(egui::Color32::from_rgb(230, 90, 90)),
+                                    Outcome::Unknown => egui::RichText::new("● unknown").weak(),
+                                };
+                                ui.label(dot.small());
+                                if let Some(d) = h.duration_secs {
+                                    ui.label(egui::RichText::new(fmt_duration(d)).weak().small());
+                                }
+                            });
+                        }
+                    });
+            }
+        }
     }
 }

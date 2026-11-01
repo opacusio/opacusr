@@ -6,6 +6,17 @@ SemVer-ish (breaking protocol changes bump the minor until 1.0).
 
 ## [Unreleased]
 
+### Added
+
+- **Viewer address book** — save contacts (label, 9-digit ID or `ip:port`,
+  optional per-contact signaling endpoint tried before the global list),
+  favorites, one-click connect from the list. Stored locally in
+  `addressbook.toml` next to `agent.toml` (atomic tmp+rename writes;
+  passwords are never stored).
+- **Connection history** — the last 100 connection attempts with UTC
+  timestamp, target, outcome (connected/failed) and session duration;
+  viewable and clearable in the Connect tab.
+
 ## [0.5.0] — 2026-11-01
 
 ### Added
