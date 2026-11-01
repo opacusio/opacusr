@@ -203,8 +203,7 @@ mod imp {
         }
         if grabbed.is_empty() {
             return Err(
-                "no /dev/input/event* could be grabbed (add the user to the `input` group)"
-                    .into(),
+                "no /dev/input/event* could be grabbed (add the user to the `input` group)".into(),
             );
         }
         Ok(Guard { _grabbed: grabbed })

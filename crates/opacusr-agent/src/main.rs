@@ -80,7 +80,18 @@ async fn main() -> anyhow::Result<()> {
             signal_listen,
             capture,
             lock_input,
-        } => run(server, name, demo, allow_lan, signal_listen, capture, lock_input).await,
+        } => {
+            run(
+                server,
+                name,
+                demo,
+                allow_lan,
+                signal_listen,
+                capture,
+                lock_input,
+            )
+            .await
+        }
         Cmd::Passwd { file } => passwd(file),
         Cmd::PasswdClear => passwd_clear(),
         Cmd::Id { server } => id(server).await,
@@ -133,7 +144,9 @@ async fn run(
         eprintln!("Attended mode: every session needs your confirmation (set a password with `opacusr-agent passwd`).");
     }
     if cfg.lock_input {
-        eprintln!("Input lock: the host keyboard/mouse will be locked while a viewer has full control.");
+        eprintln!(
+            "Input lock: the host keyboard/mouse will be locked while a viewer has full control."
+        );
     }
 
     let service = AgentService {

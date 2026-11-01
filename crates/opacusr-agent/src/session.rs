@@ -128,8 +128,7 @@ impl SessionHost {
                     Some(lock)
                 }
                 Err(e) => {
-                    let _ = events
-                        .send(HostEvent::Notice(format!("input lock unavailable: {e}")));
+                    let _ = events.send(HostEvent::Notice(format!("input lock unavailable: {e}")));
                     None
                 }
             }
