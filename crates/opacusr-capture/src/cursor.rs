@@ -128,15 +128,23 @@ impl CursorSource for CursorPoller {
             Inner::Win32 => win32::poll(),
             #[cfg(all(target_os = "linux", feature = "x11"))]
             Inner::X11(c) => c.poll(),
+            #[cfg(not(any(windows, all(target_os = "linux", feature = "x11"))))]
+            _ => None,
         }
     }
 
+    #[cfg_attr(
+        not(any(windows, all(target_os = "linux", feature = "x11"))),
+        allow(unused_variables)
+    )]
     fn shape(&mut self, serial: u64) -> Option<CursorBitmap> {
         match self.inner.as_mut()? {
             #[cfg(windows)]
             Inner::Win32 => win32::shape(serial),
             #[cfg(all(target_os = "linux", feature = "x11"))]
             Inner::X11(c) => c.shape(serial),
+            #[cfg(not(any(windows, all(target_os = "linux", feature = "x11"))))]
+            _ => None,
         }
     }
 
@@ -147,6 +155,8 @@ impl CursorSource for CursorPoller {
             #[cfg(all(target_os = "linux", feature = "x11"))]
             Some(Inner::X11(_)) => "xfixes-cursor",
             None => "none",
+            #[cfg(not(any(windows, all(target_os = "linux", feature = "x11"))))]
+            _ => "none",
         }
     }
 }
@@ -160,11 +170,11 @@ mod win32 {
     use super::{CursorBitmap, CursorPosition};
 
     use windows_sys::Win32::Graphics::Gdi::{
-        CreateCompatibleDC, DeleteDC, DeleteObject, GetDC, GetDIBits, ReleaseDC, BITMAPINFO,
-        BITMAPINFOHEADER, DIB_RGB_COLORS,
+        DeleteObject, GetDC, GetDIBits, ReleaseDC, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS,
+        HBITMAP, RGBQUAD,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        GetCursorInfo, GetIconInfo, CURSORINFO, CURSOR_SHOWING, HBITMAP, HCURSOR, ICONINFO,
+        GetCursorInfo, GetIconInfo, CURSORINFO, CURSOR_SHOWING, HCURSOR, ICONINFO,
     };
 
     /// `Ok((hcursor, (x, y), visible))` or `None` when the call fails
@@ -250,7 +260,12 @@ mod win32 {
         let hdc = unsafe { GetDC(std::ptr::null_mut()) };
         let mut bmi = BITMAPINFO {
             bmiHeader: header(0, 0),
-            bmiColors: [Default::default()],
+            bmiColors: [RGBQUAD {
+                rgbBlue: 0,
+                rgbGreen: 0,
+                rgbRed: 0,
+                rgbReserved: 0,
+            }],
         };
         // Ask for the header only: `biHeight` of the (possibly double-high)
         // mask bitmap.
@@ -300,7 +315,12 @@ mod win32 {
         let mut rgba = vec![0u8; (w as usize) * (h as usize) * 4];
         let mut bmi = BITMAPINFO {
             bmiHeader: header(w as i32, h as i32),
-            bmiColors: [Default::default()],
+            bmiColors: [RGBQUAD {
+                rgbBlue: 0,
+                rgbGreen: 0,
+                rgbRed: 0,
+                rgbReserved: 0,
+            }],
         };
         let hdc = unsafe { GetDC(std::ptr::null_mut()) };
         let ok = unsafe {
@@ -322,12 +342,12 @@ mod win32 {
         // zero alpha channel — synthesize 255 wherever the pixel is not
         // fully black.
         let mut any_alpha = false;
-        for px in rgba.chunks_exact_mut(4) {
+        for px in rgba.as_chunks_mut::<4>().0 {
             px.swap(0, 2);
             any_alpha |= px[3] != 0;
         }
         if !any_alpha {
-            for px in rgba.chunks_exact_mut(4) {
+            for px in rgba.as_chunks_mut::<4>().0 {
                 if px[0] != 0 || px[1] != 0 || px[2] != 0 {
                     px[3] = 255;
                 }
@@ -348,7 +368,12 @@ mod win32 {
                 biHeight: -(full_h as i32), // top-down
                 ..header(w as i32, full_h as i32)
             },
-            bmiColors: [Default::default()],
+            bmiColors: [RGBQUAD {
+                rgbBlue: 0,
+                rgbGreen: 0,
+                rgbRed: 0,
+                rgbReserved: 0,
+            }],
         };
         let hdc = unsafe { GetDC(std::ptr::null_mut()) };
         let ok = unsafe {
