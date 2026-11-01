@@ -40,6 +40,10 @@ struct DxgiOutput {
     name: String,
     /// `true` when the monitor contains the origin (taskbar / primary).
     primary: bool,
+    /// Top-left of the monitor in virtual-screen coordinates (cursor
+    /// positions are global and get translated by this).
+    origin_x: i32,
+    origin_y: i32,
     w: u32,
     h: u32,
 }
@@ -91,6 +95,8 @@ fn enumerate_outputs() -> Result<Vec<(IDXGIOutput, DxgiOutput)>, CaptureError> {
                     DxgiOutput {
                         name,
                         primary,
+                        origin_x: rc.left,
+                        origin_y: rc.top,
                         w: (rc.right - rc.left).max(0) as u32,
                         h: (rc.bottom - rc.top).max(0) as u32,
                     },
@@ -325,6 +331,13 @@ impl ScreenCapture for DxgiCapture {
             self.ensure_duplication()?;
         }
         Ok(changed)
+    }
+
+    fn origin(&mut self) -> (i32, i32) {
+        self.outputs
+            .get(self.selected)
+            .map(|o| (o.origin_x, o.origin_y))
+            .unwrap_or((0, 0))
     }
 
     fn backend(&self) -> &'static str {

@@ -198,6 +198,25 @@ pub enum ClientEvent {
     TunnelClosed {
         id: u32,
     },
+    /// Host → viewer: the remote pointer changed appearance. Cache the
+    /// bitmap by `id` until the next shape with the same id arrives.
+    CursorShape {
+        id: u64,
+        width: u32,
+        height: u32,
+        hotspot_x: u32,
+        hotspot_y: u32,
+        rgba: Vec<u8>,
+    },
+    /// Host → viewer: the remote pointer moved. `(x, y)` is the hotspot in
+    /// native streamed-screen pixels; the overlay is hidden when the
+    /// position is outside the frame or `visible` is false.
+    CursorPos {
+        x: i32,
+        y: i32,
+        visible: bool,
+        shape_id: u64,
+    },
     Notice(String),
     Closed(String),
 }
@@ -995,6 +1014,24 @@ impl SessionClient {
             }
             Message::Bye(reason) => {
                 return Some(ClientEvent::Closed(format!("host closed: {reason:?}")));
+            }
+            Message::CursorShape(c) => {
+                let _ = self.events.send(ClientEvent::CursorShape {
+                    id: c.id,
+                    width: c.width,
+                    height: c.height,
+                    hotspot_x: c.hotspot_x,
+                    hotspot_y: c.hotspot_y,
+                    rgba: c.rgba,
+                });
+            }
+            Message::CursorPos(p) => {
+                let _ = self.events.send(ClientEvent::CursorPos {
+                    x: p.x,
+                    y: p.y,
+                    visible: p.visible,
+                    shape_id: p.shape_id,
+                });
             }
             other => {
                 // File-transfer machinery (replies go straight to the wire).

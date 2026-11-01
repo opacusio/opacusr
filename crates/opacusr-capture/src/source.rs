@@ -43,6 +43,13 @@ pub trait ScreenCapture: Send {
             Err(CaptureError::Unsupported)
         }
     }
+    /// Top-left of the captured region in global screen coordinates.
+    /// Cursor positions ([`crate::cursor::CursorPosition`]) are global;
+    /// the host subtracts this origin so the viewer gets coordinates
+    /// relative to the streamed frame. Single-monitor captures are `(0,0)`.
+    fn origin(&mut self) -> (i32, i32) {
+        (0, 0)
+    }
     /// Human-readable backend name for logs.
     fn backend(&self) -> &'static str {
         "unknown"

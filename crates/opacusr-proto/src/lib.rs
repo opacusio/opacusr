@@ -31,7 +31,11 @@ pub use signal::*;
 /// v5 (0.6.0): `SessionAccept` gained a `tunnel` flag; new messages
 /// `TunnelOpen`/`TunnelOpened`/`TunnelData`/`TunnelClose` for SSH-style
 /// TCP port forwarding through the session.
-pub const PROTO_VERSION: u32 = 5;
+///
+/// v6 (0.6.0): new host→viewer messages `CursorShape`/`CursorPos` — the
+/// host streams the remote pointer (bitmap + hotspot + position) so
+/// viewers always see it, even where capture APIs drop the cursor.
+pub const PROTO_VERSION: u32 = 6;
 
 /// Application name used in handshakes and logs.
 pub const APP_NAME: &str = "OpacusR";
@@ -184,5 +188,48 @@ mod tests {
     fn platform_current_is_sane() {
         // The sandbox/test target is a desktop platform.
         assert_ne!(Platform::current(), Platform::Other);
+    }
+
+    #[test]
+    fn cursor_messages_round_trip_and_route_to_control() {
+        use crate::framing::{decode_message, encode_message};
+        use crate::message::{CursorPos, CursorShape};
+
+        let shape = Message::CursorShape(CursorShape {
+            id: 7,
+            width: 10,
+            height: 14,
+            hotspot_x: 0,
+            hotspot_y: 0,
+            rgba: vec![128; 10 * 14 * 4],
+        });
+        let back = decode_message(&encode_message(&shape).unwrap()).unwrap();
+        match back {
+            Message::CursorShape(s) => {
+                assert_eq!(
+                    (s.id, s.width, s.height, s.hotspot_x, s.hotspot_y),
+                    (7, 10, 14, 0, 0)
+                );
+                assert_eq!(s.rgba.len(), 10 * 14 * 4);
+            }
+            other => panic!("expected CursorShape, got {other:?}"),
+        }
+
+        // Negative positions (pointer on another monitor) survive.
+        let pos = Message::CursorPos(CursorPos {
+            x: -5,
+            y: 2100,
+            visible: false,
+            shape_id: 7,
+        });
+        let back = decode_message(&encode_message(&pos).unwrap()).unwrap();
+        match back {
+            Message::CursorPos(p) => {
+                assert_eq!((p.x, p.y, p.visible, p.shape_id), (-5, 2100, false, 7));
+            }
+            other => panic!("expected CursorPos, got {other:?}"),
+        }
+        assert_eq!(pos.channel(), Channel::Control);
+        assert_eq!(shape.channel(), Channel::Control);
     }
 }

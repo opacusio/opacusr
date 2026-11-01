@@ -411,6 +411,36 @@ pub struct TunnelClose {
     pub id: u32,
 }
 
+/// Host → viewer: one cursor bitmap (shape). Sent when the remote pointer
+/// changes appearance (arrow → text caret → resize → busy…); the viewer
+/// caches shapes by `id` and only needs the latest one per [`CursorPos`].
+/// `rgba` is straight-alpha `width * height * 4` bytes; `hotspot_x/y` is
+/// the pixel inside the bitmap that sits on the cursor position.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CursorShape {
+    pub id: u64,
+    pub width: u32,
+    pub height: u32,
+    pub hotspot_x: u32,
+    pub hotspot_y: u32,
+    pub rgba: Vec<u8>,
+}
+
+/// Host → viewer: cursor position (hotspot in *streamed-screen* pixel
+/// coordinates, so it lines up with `VideoFrame` geometry). Coordinates may
+/// be negative / out of range when the pointer sits on a monitor that is
+/// not being streamed — the viewer hides the overlay then. `shape_id`
+/// refers to a previously sent [`CursorShape`]; when the viewer has not
+/// seen it yet the position is applied but nothing is drawn until the
+/// shape arrives.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct CursorPos {
+    pub x: i32,
+    pub y: i32,
+    pub visible: bool,
+    pub shape_id: u64,
+}
+
 /// Reason a session ended.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ByeReason {
@@ -483,6 +513,12 @@ pub enum Message {
     TunnelOpened(TunnelOpened),
     TunnelData(TunnelData),
     TunnelClose(TunnelClose),
+
+    // --- remote cursor ---
+    /// Host → viewer: pointer appearance changed.
+    CursorShape(CursorShape),
+    /// Host → viewer: pointer moved (hotspot position in screen pixels).
+    CursorPos(CursorPos),
 }
 
 impl Message {

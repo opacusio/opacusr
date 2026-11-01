@@ -10,6 +10,7 @@ use tokio::sync::mpsc;
 use opacusr_agent::session::{HostCommand, HostEvent, SessionConfig, SessionHost};
 use opacusr_agent::tunnel::TunnelPolicy;
 use opacusr_capture::test::TestSource;
+use opacusr_capture::TestCursor;
 use opacusr_client::session::{ClientEvent, Command, SessionClient, SessionSettings};
 use opacusr_input::{InputError, InputInjector, RecordingInjector};
 use opacusr_proto::message::{MouseButtonId, OpKey};
@@ -122,6 +123,7 @@ async fn full_session_over_tcp() {
             session,
             Box::new(TestSource::new(320, 200)),
             Box::new(injector),
+            Box::new(TestCursor::new((320, 200))),
         )
         .await;
     });
@@ -184,6 +186,51 @@ async fn full_session_over_tcp() {
     })
     .await
     .unwrap();
+
+    // Cursor overlay: the synthetic test cursor pushes a shape once per
+    // serial change, then positions referencing that shape.
+    let cursor_seen = tokio::time::timeout(Duration::from_secs(15), async {
+        let mut shape_seen: Option<u64> = None;
+        loop {
+            match events.recv().await.unwrap() {
+                ClientEvent::CursorShape {
+                    id,
+                    width,
+                    height,
+                    hotspot_x,
+                    hotspot_y,
+                    rgba,
+                } => {
+                    assert_eq!(
+                        rgba.len(),
+                        (width * height * 4) as usize,
+                        "shape payload must be width*height*4 RGBA bytes"
+                    );
+                    assert!(hotspot_x < width && hotspot_y < height);
+                    shape_seen = Some(id);
+                }
+                ClientEvent::CursorPos {
+                    x,
+                    y,
+                    visible,
+                    shape_id,
+                } => {
+                    assert!(visible, "the test cursor is always visible");
+                    if Some(shape_id) == shape_seen {
+                        return (x, y);
+                    }
+                }
+                _ => {}
+            }
+        }
+    })
+    .await
+    .unwrap();
+    let (cx, cy) = cursor_seen;
+    assert!(
+        (0..320).contains(&cx) && (0..200).contains(&cy),
+        "cursor position {cx},{cy} outside the 320x200 test screen"
+    );
 
     // Input: mouse move is executed on the host.
     cmd_tx.send(Command::MouseMove { x: 42, y: 24 }).unwrap();
@@ -407,6 +454,7 @@ async fn totp_second_factor_is_enforced() {
                 session,
                 Box::new(TestSource::new(320, 200)),
                 Box::new(opacusr_input::RecordingInjector::new()),
+                Box::new(TestCursor::new((320, 200))),
             )
             .await;
         }
@@ -504,6 +552,7 @@ async fn session_recording_writes_mp4() {
             session,
             Box::new(TestSource::new(320, 200)),
             Box::new(opacusr_input::RecordingInjector::new()),
+            Box::new(TestCursor::new((320, 200))),
         ));
         // The host should announce the recording file.
         let mut announced = false;
@@ -652,6 +701,7 @@ async fn tcp_tunnel_echo_roundtrip() {
             session,
             Box::new(TestSource::new(320, 200)),
             Box::new(opacusr_input::RecordingInjector::new()),
+            Box::new(TestCursor::new((320, 200))),
         )
         .await;
     });
@@ -802,6 +852,7 @@ async fn tunnel_refused_in_view_only() {
             session,
             Box::new(TestSource::new(320, 200)),
             Box::new(opacusr_input::RecordingInjector::new()),
+            Box::new(TestCursor::new((320, 200))),
         )
         .await;
     });

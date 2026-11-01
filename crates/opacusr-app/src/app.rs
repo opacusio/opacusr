@@ -25,6 +25,14 @@ enum Tab {
     Host,
 }
 
+/// One cached remote-cursor shape (bitmap + geometry for the overlay).
+pub struct RemoteCursor {
+    pub texture: TextureHandle,
+    /// Hotspot inside the bitmap, in bitmap pixels.
+    pub hotspot: (f32, f32),
+    pub size: (f32, f32),
+}
+
 /// One live viewer session (UI-side handle).
 pub struct SessionHandle {
     pub commands: UnboundedSender<Command>,
@@ -80,6 +88,11 @@ pub struct SessionHandle {
     pub panel_stats: bool,
     /// (arrival, wire bytes) samples for the fps/bitrate window.
     pub stats_win: std::collections::VecDeque<(std::time::Instant, u64)>,
+    /// Remote cursor shapes seen this session (bounded cache).
+    pub cursor_shapes: std::collections::HashMap<u64, RemoteCursor>,
+    /// Latest cursor position: (x, y, visible, shape id) in native
+    /// streamed-screen pixels.
+    pub cursor_pos: Option<(i32, i32, bool, u64)>,
     pub status: String,
 }
 
@@ -123,6 +136,8 @@ impl SessionHandle {
             stream_res: (0, 0),
             panel_stats: false,
             stats_win: std::collections::VecDeque::new(),
+            cursor_shapes: std::collections::HashMap::new(),
+            cursor_pos: None,
             status: "connecting…".into(),
         }
     }
@@ -668,6 +683,46 @@ impl eframe::App for App {
                 }
                 ClientEvent::Chat { text, .. } => sess.chat.push(format!("[host] {text}")),
                 ClientEvent::Rtt(rtt) => sess.rtt = rtt,
+                ClientEvent::CursorShape {
+                    id,
+                    width,
+                    height,
+                    hotspot_x,
+                    hotspot_y,
+                    rgba,
+                } => {
+                    if width == 0 || height == 0 {
+                        continue;
+                    }
+                    let img = egui::ColorImage::from_rgba_unmultiplied(
+                        [width as usize, height as usize],
+                        &rgba,
+                    );
+                    let tex =
+                        ctx.load_texture(format!("cursor-{id}"), img, egui::TextureOptions::LINEAR);
+                    sess.cursor_shapes.insert(
+                        id,
+                        RemoteCursor {
+                            texture: tex,
+                            hotspot: (hotspot_x as f32, hotspot_y as f32),
+                            size: (width as f32, height as f32),
+                        },
+                    );
+                    // Cursors change shape rarely; a small cache covers
+                    // arrow/caret/hand/resign… plus headroom. Bounded so a
+                    // pathological host cannot grow it forever.
+                    if sess.cursor_shapes.len() > 32 {
+                        sess.cursor_shapes.clear();
+                    }
+                }
+                ClientEvent::CursorPos {
+                    x,
+                    y,
+                    visible,
+                    shape_id,
+                } => {
+                    sess.cursor_pos = Some((x, y, visible, shape_id));
+                }
                 ClientEvent::FtStarted { id, name, total } => {
                     sess.uploads.push((id, name, 0, total));
                 }

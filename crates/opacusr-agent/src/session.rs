@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use tokio::sync::mpsc;
 
-use opacusr_capture::{resize_nearest, ScreenCapture};
+use opacusr_capture::{resize_nearest, CursorSource, ScreenCapture};
 use opacusr_codec::make_pair;
 use opacusr_input::clipboard::ClipboardHandle;
 use opacusr_input::InputInjector;
@@ -128,13 +128,14 @@ pub struct SessionHost {
 }
 
 impl SessionHost {
-    /// Drive the session to completion. `capture` and `injector` are
-    /// created by the caller so tests can plug mocks in.
+    /// Drive the session to completion. `capture`, `injector` and `cursor`
+    /// are created by the caller so tests can plug mocks in.
     pub async fn run(
         self,
         mut session: SecureSession,
         mut capture: Box<dyn ScreenCapture>,
         mut injector: Box<dyn InputInjector>,
+        mut cursor: Box<dyn CursorSource>,
     ) {
         let cfg = self.cfg;
         let events = self.events;
@@ -170,6 +171,7 @@ impl SessionHost {
             &mut session,
             capture.as_mut(),
             injector.as_mut(),
+            cursor.as_mut(),
             &mut recorder,
         )
         .await;
@@ -204,6 +206,7 @@ impl SessionHost {
 /// Clipboard size cap for viewer → host transfers.
 const CLIPBOARD_MAX_BYTES: usize = opacusr_input::clipboard::CLIPBOARD_MAX_BYTES;
 
+#[allow(clippy::too_many_arguments)]
 async fn run_session(
     cfg: &SessionConfig,
     events: &mpsc::UnboundedSender<HostEvent>,
@@ -211,6 +214,7 @@ async fn run_session(
     session: &mut SecureSession,
     capture: &mut dyn ScreenCapture,
     injector: &mut dyn InputInjector,
+    cursor: &mut dyn CursorSource,
     recorder: &mut Option<SessionRecorder>,
 ) -> Result<String, TransportError> {
     // --- handshake ---------------------------------------------------------
@@ -303,6 +307,11 @@ async fn run_session(
     let mut paused = false;
     let mut seq: u64 = 0;
 
+    // Cursor overlay state: the shape is pushed once per serial change,
+    // the position only when it actually moves (keeps idle links quiet).
+    let mut cursor_serial: Option<u64> = None;
+    let mut last_cursor: Option<(i32, i32, bool)> = None;
+
     // Clipboard sync state (echo suppression).
     let mut clipboard = if cfg.clipboard_sync {
         ClipboardHandle::spawn()
@@ -330,6 +339,42 @@ async fn run_session(
         tokio::select! {
             _ = ticker.tick() => {
                 if paused { continue; }
+
+                // Cursor overlay: independent of the capture result, so the
+                // pointer keeps tracking even while frames error out.
+                // Positions are native streamed-screen pixels (the viewer
+                // scales the whole frame to fit, so quality scaling does
+                // not affect them).
+                if let Some(pos) = cursor.poll() {
+                    let (ox, oy) = capture.origin();
+                    let (cx, cy) = (pos.x - ox, pos.y - oy);
+                    if cursor_serial != Some(pos.serial) {
+                        if let Some(sh) = cursor.shape(pos.serial) {
+                            session.send_msg(&Message::CursorShape(message::CursorShape {
+                                id: pos.serial,
+                                width: sh.width,
+                                height: sh.height,
+                                hotspot_x: sh.hotspot_x,
+                                hotspot_y: sh.hotspot_y,
+                                rgba: sh.rgba,
+                            })).await?;
+                        }
+                        // Mark as seen even on failure: retrying every
+                        // frame would spam the wire for missing shapes.
+                        cursor_serial = Some(pos.serial);
+                    }
+                    let next = (cx, cy, pos.visible);
+                    if last_cursor.as_ref() != Some(&next) {
+                        last_cursor = Some(next);
+                        session.send_msg(&Message::CursorPos(message::CursorPos {
+                            x: cx,
+                            y: cy,
+                            visible: pos.visible,
+                            shape_id: pos.serial,
+                        })).await?;
+                    }
+                }
+
                 match capture.capture() {
                     Ok(frame) => {
                         cur_w = frame.width;

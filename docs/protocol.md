@@ -172,6 +172,15 @@ SSH-style local forwarding: the viewer binds `127.0.0.1:<local port>`; every loc
 
 The host gates every open by its `tunnel` policy: `off` refuses everything, `loopback` (default) requires the target to resolve to a loopback address, `any` is unrestricted. View-only sessions never announce or accept tunnels (`SessionAccept.tunnel`). Closing follows a TCP-style half-close: the side that finishes first sends `TunnelClose`, the peer keeps draining until its own EOF arrives (pump tasks stay alive until both halves are done).
 
+### Remote cursor (v0.6+, proto v6)
+
+Screen capture APIs drop the pointer, so the host polls it separately (Win32 `GetCursorInfo`/`GetIconInfo`, X11 XFixes; unavailable under native Wayland) and streams it as its own overlay: `CursorShape` carries the bitmap once per appearance change (arrow → caret → resize…), `CursorPos` carries the hotspot position — both on the Control channel. Positions are in native streamed-screen pixels (the same space as `SessionAccept.screen_w/h`), possibly outside the frame when the pointer sits on a monitor that is not being streamed; viewers then hide the overlay. Hosts without a cursor backend simply never send these messages.
+
+| Message | Direction | Fields |
+| --- | --- | --- |
+| `CursorShape` | host→viewer | id (shape serial), width, height, hotspot x/y, RGBA bytes |
+| `CursorPos` | host→viewer | x, y (hotspot, i32), visible, shape id |
+
 ## 5. Versioning
 
 - `proto_version` (u32) in `Hello` must match exactly for now; incompatible bumps will be accompanied by a negotiated fallback in a future release.

@@ -167,6 +167,35 @@ pub fn session_ui(ctx: &Context, s: &mut SessionHandle, cfg: &mut AgentConfig) {
             egui::Stroke::new(1.0_f32, Color32::from_gray(90)),
         );
 
+        // Remote cursor overlay: the host's pointer, drawn on top of the
+        // video (capture APIs drop the cursor, so it travels separately).
+        // The hotspot sits exactly on the reported position; the overlay
+        // is hidden while the pointer is outside the streamed monitor or
+        // logically hidden on the host.
+        if let Some((cx, cy, visible, shape_id)) = s.cursor_pos {
+            if visible && rw > 0.0 {
+                if let Some(cur) = s.cursor_shapes.get(&shape_id) {
+                    let scale = rect.width() / rw;
+                    let top_left = egui::pos2(
+                        rect.min.x + cx as f32 * scale - cur.hotspot.0 * scale,
+                        rect.min.y + cy as f32 * scale - cur.hotspot.1 * scale,
+                    );
+                    let crect = egui::Rect::from_min_size(
+                        top_left,
+                        egui::vec2(cur.size.0 * scale, cur.size.1 * scale),
+                    );
+                    if crect.intersects(rect) {
+                        ui.painter().image(
+                            cur.texture.id(),
+                            crect,
+                            egui::Rect::from_min_max(egui::Pos2::ZERO, egui::Pos2::new(1.0, 1.0)),
+                            Color32::WHITE,
+                        );
+                    }
+                }
+            }
+        }
+
         capture_input(ui, &response, rect, s);
     });
 }

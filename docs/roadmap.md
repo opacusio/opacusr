@@ -15,7 +15,7 @@ Where OpacusR is heading. Items are grouped by milestone; security items from [s
 
 - **Audio polish**: Linux system-sound capture without manual device picking (PipeWire monitor), Windows per-device selection, viewer-side volume/mute, WASAPI loopback auto-recovery after default-device changes.
 - **Wayland hardening**: promote the PipeWire backend to default after field testing; multi-monitor portal dialogs; DmaBuf zero-copy path.
-- **Cursor rendering**: compositor cursor overlay (DXGI pointer shapes / X11 cursor events) so remote viewers always see the pointer.
+- **Cursor rendering**: ~~compositor cursor overlay (DXGI pointer shapes / X11 cursor events) so remote viewers always see the pointer~~ **done (v0.6.0 WIP)** — separate `CursorShape`/`CursorPos` messages (Win32 `GetCursorInfo`/`GetIconInfo`, X11 XFixes; native Wayland still unsupported — the PipeWire cursor metadata path is the follow-up).
 - **Session UX**: fullscreen hotkeys, quality presets, session stats panel (tier, encode time, packet loss).
 - **VP9/AV1 evaluation** behind the existing codec traits (web-optimized fallback for slow links).
 - **H.264 incremental/region encode** for lower CPU on static screens (dirty-rect driven).
@@ -56,7 +56,7 @@ Design in [serverless.md](serverless.md); goal: a working connection with **0 �
 Full matrix in [comparison.md](comparison.md). Top of the list:
 
 - **P0**: ~~lock host input during a session~~ (done, v0.5.0); ~~address book + recent connections~~ (done, v0.6.0 WIP); ~~drag-and-drop files~~ (done: both directions + file pickers; folder drops → P1); session stats panel and fullscreen hotkeys (M1).
-- **P1**: ~~TOTP second factor for unattended access~~ (done, v0.6.0 WIP — RFC 6238, lockout-integrated); ~~opt-in session recording~~ (done, v0.6.0 WIP — host-side MP4, viewer REC indicator); TCP tunneling over the session channel; reboot-and-reconnect (needs service mode); proxy support for signaling.
+- **P1**: ~~TOTP second factor for unattended access~~ (done, v0.6.0 WIP — RFC 6238, lockout-integrated); ~~opt-in session recording~~ (done, v0.6.0 WIP — host-side MP4, viewer REC indicator); ~~TCP tunneling over the session channel~~ (done, v0.6.0 WIP — SSH-style local forwarding with loopback-safe policies); reboot-and-reconnect (needs service mode); proxy support for signaling.
 - **P2**: privacy mode (dummy display driver — research); remote printing (evaluate); mobile viewer (M4); in-app auto-update install.
 
 ## Always

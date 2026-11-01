@@ -12,6 +12,7 @@
 //! * [`test::TestSource`] — deterministic animated pattern used by tests
 //!   and `opacusr-agent --demo` (no real screen required).
 
+pub mod cursor;
 pub mod source;
 
 #[cfg(feature = "x11")]
@@ -36,6 +37,9 @@ pub mod stub;
 
 pub mod test;
 
+pub use cursor::{
+    platform_cursor, CursorBitmap, CursorPoller, CursorPosition, CursorSource, TestCursor,
+};
 pub use source::{ScreenCapture, CAPTURE_FPS_DEFAULT};
 
 /// True when the process looks like it runs inside a Wayland session:

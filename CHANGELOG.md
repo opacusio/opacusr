@@ -8,6 +8,18 @@ SemVer-ish (breaking protocol changes bump the minor until 1.0).
 
 ### Added
 
+- **Remote cursor overlay** — viewers now see the host's pointer:
+  screen capture APIs drop the cursor, so the host polls it separately
+  (Win32 `GetCursorInfo` + `GetIconInfo`/`GetDIBits` on Windows, XFixes
+  on X11) and streams the pointer as its own messages — `CursorShape`
+  (bitmap + hotspot, once per appearance change) and `CursorPos`
+  (hotspot position, only when it moves; positions are native streamed-
+  screen pixels and may sit outside the frame when the pointer is on
+  another monitor, in which case the viewer hides the overlay). The
+  viewer caches shapes (bounded) and draws the cursor on top of the
+  video with the hotspot aligned to the reported position. Native
+  Wayland sessions have no cursor backend yet and degrade silently;
+  `--demo` ships a synthetic moving cursor. `PROTO_VERSION` bumps to 6.
 - **TCP tunneling (SSH-style local forwarding)** — a viewer can forward
   a local port to a host-side target (`🔗` panel in the viewer sidebar:
   local port → target host:port; apps connect to `127.0.0.1:<local

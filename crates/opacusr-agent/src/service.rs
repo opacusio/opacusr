@@ -554,7 +554,14 @@ impl AgentService {
             }
         };
         let injector: Box<dyn InputInjector> = opacusr_input::platform_injector();
-        tokio::spawn(host.run(session, capture, injector));
+        // Cursor overlay source: synthetic in demo mode, platform poller
+        // otherwise (backends without support simply never send updates).
+        let cursor: Box<dyn opacusr_capture::CursorSource> = if self.demo {
+            Box::new(opacusr_capture::TestCursor::new((1280, 720)))
+        } else {
+            opacusr_capture::platform_cursor()
+        };
+        tokio::spawn(host.run(session, capture, injector, cursor));
     }
 
     /// Direct LAN listener: no signaling, password still required.
