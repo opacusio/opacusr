@@ -171,6 +171,13 @@ The viewer enters the same URL in its endpoint list (GUI settings or
 Named tunnels (free Cloudflare account) give a stable hostname instead of
 the per-run random one.
 
+> **Verified (v0.5.0):** `opacusr-agent run --signal-listen --demo` behind a
+> quick tunnel answers `GET /health` through the public URL with
+> `opacusr-server 0.5.0 — peers: 1`. Two practical notes: the first request
+> after the tunnel prints its URL can take a few seconds while the edge
+> connection registers, and on networks where outbound UDP is blocked add
+> `--protocol http2` (default QUIC over UDP/7844 then stalls; http2 rides TCP).
+
 **Tailscale (free personal plan, nothing public):**
 
 ```bash
