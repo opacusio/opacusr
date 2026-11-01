@@ -105,6 +105,8 @@ async fn full_session_over_tcp() {
             audio_device: String::new(),
             lock_input: false,
             totp_secret: None,
+            record: false,
+            record_dir: std::env::temp_dir(),
             auth_gate: Some(Arc::new(AuthGate::new(AuthGateConfig::default()))),
         };
         let session = SecureSession::new(Box::new(TcpTransport::from_stream(sock)), None);
@@ -386,6 +388,8 @@ async fn totp_second_factor_is_enforced() {
                 audio_device: String::new(),
                 lock_input: false,
                 totp_secret: Some(TOTP_SECRET.into()),
+                record: false,
+                record_dir: std::env::temp_dir(),
                 auth_gate: None,
             };
             let (ev_tx, _ev_rx) = mpsc::unbounded_channel();
@@ -446,4 +450,139 @@ async fn totp_second_factor_is_enforced() {
     drop(runner);
 
     host_task.await.unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// Opt-in session recording (host-side MP4)
+// ---------------------------------------------------------------------------
+
+/// Host with `record = true`: the viewer is told the session is recorded
+/// (`Connected.recording`) and the host leaves a parseable MP4 with the
+/// streamed H.264 samples in `record_dir`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn session_recording_writes_mp4() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let record_dir = tempfile::tempdir().expect("record dir");
+
+    let dir_for_host = record_dir.path().to_path_buf();
+    let host_task = tokio::spawn(async move {
+        let (sock, _) = listener.accept().await.unwrap();
+        let cfg = SessionConfig {
+            password: Some(PASSWORD.into()),
+            display_name: "e2e-host".into(),
+            fps: 60,
+            jpeg_quality: 80,
+            scale_percent: 100,
+            download_dir: std::env::temp_dir(),
+            auto_accept_files: true,
+            codec: opacusr_agent::session::CodecChoice::Auto,
+            view_only: false,
+            clipboard_sync: true,
+            adaptive_quality: false,
+            audio: false,
+            audio_device: String::new(),
+            lock_input: false,
+            totp_secret: None,
+            record: true,
+            record_dir: dir_for_host,
+            auth_gate: None,
+        };
+        let (ev_tx, mut ev_rx) = mpsc::unbounded_channel();
+        let (_cmd_tx, cmd_rx) = mpsc::unbounded_channel();
+        let session = SecureSession::new(Box::new(TcpTransport::from_stream(sock)), None);
+        let host = SessionHost {
+            cfg,
+            events: ev_tx,
+            commands: cmd_rx,
+        };
+        let host = tokio::spawn(host.run(
+            session,
+            Box::new(TestSource::new(320, 200)),
+            Box::new(opacusr_input::RecordingInjector::new()),
+        ));
+        // The host should announce the recording file.
+        let mut announced = false;
+        let _ = tokio::time::timeout(Duration::from_secs(10), async {
+            while let Some(ev) = ev_rx.recv().await {
+                if let HostEvent::Notice(text) = ev {
+                    if text.starts_with("recording →") {
+                        break;
+                    }
+                }
+            }
+        })
+        .await
+        .map(|_| announced = true);
+        assert!(announced, "host must announce the recording file");
+
+        let _ = host.await;
+    });
+
+    let (client, mut events) = SessionClient::connect_direct(
+        &addr,
+        SessionSettings {
+            password: PASSWORD.into(),
+            display_name: "e2e-viewer".into(),
+            download_dir: std::env::temp_dir(),
+            auto_accept_files: true,
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("connect");
+
+    // The command sender must stay alive: the client treats a closed
+    // command channel as "ui closed" and ends the session.
+    let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel();
+    let runner = tokio::spawn(client.run(cmd_rx));
+    let ev = tokio::time::timeout(Duration::from_secs(15), events.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let ClientEvent::Connected { recording, .. } = ev else {
+        panic!("expected Connected, got {ev:?}");
+    };
+    assert!(recording, "viewer must be told the session is recorded");
+
+    // Let some frames flow so the recorder has samples, then hang up.
+    // (Non-frame events like Rtt may interleave — count Frame only.)
+    let mut frames = 0;
+    while frames < 3 {
+        let ev = tokio::time::timeout(Duration::from_secs(15), events.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        if matches!(ev, ClientEvent::Frame { .. }) {
+            frames += 1;
+        }
+    }
+    drop(runner);
+    drop(cmd_tx);
+
+    // Wait for the host session to end so the recorder is finalized.
+    let ended = tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            if host_task.is_finished() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await;
+    assert!(ended.is_ok(), "host never finished");
+    host_task.await.unwrap();
+
+    // Exactly one MP4 in the record dir, with video samples muxed.
+    let files: Vec<_> = std::fs::read_dir(record_dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+    assert_eq!(files.len(), 1, "expected one recording, got {files:?}");
+    let file = std::fs::File::open(&files[0]).unwrap();
+    let mut reader = mp4::read_mp4(file).expect("recording must parse as MP4");
+    let n = reader.sample_count(1).expect("video track expected");
+    assert!(n >= 3, "expected several muxed frames, got {n}");
+    let s1 = reader.read_sample(1, 1).unwrap().unwrap();
+    assert!(s1.is_sync, "first sample must be a keyframe");
 }

@@ -8,6 +8,7 @@ pub mod config;
 pub mod keychain;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub mod pty;
+pub mod recording;
 pub mod service;
 pub mod session;
 

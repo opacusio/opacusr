@@ -8,6 +8,18 @@ SemVer-ish (breaking protocol changes bump the minor until 1.0).
 
 ### Added
 
+- **Opt-in session recording (host-side)** — a host checkbox
+  (`Host tab → Recording`) or `opacusr-agent --record` muxes every
+  accepted session to a timestamped MP4
+  (`<record_dir>/<date>-<time>-<peer>.mp4`, default
+  `~/OpacusR-Recordings`): the encoded H.264 bitstream is repackaged
+  Annex-B → AVCC and written sample-by-sample with real frame timings
+  (90 kHz timescale, no transcoding). Streams rotate to `-partN` files
+  on monitor-switch resolution changes; recording starts at the first
+  keyframe and stops fail-open (the session itself never breaks).
+  Viewers see a `● REC` indicator — `SessionAccept` gained a
+  `recording` flag, `PROTO_VERSION` bumps to 4. JPEG-codec sessions are
+  announced as unrecordable; audio is not muxed yet.
 - **TOTP two-factor authentication (optional)** — hosts can enable a
   second factor (`Host tab → Two-factor (TOTP) → Enable`): a random
   base32 secret is generated and copied to the clipboard

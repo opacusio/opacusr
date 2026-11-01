@@ -28,6 +28,7 @@ use opacusr_transport::secure::SecureSession;
 use opacusr_transport::TransportError;
 
 use crate::adaptive::AdaptiveQuality;
+use crate::recording::SessionRecorder;
 
 /// Tunables for one host session.
 #[derive(Debug, Clone)]
@@ -59,6 +60,10 @@ pub struct SessionConfig {
     /// Optional RFC 6238 secret (base32). When set, viewers must present
     /// a valid TOTP code in addition to the password.
     pub totp_secret: Option<String>,
+    /// Opt-in session recording (MP4, H.264 codec only).
+    pub record: bool,
+    /// Directory for session recording files.
+    pub record_dir: PathBuf,
     /// Shared auth-failure limiter (rate limiting + lockout). One instance
     /// per accept path (signaling / LAN), shared by all its sessions.
     pub auth_gate: Option<Arc<AuthGate>>,
@@ -150,6 +155,11 @@ impl SessionHost {
             None
         };
 
+        // Opt-in session recording: started inside `run_session` (the peer
+        // name for the file name comes from the handshake), finalized here
+        // on every exit path.
+        let mut recorder: Option<SessionRecorder> = None;
+
         let outcome = run_session(
             &cfg,
             &events,
@@ -157,8 +167,24 @@ impl SessionHost {
             &mut session,
             capture.as_mut(),
             injector.as_mut(),
+            &mut recorder,
         )
         .await;
+
+        if let Some(mut rec) = recorder.take() {
+            let path = rec.path();
+            match rec.finish() {
+                Ok(()) => {
+                    let _ = events.send(HostEvent::Notice(format!(
+                        "recording saved: {}",
+                        path.display()
+                    )));
+                }
+                Err(e) => {
+                    let _ = events.send(HostEvent::Notice(format!("recording: {e}")));
+                }
+            }
+        }
 
         // Politely close (best effort — the wire may already be gone).
         let _ = session.send_msg(&Message::Bye(ByeReason::Normal)).await;
@@ -182,6 +208,7 @@ async fn run_session(
     session: &mut SecureSession,
     capture: &mut dyn ScreenCapture,
     injector: &mut dyn InputInjector,
+    recorder: &mut Option<SessionRecorder>,
 ) -> Result<String, TransportError> {
     // --- handshake ---------------------------------------------------------
     let auth = host_handshake(
@@ -201,6 +228,31 @@ async fn run_session(
     let (mut cur_w, mut cur_h) = capture.size().unwrap_or((1280, 720));
     let screens = capture.screens();
     let codec = cfg.codec.resolve();
+
+    // Opt-in recording: MP4 muxing needs Annex-B parameter sets, so it is
+    // H.264-only in this release. Viewers are told via `SessionAccept`.
+    if cfg.record {
+        if codec == CodecId::H264 {
+            match SessionRecorder::start(&cfg.record_dir, &auth.viewer_hello.display_name, cfg.fps)
+            {
+                Ok(rec) => {
+                    let _ = events.send(HostEvent::Notice(format!(
+                        "recording → {}",
+                        rec.path().display()
+                    )));
+                    *recorder = Some(rec);
+                }
+                Err(e) => {
+                    let _ = events.send(HostEvent::Notice(format!("recording unavailable: {e}")));
+                }
+            }
+        } else {
+            let _ = events.send(HostEvent::Notice(
+                "recording needs the H.264 codec (set codec = \"h264\")".into(),
+            ));
+        }
+    }
+
     session
         .send_msg(&Message::SessionAccept(SessionAccept {
             screen_w: cur_w,
@@ -219,6 +271,7 @@ async fn run_session(
                 })
                 .collect(),
             audio_available: cfg.audio && cfg!(feature = "audio"),
+            recording: recorder.is_some(),
         }))
         .await?;
     // Coordinate space the viewer currently maps its input against.
@@ -280,6 +333,24 @@ async fn run_session(
                         match encoder.encode(&frame, quality) {
                             Ok(data) => {
                                 seq += 1;
+                                let still_on = recorder
+                                    .as_mut()
+                                    .map(|rec| {
+                                        rec.write(std::time::Instant::now(), &data, frame.width, frame.height)
+                                    })
+                                    .unwrap_or(true);
+                                if !still_on {
+                                    if let Some(mut rec) = recorder.take() {
+                                        let why = rec
+                                            .last_error()
+                                            .unwrap_or("unknown error")
+                                            .to_string();
+                                        let _ = rec.finish();
+                                        let _ = events.send(HostEvent::Notice(format!(
+                                            "recording stopped: {why}"
+                                        )));
+                                    }
+                                }
                                 let msg = Message::VideoFrame(message::VideoFrame {
                                     seq,
                                     width: frame.width,

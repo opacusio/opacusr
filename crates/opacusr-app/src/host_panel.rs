@@ -220,6 +220,40 @@ pub fn host_ui(ctx: &Context, app: &mut App) {
             });
             ui.end_row();
 
+            ui.label(egui::RichText::new("Recording").strong());
+            ui.horizontal(|ui| {
+                let before = app.config.record;
+                if ui
+                    .checkbox(&mut app.config.record, "Record sessions (MP4 video)")
+                    .changed()
+                {
+                    match app.config.save() {
+                        Ok(p) => {
+                            app.status_message = if app.config.record {
+                                format!(
+                                    "Session recording enabled ({}).",
+                                    app.config.record_dir.display()
+                                )
+                            } else {
+                                format!("Session recording disabled (saved {}).", p.display())
+                            };
+                        }
+                        Err(e) => {
+                            app.config.record = before;
+                            app.status_message = format!("Save failed: {e}");
+                        }
+                    }
+                }
+                if app.config.record {
+                    ui.label(
+                        egui::RichText::new(app.config.record_dir.display().to_string())
+                            .weak()
+                            .small(),
+                    );
+                }
+            });
+            ui.end_row();
+
             ui.label(egui::RichText::new("Download folder").strong());
             ui.label(app.config.download_dir.display().to_string());
             ui.end_row();

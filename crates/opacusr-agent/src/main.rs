@@ -42,6 +42,10 @@ enum Cmd {
         /// control (overrides config; view-only sessions never lock).
         #[arg(long)]
         lock_input: bool,
+        /// Record every accepted session to an MP4 video file
+        /// (overrides config; H.264 codec only).
+        #[arg(long)]
+        record: bool,
     },
     /// Set the unattended access password (OS keychain, file fallback).
     Passwd {
@@ -80,6 +84,7 @@ async fn main() -> anyhow::Result<()> {
             signal_listen,
             capture,
             lock_input,
+            record,
         } => {
             run(
                 server,
@@ -89,6 +94,7 @@ async fn main() -> anyhow::Result<()> {
                 signal_listen,
                 capture,
                 lock_input,
+                record,
             )
             .await
         }
@@ -110,6 +116,7 @@ fn load_cfg(server: Option<String>, name: Option<String>) -> AgentConfig {
     cfg
 }
 
+#[allow(clippy::too_many_arguments)] // CLI flags mirror the config surface 1:1
 async fn run(
     server: Option<String>,
     name: Option<String>,
@@ -118,6 +125,7 @@ async fn run(
     signal_listen: bool,
     capture: Option<String>,
     lock_input: bool,
+    record: bool,
 ) -> anyhow::Result<()> {
     let mut cfg = load_cfg(server, name);
     if let Some(c) = capture {
@@ -128,6 +136,9 @@ async fn run(
     }
     if lock_input {
         cfg.lock_input = true;
+    }
+    if record {
+        cfg.record = true;
     }
     let (tx, mut rx) = mpsc::unbounded_channel();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -147,6 +158,9 @@ async fn run(
         eprintln!(
             "Input lock: the host keyboard/mouse will be locked while a viewer has full control."
         );
+    }
+    if cfg.record {
+        eprintln!("Session recording: enabled ({}).", cfg.record_dir.display());
     }
 
     let service = AgentService {

@@ -154,6 +154,10 @@ pub struct SessionAccept {
     pub screens: Vec<ScreenInfo>,
     /// `true` = the host can stream audio on request (`AudioControl`).
     pub audio_available: bool,
+    /// `true` = the host records this session to a video file (opt-in
+    /// policy). The viewer UI should show a recording indicator.
+    #[serde(default)]
+    pub recording: bool,
 }
 
 /// One selectable monitor/screen of the host.

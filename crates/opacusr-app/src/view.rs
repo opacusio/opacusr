@@ -89,6 +89,15 @@ pub fn session_ui(ctx: &Context, s: &mut SessionHandle, cfg: &mut AgentConfig) {
             }
             ui.separator();
             ui.label(format!("RTT {} ms", s.rtt));
+            if s.recording {
+                ui.separator();
+                ui.label(
+                    egui::RichText::new("● REC")
+                        .color(egui::Color32::from_rgb(230, 80, 80))
+                        .strong(),
+                )
+                .on_hover_text("The host records this session to a video file.");
+            }
             ui.separator();
             ui.toggle_value(&mut s.panel_chat, "💬");
             ui.toggle_value(&mut s.panel_files, "📁");
@@ -371,6 +380,16 @@ fn stats_panel(ui: &mut egui::Ui, s: &mut SessionHandle) {
 
             ui.label("State");
             ui.label(if s.paused { "⏸ paused" } else { "streaming" });
+            ui.end_row();
+
+            ui.label("Recording");
+            if s.recording {
+                ui.label(
+                    egui::RichText::new("● on (host)").color(egui::Color32::from_rgb(230, 80, 80)),
+                );
+            } else {
+                ui.label("—");
+            }
             ui.end_row();
         });
     ui.separator();

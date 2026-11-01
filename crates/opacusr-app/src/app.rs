@@ -59,6 +59,8 @@ pub struct SessionHandle {
     pub codec: Option<CodecId>,
     /// Host's suggested fps (`SessionAccept.fps_hint`).
     pub fps_hint: u8,
+    /// `true` = the host records this session (opt-in policy).
+    pub recording: bool,
     /// Actual received frame rate (2 s sliding window).
     pub recv_fps: f32,
     /// Compressed wire bitrate, bytes per second (2 s sliding window).
@@ -99,6 +101,7 @@ impl SessionHandle {
             host_name: String::new(),
             codec: None,
             fps_hint: 0,
+            recording: false,
             recv_fps: 0.0,
             bitrate_bps: 0,
             stream_res: (0, 0),
@@ -586,6 +589,7 @@ impl eframe::App for App {
                     audio_available,
                     codec,
                     fps_hint,
+                    recording,
                     ..
                 } => {
                     sess.screen = screen;
@@ -594,6 +598,7 @@ impl eframe::App for App {
                     sess.audio_available = audio_available;
                     sess.codec = Some(codec);
                     sess.fps_hint = fps_hint;
+                    sess.recording = recording;
                     sess.selected_screen = 0;
                     sess.clipboard_sync = true;
                     sess.status = format!(

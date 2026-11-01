@@ -35,6 +35,7 @@ toml = { workspace = true }
 dirs = { workspace = true }
 rand = { workspace = true }
 sha2 = { workspace = true }
+mp4 = { workspace = true }
 rpassword = "7"
 
 # OS keychain for the unattended password. Windows/macOS use their native

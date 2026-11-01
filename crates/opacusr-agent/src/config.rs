@@ -136,6 +136,12 @@ pub struct AgentConfig {
     /// addition to the unattended password. Generate via the Host tab
     /// (`opacusr-crypto::totp::generate_secret`) or any base32 secret.
     pub totp_secret: Option<String>,
+    /// Opt-in session recording: every accepted session is muxed to a
+    /// timestamped MP4 under `record_dir` (H.264 codec only). Viewers are
+    /// told about active recording during the handshake.
+    pub record: bool,
+    /// Directory for session recordings (default `~/OpacusR-Recordings`).
+    pub record_dir: PathBuf,
 }
 
 impl Default for AgentConfig {
@@ -172,6 +178,10 @@ impl Default for AgentConfig {
             signal_listen_port: 8080,
             lock_input: false,
             totp_secret: None,
+            record: false,
+            record_dir: dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join("OpacusR-Recordings"),
         }
     }
 }

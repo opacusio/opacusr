@@ -42,7 +42,7 @@ Design in [serverless.md](serverless.md); goal: a working connection with **0 �
 - **Server v2**: multi-node signaling with a shared registry (Redis/Postgres), horizontal relay scaling, connection routing by region.
 - **TLS everywhere by default**: built-in `wss://` with ACME, or documented single-command reverse-proxy setup (Caddy).
 - **Metrics & admin UI**: Prometheus endpoint on the server, session/relay dashboards.
-- **Meeting-style features**: multi-viewer observation of one host (viewer count policies), session recording (opt-in, host-side).
+- **Meeting-style features**: multi-viewer observation of one host (viewer count policies), ~~session recording (opt-in, host-side)~~ (done, v0.6.0 WIP).
 - **Auto-update** channel for desktop clients (check-on-start + in-app "update available" notice; signed artifacts already produced by the release pipeline).
 
 ## M4 — Mobile & embed
@@ -56,7 +56,7 @@ Design in [serverless.md](serverless.md); goal: a working connection with **0 �
 Full matrix in [comparison.md](comparison.md). Top of the list:
 
 - **P0**: ~~lock host input during a session~~ (done, v0.5.0); ~~address book + recent connections~~ (done, v0.6.0 WIP); ~~drag-and-drop files~~ (done: both directions + file pickers; folder drops → P1); session stats panel and fullscreen hotkeys (M1).
-- **P1**: TOTP second factor for unattended access; opt-in session recording; TCP tunneling over the session channel; reboot-and-reconnect (needs service mode); proxy support for signaling.
+- **P1**: ~~TOTP second factor for unattended access~~ (done, v0.6.0 WIP — RFC 6238, lockout-integrated); ~~opt-in session recording~~ (done, v0.6.0 WIP — host-side MP4, viewer REC indicator); TCP tunneling over the session channel; reboot-and-reconnect (needs service mode); proxy support for signaling.
 - **P2**: privacy mode (dummy display driver — research); remote printing (evaluate); mobile viewer (M4); in-app auto-update install.
 
 ## Always

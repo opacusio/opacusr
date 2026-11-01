@@ -23,7 +23,11 @@ pub use signal::*;
 ///
 /// v3 (0.6.0): `AuthResponse` gained an optional `totp` code (RFC 6238
 /// second factor) — hosts that require 2FA reject responses without it.
-pub const PROTO_VERSION: u32 = 3;
+///
+/// v4 (0.6.0): `SessionAccept` gained a `recording` flag — hosts with
+/// opt-in session recording tell viewers their session is muxed to a
+/// video file.
+pub const PROTO_VERSION: u32 = 4;
 
 /// Application name used in handshakes and logs.
 pub const APP_NAME: &str = "OpacusR";

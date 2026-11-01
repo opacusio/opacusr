@@ -116,6 +116,8 @@ pub enum ClientEvent {
         codec: CodecId,
         /// Host's suggested frame rate (`SessionAccept.fps_hint`).
         fps_hint: u8,
+        /// `true` = the host records this session (opt-in policy).
+        recording: bool,
     },
     /// One decoded video frame. `wire_bytes` is the compressed size on
     /// the wire (for the bitrate meter).
@@ -426,6 +428,7 @@ impl SessionClient {
         let audio_available = accept.audio_available;
         let codec = accept.codec;
         let fps_hint = accept.fps_hint;
+        let recording = accept.recording;
         let (events, rx) = mpsc::unbounded_channel::<ClientEvent>();
         let _ = events.send(ClientEvent::Connected {
             host_name: handshake.host_hello.display_name.clone(),
@@ -436,6 +439,7 @@ impl SessionClient {
             audio_available,
             codec,
             fps_hint,
+            recording,
         });
         let (_encoder, decoder) = make_pair(accept.codec);
         let clipboard = if settings.clipboard_sync {
