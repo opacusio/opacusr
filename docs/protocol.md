@@ -159,6 +159,19 @@ Out-of-order chunks are buffered (`BTreeMap` by seq) and written in FIFO order; 
 
 The host runs the shell via `portable-pty` (ConPTY on Windows, openpty elsewhere); output is pumped through an unbounded channel so a chatty process cannot block the session loop.
 
+### TCP tunnel (v0.6+, proto v5)
+
+SSH-style local forwarding: the viewer binds `127.0.0.1:<local port>`; every local connection becomes a `TunnelOpen` on the Control channel, and the host connects to the target.
+
+| Message | Direction | Fields |
+| --- | --- | --- |
+| `TunnelOpen` | viewer→host | id, target host, port |
+| `TunnelOpened` | host→viewer | id, ok/err |
+| `TunnelData` | both | id, raw bytes |
+| `TunnelClose` | both | id |
+
+The host gates every open by its `tunnel` policy: `off` refuses everything, `loopback` (default) requires the target to resolve to a loopback address, `any` is unrestricted. View-only sessions never announce or accept tunnels (`SessionAccept.tunnel`). Closing follows a TCP-style half-close: the side that finishes first sends `TunnelClose`, the peer keeps draining until its own EOF arrives (pump tasks stay alive until both halves are done).
+
 ## 5. Versioning
 
 - `proto_version` (u32) in `Hello` must match exactly for now; incompatible bumps will be accompanied by a negotiated fallback in a future release.
