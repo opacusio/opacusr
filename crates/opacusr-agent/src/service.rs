@@ -582,7 +582,7 @@ impl AgentService {
                     let view_only = SessionDecision::from(
                         self.cfg.permission_for(""),
                     ) == SessionDecision::ViewOnly;
-                    self.spawn_host(SecureSession::new(Box::new(transport), None), view_only, &gate);
+                    self.spawn_host(SecureSession::new(Box::new(transport), None), 0, view_only, &gate);
                 }
             }
         }
