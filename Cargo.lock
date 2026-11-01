@@ -3842,7 +3842,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "opacusr-agent"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "arboard",
@@ -3877,7 +3877,7 @@ dependencies = [
 
 [[package]]
 name = "opacusr-app"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "arboard",
@@ -3902,7 +3902,7 @@ dependencies = [
 
 [[package]]
 name = "opacusr-capture"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "ashpd",
  "async-std",
@@ -3916,7 +3916,7 @@ dependencies = [
 
 [[package]]
 name = "opacusr-client"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "arboard",
@@ -3939,7 +3939,7 @@ dependencies = [
 
 [[package]]
 name = "opacusr-codec"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "image",
  "opacusr-capture",
@@ -3951,7 +3951,7 @@ dependencies = [
 
 [[package]]
 name = "opacusr-crypto"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "argon2",
  "chacha20poly1305",
@@ -3966,7 +3966,7 @@ dependencies = [
 
 [[package]]
 name = "opacusr-input"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "arboard",
  "enigo",
@@ -3978,7 +3978,7 @@ dependencies = [
 
 [[package]]
 name = "opacusr-proto"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "bincode",
  "serde",
@@ -3987,7 +3987,7 @@ dependencies = [
 
 [[package]]
 name = "opacusr-server"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -4008,7 +4008,7 @@ dependencies = [
 
 [[package]]
 name = "opacusr-transport"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "async-trait",

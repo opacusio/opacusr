@@ -6,6 +6,8 @@ SemVer-ish (breaking protocol changes bump the minor until 1.0).
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-11-01
+
 ### Added
 
 - **Host physical-input lock** (`--lock-input` / `lock_input` in `agent.toml` / GUI
