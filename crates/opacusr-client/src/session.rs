@@ -12,7 +12,7 @@ use tokio::sync::mpsc;
 use opacusr_capture::Frame;
 use opacusr_codec::{make_pair, VideoDecoder};
 use opacusr_input::clipboard::ClipboardHandle;
-use opacusr_proto::message::{self, ByeReason};
+use opacusr_proto::message::{self, ByeReason, CodecId};
 use opacusr_proto::signal::*;
 use opacusr_proto::{Message, PeerId, Platform};
 use opacusr_transport::auth::viewer_handshake;
@@ -112,8 +112,17 @@ pub enum ClientEvent {
         screens: Vec<message::ScreenInfo>,
         /// Host can stream audio on request.
         audio_available: bool,
+        /// Video codec negotiated in `SessionAccept`.
+        codec: CodecId,
+        /// Host's suggested frame rate (`SessionAccept.fps_hint`).
+        fps_hint: u8,
     },
-    Frame(Frame),
+    /// One decoded video frame. `wire_bytes` is the compressed size on
+    /// the wire (for the bitrate meter).
+    Frame {
+        frame: Frame,
+        wire_bytes: u32,
+    },
     Chat {
         text: String,
         ts_ms: u64,
@@ -406,6 +415,8 @@ impl SessionClient {
         let screens = accept.screens.clone();
         let view_only = accept.view_only;
         let audio_available = accept.audio_available;
+        let codec = accept.codec;
+        let fps_hint = accept.fps_hint;
         let (events, rx) = mpsc::unbounded_channel::<ClientEvent>();
         let _ = events.send(ClientEvent::Connected {
             host_name: handshake.host_hello.display_name.clone(),
@@ -414,6 +425,8 @@ impl SessionClient {
             view_only,
             screens: screens.clone(),
             audio_available,
+            codec,
+            fps_hint,
         });
         let (_encoder, decoder) = make_pair(accept.codec);
         let clipboard = if settings.clipboard_sync {
@@ -616,9 +629,13 @@ impl SessionClient {
             Message::VideoFrame(frame) => {
                 self.screen = (frame.width, frame.height);
                 self.frames_since_stats = self.frames_since_stats.saturating_add(1);
+                let wire_bytes = frame.data.len() as u32;
                 match self.decoder.decode(&frame.data, frame.width, frame.height) {
                     Ok(f) => {
-                        let _ = self.events.send(ClientEvent::Frame(f));
+                        let _ = self.events.send(ClientEvent::Frame {
+                            frame: f,
+                            wire_bytes,
+                        });
                     }
                     Err(e) => {
                         let _ = self

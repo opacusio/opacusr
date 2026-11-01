@@ -20,6 +20,15 @@ SemVer-ish (breaking protocol changes bump the minor until 1.0).
   name inline (Enter or ✔ to apply, ✖ to cancel) and give the remote your
   own label instead of the ID-derived default. Target, endpoint and
   favorite are untouched.
+- **Session statistics panel** — toggle `📊` in the session toolbar (or
+  `Ctrl+Shift+S`): remote name, stream resolution, negotiated codec,
+  actually received fps vs the host's fps hint, compressed wire bitrate
+  (2 s sliding window) and RTT.
+- **Session hotkeys** — `F11` fullscreen, `Ctrl+Shift+P` pause,
+  `Ctrl+Shift+D` disconnect, `Ctrl+Shift+C/F/T/S` toggle the
+  chat/files/terminal/stats panels. Letter shortcuts are ignored while a
+  text field has focus. `ClientEvent::Connected` now carries the negotiated
+  codec + fps hint; `ClientEvent::Frame` carries the compressed wire size.
 - **Host → viewer file send** — while a session is live the Host tab offers
   `⬆ Send file to viewer`: a per-session command channel feeds
   `HostCommand::SendFile` into the agent session loop and the same FtEngine

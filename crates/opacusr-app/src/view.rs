@@ -93,15 +93,20 @@ pub fn session_ui(ctx: &Context, s: &mut SessionHandle, cfg: &mut AgentConfig) {
             ui.toggle_value(&mut s.panel_chat, "💬");
             ui.toggle_value(&mut s.panel_files, "📁");
             ui.toggle_value(&mut s.panel_term, "⌨");
+            ui.toggle_value(&mut s.panel_stats, "📊");
         });
     });
 
     // ---- right sidebar ---------------------------------------------------
-    if s.panel_chat || s.panel_files || s.panel_term {
+    if s.panel_chat || s.panel_files || s.panel_term || s.panel_stats {
         egui::SidePanel::right("session_sidebar")
             .min_width(280.0)
             .default_width(320.0)
             .show(ctx, |ui| {
+                if s.panel_stats {
+                    stats_panel(ui, s);
+                    ui.separator();
+                }
                 if s.panel_chat {
                     chat_panel(ui, s);
                     ui.separator();
@@ -321,6 +326,73 @@ fn map_key(key: egui::Key) -> Option<OpKey> {
 // ---------------------------------------------------------------------------
 // Panels
 // ---------------------------------------------------------------------------
+
+fn stats_panel(ui: &mut egui::Ui, s: &mut SessionHandle) {
+    ui.heading("📊 Stats");
+    egui::Grid::new("stats_grid")
+        .num_columns(2)
+        .spacing([12.0, 3.0])
+        .show(ui, |ui| {
+            ui.label("Remote");
+            let name = if s.host_name.is_empty() {
+                "—".to_string()
+            } else {
+                s.host_name.clone()
+            };
+            ui.label(name);
+            ui.end_row();
+
+            ui.label("Stream");
+            ui.label(format!("{}×{} px", s.stream_res.0, s.stream_res.1));
+            ui.end_row();
+
+            ui.label("Codec");
+            ui.label(
+                s.codec
+                    .map(|c| format!("{c:?}"))
+                    .unwrap_or_else(|| "—".into()),
+            );
+            ui.end_row();
+
+            ui.label("Receive");
+            ui.label(format!(
+                "{:.1} fps (host hint {} fps)",
+                s.recv_fps, s.fps_hint
+            ));
+            ui.end_row();
+
+            ui.label("Bitrate");
+            ui.label(fmt_bitrate(s.bitrate_bps));
+            ui.end_row();
+
+            ui.label("RTT");
+            ui.label(format!("{} ms", s.rtt));
+            ui.end_row();
+
+            ui.label("State");
+            ui.label(if s.paused { "⏸ paused" } else { "streaming" });
+            ui.end_row();
+        });
+    ui.separator();
+    ui.label(
+        egui::RichText::new(
+            "F11 fullscreen · Ctrl+Shift+P pause · Ctrl+Shift+D disconnect\n\
+             Ctrl+Shift+C/F/T/S — chat / files / terminal / stats",
+        )
+        .small()
+        .weak(),
+    );
+}
+
+/// Wire bitrate: `300_000` bytes/s → `"2.4 Mbit/s"`, `30_000` → `"240 kbit/s"`.
+fn fmt_bitrate(bytes_per_sec: u64) -> String {
+    let bits = bytes_per_sec * 8;
+    if bits >= 1_000_000 {
+        format!("{:.1} Mbit/s", bits as f64 / 1_000_000.0)
+    } else {
+        format!("{} kbit/s", bits / 1_000)
+    }
+}
 
 fn chat_panel(ui: &mut egui::Ui, s: &mut SessionHandle) {
     ui.heading("💬 Chat");

@@ -13,6 +13,7 @@ use opacusr_client::addressbook::{
 use opacusr_client::session::{
     ClientEvent, Command, SessionClient, SessionSettings, TransportChoice,
 };
+use opacusr_proto::message::CodecId;
 use opacusr_proto::PeerId;
 
 use crate::{host_panel, spawn_runtime, view};
@@ -52,6 +53,21 @@ pub struct SessionHandle {
     pub term_open: bool,
     pub term_input: String,
     pub uploads: Vec<(u32, String, u64, u64)>, // id, name, done, total
+    /// Remote display name (from the host handshake).
+    pub host_name: String,
+    /// Video codec negotiated in `SessionAccept`.
+    pub codec: Option<CodecId>,
+    /// Host's suggested fps (`SessionAccept.fps_hint`).
+    pub fps_hint: u8,
+    /// Actual received frame rate (2 s sliding window).
+    pub recv_fps: f32,
+    /// Compressed wire bitrate, bytes per second (2 s sliding window).
+    pub bitrate_bps: u64,
+    /// Resolution of the last received frame.
+    pub stream_res: (u32, u32),
+    pub panel_stats: bool,
+    /// (arrival, wire bytes) samples for the fps/bitrate window.
+    pub stats_win: std::collections::VecDeque<(std::time::Instant, u64)>,
     pub status: String,
 }
 
@@ -80,6 +96,14 @@ impl SessionHandle {
             term_open: false,
             term_input: String::new(),
             uploads: Vec::new(),
+            host_name: String::new(),
+            codec: None,
+            fps_hint: 0,
+            recv_fps: 0.0,
+            bitrate_bps: 0,
+            stream_res: (0, 0),
+            panel_stats: false,
+            stats_win: std::collections::VecDeque::new(),
             status: "connecting…".into(),
         }
     }
@@ -547,12 +571,16 @@ impl eframe::App for App {
                     view_only,
                     screens,
                     audio_available,
-                    ..
+                    codec,
+                    fps_hint,
                 } => {
                     sess.screen = screen;
                     sess.view_only = view_only;
                     sess.screens = screens;
                     sess.audio_available = audio_available;
+                    sess.host_name = host_name;
+                    sess.codec = Some(codec);
+                    sess.fps_hint = fps_hint;
                     sess.selected_screen = 0;
                     sess.clipboard_sync = true;
                     sess.status = format!(
@@ -567,7 +595,7 @@ impl eframe::App for App {
                     self.book.touch_by_target(&typed);
                     let _ = self.book.save();
                 }
-                ClientEvent::Frame(frame) => {
+                ClientEvent::Frame { frame, wire_bytes } => {
                     let img = egui::ColorImage::from_rgba_unmultiplied(
                         [frame.width as usize, frame.height as usize],
                         &frame.rgba,
@@ -577,6 +605,27 @@ impl eframe::App for App {
                         None => {
                             sess.texture =
                                 Some(ctx.load_texture("remote", img, egui::TextureOptions::LINEAR));
+                        }
+                    }
+                    // Link statistics: sliding 2 s window of (arrival, wire bytes).
+                    let now = std::time::Instant::now();
+                    sess.stream_res = (frame.width, frame.height);
+                    sess.stats_win.push_back((now, wire_bytes as u64));
+                    while let Some(&(t, _)) = sess.stats_win.front() {
+                        if now.duration_since(t).as_secs_f32() <= 2.0 {
+                            break;
+                        }
+                        sess.stats_win.pop_front();
+                    }
+                    if sess.stats_win.len() >= 2 {
+                        let span = now
+                            .duration_since(sess.stats_win.front().unwrap().0)
+                            .as_secs_f32();
+                        if span > 0.2 {
+                            let n = sess.stats_win.len() as f32;
+                            let bytes: u64 = sess.stats_win.iter().map(|(_, b)| b).sum();
+                            sess.recv_fps = n / span;
+                            sess.bitrate_bps = (bytes as f64 / span as f64) as u64;
                         }
                     }
                 }
@@ -634,6 +683,51 @@ impl eframe::App for App {
                         self.book.finish_history(ts, outcome, duration);
                         let _ = self.book.save();
                     }
+                }
+            }
+        }
+
+        // ---- session hotkeys (F11 fullscreen, Ctrl+Shift+…) ----
+        if self.session.is_some() {
+            // F11 works even while a text field is focused.
+            if ctx.input(|i| i.key_pressed(egui::Key::F11)) {
+                let full = ctx.input(|i| i.viewport().fullscreen == Some(true));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!full));
+            }
+            // Letter shortcuts are ignored while the user is typing.
+            if ctx.memory(|m| m.focused().is_none()) {
+                let (d, p, c, f, t, s) = ctx.input(|i| {
+                    let m = &i.modifiers;
+                    let cs = m.ctrl && m.shift;
+                    (
+                        cs && i.key_pressed(egui::Key::D),
+                        cs && i.key_pressed(egui::Key::P),
+                        cs && i.key_pressed(egui::Key::C),
+                        cs && i.key_pressed(egui::Key::F),
+                        cs && i.key_pressed(egui::Key::T),
+                        cs && i.key_pressed(egui::Key::S),
+                    )
+                });
+                if let Some(sess) = &mut self.session {
+                    if p {
+                        sess.paused = !sess.paused;
+                        let _ = sess.commands.send(Command::Pause(sess.paused));
+                    }
+                    if c {
+                        sess.panel_chat = !sess.panel_chat;
+                    }
+                    if f {
+                        sess.panel_files = !sess.panel_files;
+                    }
+                    if t {
+                        sess.panel_term = !sess.panel_term;
+                    }
+                    if s {
+                        sess.panel_stats = !sess.panel_stats;
+                    }
+                }
+                if d {
+                    self.disconnect_clicked();
                 }
             }
         }

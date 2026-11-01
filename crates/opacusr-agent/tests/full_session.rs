@@ -167,7 +167,7 @@ async fn full_session_over_tcp() {
     let mut frames = 0u32;
     tokio::time::timeout(Duration::from_secs(15), async {
         loop {
-            if let ClientEvent::Frame(f) = events.recv().await.unwrap() {
+            if let ClientEvent::Frame { frame: f, .. } = events.recv().await.unwrap() {
                 assert_eq!((f.width, f.height), (320, 200));
                 assert!(!f.rgba.is_empty());
                 frames += 1;
