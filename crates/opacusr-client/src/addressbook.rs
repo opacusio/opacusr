@@ -180,6 +180,24 @@ impl AddressBook {
         }
     }
 
+    /// Rename a contact by id — give the remote your own label instead of
+    /// the auto/target-derived one. The name is trimmed; empty names are
+    /// rejected. Returns `true` when the contact was found and renamed.
+    /// Only the label changes: target, endpoint and favorite are kept.
+    pub fn rename(&mut self, id: &str, label: &str) -> bool {
+        let label = label.trim();
+        if label.is_empty() {
+            return false;
+        }
+        match self.contacts.iter_mut().find(|c| c.id == id) {
+            Some(c) => {
+                c.label = label.to_string();
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Mark a contact as used right now (matched by target).
     pub fn touch_by_target(&mut self, target: &str) -> bool {
         let norm = normalize_target(target);
@@ -434,6 +452,25 @@ mod tests {
         assert!(book.remove(&id));
         assert!(!book.remove(&id));
         assert!(book.contacts().is_empty());
+    }
+
+    #[test]
+    fn rename_contact() {
+        let mut book = AddressBook::default();
+        let id = book.upsert("DESKTOP-XYZ123".into(), "111111111".into(), None);
+        assert!(book.rename(&id, "  My laptop  "));
+        assert_eq!(book.contacts()[0].label, "My laptop");
+        // Renaming keeps everything else intact.
+        book.set_favorite(&id, true);
+        assert!(book.rename(&id, "Work rig"));
+        assert_eq!(book.contacts()[0].label, "Work rig");
+        assert!(book.contacts()[0].favorite);
+        assert_eq!(book.contacts()[0].target, "111111111");
+        // Empty/whitespace names and unknown ids are rejected.
+        assert!(!book.rename(&id, "   "));
+        assert_eq!(book.contacts()[0].label, "Work rig");
+        assert!(!book.rename("nope", "Ghost"));
+        assert!(book.contacts().iter().all(|c| c.label != "Ghost"));
     }
 
     #[test]

@@ -130,6 +130,12 @@ pub struct App {
     new_target: String,
     new_endpoint: String,
     show_history: bool,
+    /// Contact id currently being renamed (inline editor in the list).
+    renaming_id: Option<String>,
+    /// Scratch buffer for the inline rename editor.
+    rename_label: String,
+    /// Whether the inline rename editor already grabbed keyboard focus.
+    rename_focused: bool,
     /// History ts of the current connection attempt.
     cur_hist_ts: Option<u64>,
     /// Unix ts when the current attempt actually connected (for duration).
@@ -165,6 +171,9 @@ impl App {
             new_target: String::new(),
             new_endpoint: String::new(),
             show_history: false,
+            renaming_id: None,
+            rename_label: String::new(),
+            rename_focused: false,
             cur_hist_ts: None,
             cur_connected_at: None,
         }
@@ -847,10 +856,47 @@ impl App {
                                 self.book.set_favorite(&c.id, !c.favorite);
                                 let _ = self.book.save();
                             }
-                            ui.label(egui::RichText::new(&c.label).strong());
-                            ui.label(egui::RichText::new(&c.target).weak());
-                            if let Some(ep) = &c.endpoint {
-                                ui.label(egui::RichText::new(ep).small().weak());
+                            let renaming = self.renaming_id.as_deref() == Some(c.id.as_str());
+                            if renaming {
+                                // Inline rename editor: ✔/Enter applies, ✖ cancels.
+                                let resp = ui.add_sized(
+                                    [180.0, 22.0],
+                                    egui::TextEdit::singleline(&mut self.rename_label),
+                                );
+                                // Grab keyboard focus once, right after the
+                                // editor opens — then leave it alone so that
+                                // `lost_focus` can fire (Enter-to-apply).
+                                if !self.rename_focused {
+                                    resp.request_focus();
+                                    self.rename_focused = true;
+                                }
+                                let confirmed = (resp.lost_focus()
+                                    && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+                                    || ui.button("✔").on_hover_text("Save name").clicked();
+                                if ui.button("✖").on_hover_text("Cancel").clicked() {
+                                    self.renaming_id = None;
+                                }
+                                if confirmed {
+                                    let name = self.rename_label.trim().to_string();
+                                    if self.book.rename(&c.id, &name) {
+                                        self.status_message = "Contact renamed.".into();
+                                        let _ = self.book.save();
+                                    } else {
+                                        self.status_message = "Name cannot be empty.".into();
+                                    }
+                                    self.renaming_id = None;
+                                }
+                            } else {
+                                ui.label(egui::RichText::new(&c.label).strong());
+                                ui.label(egui::RichText::new(&c.target).weak());
+                                if let Some(ep) = &c.endpoint {
+                                    ui.label(egui::RichText::new(ep).small().weak());
+                                }
+                                if ui.button("✎").on_hover_text("Rename").clicked() {
+                                    self.renaming_id = Some(c.id.clone());
+                                    self.rename_label = c.label.clone();
+                                    self.rename_focused = false;
+                                }
                             }
                             if ui.button("▶").on_hover_text("Connect").clicked() {
                                 if let Some(ep) = c.endpoint.clone() {
@@ -860,7 +906,7 @@ impl App {
                                 let label = c.label.clone();
                                 self.connect_clicked(Some(label));
                             }
-                            if ui.button("✕").on_hover_text("Remove").clicked() {
+                            if !renaming && ui.button("✕").on_hover_text("Remove").clicked() {
                                 self.book.remove(&c.id);
                                 let _ = self.book.save();
                             }

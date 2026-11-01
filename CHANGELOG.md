@@ -16,6 +16,10 @@ SemVer-ish (breaking protocol changes bump the minor until 1.0).
 - **Connection history** — the last 100 connection attempts with UTC
   timestamp, target, outcome (connected/failed) and session duration;
   viewable and clearable in the Connect tab.
+- **Contact renaming** — every saved contact gets a `✎` button: edit the
+  name inline (Enter or ✔ to apply, ✖ to cancel) and give the remote your
+  own label instead of the ID-derived default. Target, endpoint and
+  favorite are untouched.
 - **Host → viewer file send** — while a session is live the Host tab offers
   `⬆ Send file to viewer`: a per-session command channel feeds
   `HostCommand::SendFile` into the agent session loop and the same FtEngine
