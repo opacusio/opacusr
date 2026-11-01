@@ -153,10 +153,12 @@ impl AddressBook {
             c.endpoint = endpoint;
             return c.id.clone();
         }
-        let mut contact = Contact::default();
-        contact.label = label;
-        contact.target = target;
-        contact.endpoint = endpoint;
+        let contact = Contact {
+            label,
+            target,
+            endpoint,
+            ..Default::default()
+        };
         let id = contact.id.clone();
         self.contacts.push(contact);
         id
