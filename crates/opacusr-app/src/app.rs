@@ -46,6 +46,10 @@ pub struct SessionHandle {
     pub panel_chat: bool,
     pub panel_files: bool,
     pub panel_term: bool,
+    /// TCP tunnel side panel (SSH-style local forwarding).
+    pub panel_tunnel: bool,
+    /// Active tunnel listeners: (bound port, target host, target port).
+    pub tunnels: Vec<(u16, String, u16)>,
     pub last_mouse: Option<(u32, u32)>,
     pub chat: Vec<String>,
     pub chat_input: String,
@@ -61,6 +65,12 @@ pub struct SessionHandle {
     pub fps_hint: u8,
     /// `true` = the host records this session (opt-in policy).
     pub recording: bool,
+    /// `true` = the host forwards TCP tunnels for this session.
+    pub tunnel_available: bool,
+    /// New-tunnel form fields (local port, target host, target port).
+    pub tun_local_port: String,
+    pub tun_target_host: String,
+    pub tun_target_port: String,
     /// Actual received frame rate (2 s sliding window).
     pub recv_fps: f32,
     /// Compressed wire bitrate, bytes per second (2 s sliding window).
@@ -91,6 +101,8 @@ impl SessionHandle {
             panel_chat: false,
             panel_files: true,
             panel_term: false,
+            panel_tunnel: false,
+            tunnels: Vec::new(),
             last_mouse: None,
             chat: Vec::new(),
             chat_input: String::new(),
@@ -102,6 +114,10 @@ impl SessionHandle {
             codec: None,
             fps_hint: 0,
             recording: false,
+            tunnel_available: false,
+            tun_local_port: String::new(),
+            tun_target_host: "127.0.0.1".into(),
+            tun_target_port: String::new(),
             recv_fps: 0.0,
             bitrate_bps: 0,
             stream_res: (0, 0),
@@ -590,6 +606,7 @@ impl eframe::App for App {
                     codec,
                     fps_hint,
                     recording,
+                    tunnel,
                     ..
                 } => {
                     sess.screen = screen;
@@ -599,6 +616,7 @@ impl eframe::App for App {
                     sess.codec = Some(codec);
                     sess.fps_hint = fps_hint;
                     sess.recording = recording;
+                    sess.tunnel_available = tunnel;
                     sess.selected_screen = 0;
                     sess.clipboard_sync = true;
                     sess.status = format!(
@@ -691,6 +709,25 @@ impl eframe::App for App {
                         sess.term_out.drain(..len - 128 * 1024);
                     }
                 }
+                ClientEvent::TunnelListening {
+                    listen_port,
+                    target_host,
+                    target_port,
+                } => {
+                    sess.status = format!(
+                        "tunnel: 127.0.0.1:{listen_port} → {target_host}:{target_port} (via host)"
+                    );
+                    sess.tunnels.push((listen_port, target_host, target_port));
+                }
+                ClientEvent::TunnelOpened { ok, error, .. } => {
+                    if !ok {
+                        sess.status = format!(
+                            "tunnel refused: {}",
+                            error.unwrap_or_else(|| "unknown".into())
+                        );
+                    }
+                }
+                ClientEvent::TunnelClosed { .. } => {}
                 ClientEvent::Notice(t) => sess.status = t,
                 ClientEvent::Closed(reason) => {
                     sess.status = format!("closed: {reason}");

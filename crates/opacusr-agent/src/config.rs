@@ -142,6 +142,11 @@ pub struct AgentConfig {
     pub record: bool,
     /// Directory for session recordings (default `~/OpacusR-Recordings`).
     pub record_dir: PathBuf,
+    /// Host-side TCP tunneling for viewers (SSH-style local forwarding):
+    /// `off` | `loopback` (targets must resolve to the host's loopback
+    /// interface — safe default) | `any` (arbitrary targets). View-only
+    /// sessions never get tunnels regardless of this setting.
+    pub tunnel: String,
 }
 
 impl Default for AgentConfig {
@@ -182,6 +187,7 @@ impl Default for AgentConfig {
             record_dir: dirs::home_dir()
                 .unwrap_or_else(|| PathBuf::from("."))
                 .join("OpacusR-Recordings"),
+            tunnel: "loopback".into(),
         }
     }
 }
@@ -389,5 +395,20 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(cfg.embedded_signal_url(), "ws://127.0.0.1:9090/signal");
+    }
+
+    #[test]
+    fn tunnel_policy_round_trips_and_defaults_safe() {
+        assert_eq!(AgentConfig::default().tunnel, "loopback");
+        let cfg = AgentConfig {
+            tunnel: "any".into(),
+            ..Default::default()
+        };
+        let text = toml::to_string_pretty(&cfg).unwrap();
+        let back: AgentConfig = toml::from_str(&text).unwrap();
+        assert_eq!(
+            crate::tunnel::TunnelPolicy::parse(&back.tunnel),
+            crate::tunnel::TunnelPolicy::Any
+        );
     }
 }

@@ -158,6 +158,11 @@ pub struct SessionAccept {
     /// policy). The viewer UI should show a recording indicator.
     #[serde(default)]
     pub recording: bool,
+    /// `true` = the host forwards TCP tunnels for this session (tunnel
+    /// policy enabled, full-control session). Viewers use [`TunnelOpen`]
+    /// only after seeing this.
+    #[serde(default)]
+    pub tunnel: bool,
 }
 
 /// One selectable monitor/screen of the host.
@@ -375,6 +380,37 @@ pub struct TermClose {
     pub id: u32,
 }
 
+/// Viewer → host: open a TCP connection from the host to `host:port`
+/// (SSH-style local forwarding). The host's tunnel policy decides whether
+/// the target is allowed; view-only sessions always refuse.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TunnelOpen {
+    pub id: u32,
+    pub host: String,
+    pub port: u16,
+}
+
+/// Host → viewer: tunnel connection established or refused/failed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TunnelOpened {
+    pub id: u32,
+    pub ok: bool,
+    pub error: Option<String>,
+}
+
+/// Both directions: raw tunnel payload bytes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TunnelData {
+    pub id: u32,
+    pub data: Vec<u8>,
+}
+
+/// Either side → other: close a tunnel connection (aborts it on the peer).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct TunnelClose {
+    pub id: u32,
+}
+
 /// Reason a session ended.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ByeReason {
@@ -441,6 +477,12 @@ pub enum Message {
     TermData(TermData),
     TermResize(TermResize),
     TermClose(TermClose),
+
+    // --- TCP tunnel ---
+    TunnelOpen(TunnelOpen),
+    TunnelOpened(TunnelOpened),
+    TunnelData(TunnelData),
+    TunnelClose(TunnelClose),
 }
 
 impl Message {

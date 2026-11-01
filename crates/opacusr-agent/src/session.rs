@@ -60,6 +60,9 @@ pub struct SessionConfig {
     /// Optional RFC 6238 secret (base32). When set, viewers must present
     /// a valid TOTP code in addition to the password.
     pub totp_secret: Option<String>,
+    /// Host-side TCP tunnel policy for this session (SSH-style local
+    /// forwarding). View-only sessions never get tunnels.
+    pub tunnel: crate::tunnel::TunnelPolicy,
     /// Opt-in session recording (MP4, H.264 codec only).
     pub record: bool,
     /// Directory for session recording files.
@@ -272,6 +275,7 @@ async fn run_session(
                 .collect(),
             audio_available: cfg.audio && cfg!(feature = "audio"),
             recording: recorder.is_some(),
+            tunnel: cfg.tunnel != crate::tunnel::TunnelPolicy::Off && !cfg.view_only,
         }))
         .await?;
     // Coordinate space the viewer currently maps its input against.
@@ -283,6 +287,9 @@ async fn run_session(
     let mut terms: HashMap<u32, crate::pty::TermSession> = HashMap::new();
     #[allow(unused_mut)]
     let mut next_term_id: u32 = 1;
+
+    // Host-side TCP tunnels (viewer-initiated, policy-checked on open).
+    let mut tunnels: HashMap<u32, crate::tunnel::TunnelConn> = HashMap::new();
 
     let mut adaptive = AdaptiveQuality::new(
         cfg.adaptive_quality,
@@ -580,6 +587,47 @@ async fn run_session(
                             session.send_msg(&r).await?;
                         }
 
+                        // Tunnel forwarding (all platforms; tokio TCP is
+                        // available everywhere). Runs after the ft engine,
+                        // which ignores tunnel messages.
+                        match &other {
+                            Message::TunnelOpen(t) => {
+                                let (reply, conn) = crate::tunnel::TunnelConn::open(
+                                    t.id,
+                                    &t.host,
+                                    t.port,
+                                    cfg.tunnel,
+                                    out_tx.clone(),
+                                )
+                                .await;
+                                if reply.ok {
+                                    let _ = events.send(HostEvent::Notice(format!(
+                                        "tunnel #{} opened → {}:{}",
+                                        t.id, t.host, t.port
+                                    )));
+                                    tunnels.insert(t.id, conn.expect("ok reply carries a conn"));
+                                } else {
+                                    let _ = events.send(HostEvent::Notice(format!(
+                                        "tunnel #{} refused: {}",
+                                        t.id,
+                                        reply.error.as_deref().unwrap_or("?")
+                                    )));
+                                }
+                                session.send_msg(&Message::TunnelOpened(reply)).await?;
+                            }
+                            Message::TunnelData(t) => {
+                                if let Some(c) = tunnels.get(&t.id) {
+                                    c.send(&t.data);
+                                }
+                            }
+                            Message::TunnelClose(t) => {
+                                if let Some(c) = tunnels.remove(&t.id) {
+                                    c.abort();
+                                }
+                            }
+                            _ => {}
+                        }
+
                         #[cfg(not(any(target_os = "android", target_os = "ios")))]
                         match other {
                             Message::TermOpen(t) => {
@@ -631,10 +679,13 @@ async fn run_session(
         }
     }
 
-    // Cleanup terminals.
+    // Cleanup terminals and tunnels.
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     for (_, t) in terms.drain() {
         t.kill();
+    }
+    for (_, c) in tunnels.drain() {
+        c.abort();
     }
     Ok(reason)
 }
@@ -660,6 +711,15 @@ async fn reject_view_only(
                     ok: false,
                     error: Some("view-only session: terminal is disabled".into()),
                     shell: String::new(),
+                }))
+                .await
+        }
+        Message::TunnelOpen(t) => {
+            session
+                .send_msg(&Message::TunnelOpened(message::TunnelOpened {
+                    id: t.id,
+                    ok: false,
+                    error: Some("view-only session: tunneling is disabled".into()),
                 }))
                 .await
         }

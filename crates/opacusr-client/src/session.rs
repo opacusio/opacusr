@@ -5,6 +5,8 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
 
 use tokio::sync::mpsc;
@@ -95,6 +97,20 @@ pub enum Command {
     TermClose {
         id: u32,
     },
+    /// Start forwarding a local TCP port through the session: connections
+    /// to `127.0.0.1:listen_port` are relayed to `target_host:target_port`
+    /// as seen from the host (SSH-style local forwarding). The host's
+    /// tunnel policy gates every target; `listen_port = 0` binds an
+    /// ephemeral port (the real one arrives via `ClientEvent::TunnelListening`).
+    TunnelListen {
+        listen_port: u16,
+        target_host: String,
+        target_port: u16,
+    },
+    /// Close a tunnel listener and all its live connections.
+    TunnelStop {
+        listen_port: u16,
+    },
     Disconnect,
 }
 
@@ -118,6 +134,9 @@ pub enum ClientEvent {
         fps_hint: u8,
         /// `true` = the host records this session (opt-in policy).
         recording: bool,
+        /// `true` = the host forwards TCP tunnels for this session
+        /// (tunnel policy enabled, full-control session).
+        tunnel: bool,
     },
     /// One decoded video frame. `wire_bytes` is the compressed size on
     /// the wire (for the bitrate meter).
@@ -162,6 +181,23 @@ pub enum ClientEvent {
         id: u32,
         data: Vec<u8>,
     },
+    /// A local tunnel listener is bound; `listen_port` is the real port
+    /// when the requested one was 0.
+    TunnelListening {
+        listen_port: u16,
+        target_host: String,
+        target_port: u16,
+    },
+    /// Host answered a tunnel open request.
+    TunnelOpened {
+        id: u32,
+        ok: bool,
+        error: Option<String>,
+    },
+    /// Host closed a tunnel connection (socket EOF on the host side).
+    TunnelClosed {
+        id: u32,
+    },
     Notice(String),
     Closed(String),
 }
@@ -201,6 +237,124 @@ impl Default for SessionSettings {
     }
 }
 
+/// Internal message from a local tunnel socket (or its accept loop) into
+/// the session pump.
+#[derive(Debug)]
+enum TunLocal {
+    /// Local side connected; request the host to open the target.
+    Accepted {
+        id: u32,
+        target_host: String,
+        target_port: u16,
+        /// Bytes from the host are written into the local socket via this.
+        writer: mpsc::UnboundedSender<Vec<u8>>,
+        listen_port: u16,
+    },
+    /// Bytes from the local app heading to the host.
+    Data { id: u32, data: Vec<u8> },
+    /// Local socket closed — tell the host.
+    Closed { id: u32 },
+}
+
+/// A live tunnel listener (per `Command::TunnelListen`).
+#[derive(Debug)]
+struct TunListener {
+    /// Any message stops the accept loop.
+    stop: mpsc::UnboundedSender<()>,
+}
+
+/// One live forwarded connection.
+#[derive(Debug)]
+struct TunnelEntry {
+    writer: mpsc::UnboundedSender<Vec<u8>>,
+    listen_port: u16,
+}
+
+/// Spawn the local-socket half of a tunnel: reads from the app, forwards
+/// to the session pump; writes whatever the host sends. An empty `Vec` in
+/// the writer channel is the close marker (host side or session abort).
+fn spawn_local_bridge(
+    id: u32,
+    sock: tokio::net::TcpStream,
+    local_tx: mpsc::UnboundedSender<TunLocal>,
+) -> mpsc::UnboundedSender<Vec<u8>> {
+    let (w_tx, mut w_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+    tokio::spawn(async move {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let (mut r, mut w) = sock.into_split();
+        let mut buf = vec![0u8; 16 * 1024];
+        loop {
+            tokio::select! {
+                // App → session. Stays active after the host half-closes so
+                // the local app sees a clean EOF handshake.
+                read = r.read(&mut buf) => {
+                    match read {
+                        Ok(0) | Err(_) => {
+                            let _ = local_tx.send(TunLocal::Closed { id });
+                            break;
+                        }
+                        Ok(n) => {
+                            let _ = local_tx.send(TunLocal::Data {
+                                id,
+                                data: buf[..n].to_vec(),
+                            });
+                        }
+                    }
+                }
+                chunk = w_rx.recv() => {
+                    match chunk {
+                        // Session dropped us (stop/disconnect).
+                        None => break,
+                        // Host closed: half-close the local socket, keep
+                        // draining until the app closes too.
+                        Some(m) if m.is_empty() => {
+                            let _ = w.shutdown().await;
+                        }
+                        Some(m) => {
+                            if w.write_all(&m).await.is_err() {
+                                let _ = local_tx.send(TunLocal::Closed { id });
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let _ = w.shutdown().await;
+    });
+    w_tx
+}
+
+/// Accept loop for one tunnel listener: assign ids, bridge each local
+/// connection, request opens through the pump.
+async fn tunnel_accept_loop(
+    listener: tokio::net::TcpListener,
+    target_host: String,
+    target_port: u16,
+    listen_port: u16,
+    next_tun_id: Arc<AtomicU32>,
+    local_tx: mpsc::UnboundedSender<TunLocal>,
+    mut stop_rx: mpsc::UnboundedReceiver<()>,
+) {
+    loop {
+        tokio::select! {
+            _ = stop_rx.recv() => break,
+            acc = listener.accept() => {
+                let Ok((sock, _)) = acc else { break };
+                let id = next_tun_id.fetch_add(1, Ordering::Relaxed);
+                let writer = spawn_local_bridge(id, sock, local_tx.clone());
+                let _ = local_tx.send(TunLocal::Accepted {
+                    id,
+                    target_host: target_host.clone(),
+                    target_port,
+                    writer,
+                    listen_port,
+                });
+            }
+        }
+    }
+}
+
 /// A connected viewer session.
 pub struct SessionClient {
     session: SecureSession,
@@ -212,9 +366,20 @@ pub struct SessionClient {
     next_ping: u64,
     ping_times: HashMap<u64, Instant>,
     next_term_id: u32,
+    /// Monotonic tunnel connection ids (shared with accept-loop tasks).
+    next_tun_id: Arc<AtomicU32>,
+    /// Live forwarded connections by tunnel id.
+    tunnels: HashMap<u32, TunnelEntry>,
+    /// Active tunnel listeners by real (bound) port.
+    tun_listeners: HashMap<u16, TunListener>,
+    /// From local tunnel sockets into the pump.
+    tun_local_tx: mpsc::UnboundedSender<TunLocal>,
+    tun_local_rx: mpsc::UnboundedReceiver<TunLocal>,
     screen: (u32, u32),
     /// Host-side permission (from `SessionAccept`).
     view_only: bool,
+    /// Host forwards tunnels (from `SessionAccept`).
+    tunnel_available: bool,
     /// Host monitors (from `SessionAccept`).
     screens: Vec<message::ScreenInfo>,
     audio_available: bool,
@@ -429,6 +594,7 @@ impl SessionClient {
         let codec = accept.codec;
         let fps_hint = accept.fps_hint;
         let recording = accept.recording;
+        let tunnel = accept.tunnel;
         let (events, rx) = mpsc::unbounded_channel::<ClientEvent>();
         let _ = events.send(ClientEvent::Connected {
             host_name: handshake.host_hello.display_name.clone(),
@@ -440,6 +606,7 @@ impl SessionClient {
             codec,
             fps_hint,
             recording,
+            tunnel,
         });
         let (_encoder, decoder) = make_pair(accept.codec);
         let clipboard = if settings.clipboard_sync {
@@ -447,6 +614,7 @@ impl SessionClient {
         } else {
             None
         };
+        let (tun_local_tx, tun_local_rx) = mpsc::unbounded_channel::<TunLocal>();
         let client = Self {
             session,
             decoder,
@@ -457,8 +625,14 @@ impl SessionClient {
             next_ping: 1,
             ping_times: HashMap::new(),
             next_term_id: 1,
+            next_tun_id: Arc::new(AtomicU32::new(1)),
+            tunnels: HashMap::new(),
+            tun_listeners: HashMap::new(),
+            tun_local_tx,
+            tun_local_rx,
             screen,
             view_only,
+            tunnel_available: tunnel,
             screens,
             audio_available,
             clipboard,
@@ -522,6 +696,39 @@ impl SessionClient {
                         Ok(true) => {}
                         Ok(false) => break ClientEvent::Closed("disconnected by user".into()),
                         Err(e) => break ClientEvent::Closed(format!("{e}")),
+                    }
+                }
+                local = self.tun_local_rx.recv() => {
+                    match local {
+                        Some(TunLocal::Accepted { id, target_host, target_port, writer, listen_port }) => {
+                            let entry = TunnelEntry { writer, listen_port };
+                            let msg = Message::TunnelOpen(message::TunnelOpen {
+                                id,
+                                host: target_host,
+                                port: target_port,
+                            });
+                            if self.session.send_msg(&msg).await.is_err() {
+                                break ClientEvent::Closed("connection lost".into());
+                            }
+                            self.tunnels.insert(id, entry);
+                        }
+                        Some(TunLocal::Data { id, data }) => {
+                            let msg = Message::TunnelData(message::TunnelData { id, data });
+                            if self.session.send_msg(&msg).await.is_err() {
+                                break ClientEvent::Closed("connection lost".into());
+                            }
+                        }
+                        Some(TunLocal::Closed { id }) => {
+                            self.tunnels.remove(&id);
+                            let msg = Message::TunnelClose(message::TunnelClose { id });
+                            if self.session.send_msg(&msg).await.is_err() {
+                                break ClientEvent::Closed("connection lost".into());
+                            }
+                        }
+                        None => {
+                            // The internal channel cannot outlive the client;
+                            // ignore (it is a self-send arc).
+                        }
                     }
                 }
                 msg = self.session.recv_msg() => {
@@ -622,6 +829,75 @@ impl SessionClient {
                 Message::TermResize(message::TermResize { id, rows, cols })
             }
             Command::TermClose { id } => Message::TermClose(message::TermClose { id }),
+            Command::TunnelListen {
+                listen_port,
+                target_host,
+                target_port,
+            } => {
+                if !self.tunnel_available {
+                    let _ = self.events.send(ClientEvent::Notice(
+                        "host does not allow TCP tunneling".into(),
+                    ));
+                    return Ok(true);
+                }
+                if target_host.trim().is_empty() || target_port == 0 {
+                    let _ = self
+                        .events
+                        .send(ClientEvent::Notice("invalid tunnel target".into()));
+                    return Ok(true);
+                }
+                return match tokio::net::TcpListener::bind(("127.0.0.1", listen_port)).await {
+                    Ok(l) => {
+                        let real = l.local_addr().map(|a| a.port()).unwrap_or(listen_port);
+                        let (stop_tx, stop_rx) = mpsc::unbounded_channel();
+                        self.tun_listeners
+                            .insert(real, TunListener { stop: stop_tx });
+                        tokio::spawn(tunnel_accept_loop(
+                            l,
+                            target_host.clone(),
+                            target_port,
+                            real,
+                            self.next_tun_id.clone(),
+                            self.tun_local_tx.clone(),
+                            stop_rx,
+                        ));
+                        let _ = self.events.send(ClientEvent::TunnelListening {
+                            listen_port: real,
+                            target_host,
+                            target_port,
+                        });
+                        Ok(true)
+                    }
+                    Err(e) => {
+                        let _ = self
+                            .events
+                            .send(ClientEvent::Notice(format!("tunnel bind: {e}")));
+                        Ok(true)
+                    }
+                };
+            }
+            Command::TunnelStop { listen_port } => {
+                if let Some(l) = self.tun_listeners.remove(&listen_port) {
+                    let _ = l.stop.send(());
+                }
+                // Close the connections opened through this listener.
+                let dead: Vec<u32> = self
+                    .tunnels
+                    .iter()
+                    .filter(|(_, e)| e.listen_port == listen_port)
+                    .map(|(id, _)| *id)
+                    .collect();
+                for id in dead {
+                    if let Some(e) = self.tunnels.remove(&id) {
+                        let _ = e.writer.send(Vec::new());
+                        let _ = self
+                            .session
+                            .send_msg(&Message::TunnelClose(message::TunnelClose { id }))
+                            .await;
+                    }
+                }
+                return Ok(true);
+            }
             Command::Disconnect => return Ok(false),
         };
         self.session.send_msg(&msg).await?;
@@ -748,6 +1024,31 @@ impl SessionClient {
                             data: t.data,
                         });
                     }
+                    Message::TunnelOpened(t) => {
+                        if !t.ok {
+                            // Drop the local half: the app sees an immediate
+                            // connection reset.
+                            if let Some(e) = self.tunnels.remove(&t.id) {
+                                let _ = e.writer.send(Vec::new());
+                            }
+                        }
+                        let _ = self.events.send(ClientEvent::TunnelOpened {
+                            id: t.id,
+                            ok: t.ok,
+                            error: t.error,
+                        });
+                    }
+                    Message::TunnelData(t) => {
+                        if let Some(e) = self.tunnels.get(&t.id) {
+                            let _ = e.writer.send(t.data);
+                        }
+                    }
+                    Message::TunnelClose(t) => {
+                        if let Some(e) = self.tunnels.remove(&t.id) {
+                            let _ = e.writer.send(Vec::new());
+                            let _ = self.events.send(ClientEvent::TunnelClosed { id: t.id });
+                        }
+                    }
                     _ => {}
                 }
                 // Incoming acks advance our outgoing transfers.
@@ -774,6 +1075,11 @@ impl SessionClient {
     /// Whether the host offered audio streaming.
     pub fn audio_available(&self) -> bool {
         self.audio_available
+    }
+
+    /// Whether the host forwards TCP tunnels for this session.
+    pub fn tunnel_available(&self) -> bool {
+        self.tunnel_available
     }
 }
 

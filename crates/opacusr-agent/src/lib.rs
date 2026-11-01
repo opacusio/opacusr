@@ -11,6 +11,7 @@ pub mod pty;
 pub mod recording;
 pub mod service;
 pub mod session;
+pub mod tunnel;
 
 pub use config::AgentConfig;
 pub use keychain::{delete_password, load_password, store_password};

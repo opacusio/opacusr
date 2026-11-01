@@ -8,6 +8,19 @@ SemVer-ish (breaking protocol changes bump the minor until 1.0).
 
 ### Added
 
+- **TCP tunneling (SSH-style local forwarding)** — a viewer can forward
+  a local port to a host-side target (`🔗` panel in the viewer sidebar:
+  local port → target host:port; apps connect to `127.0.0.1:<local
+  port>` and land on the target as seen from the host). The host gates
+  every open with a `tunnel` policy in `agent.toml` / `--tunnel`:
+  `off` (refuse everything), `loopback` (default — targets must resolve
+  to the host's loopback interface, so local services are reachable but
+  the session cannot be used to scan the network) and `any`
+  (unrestricted, with a console warning). View-only sessions never get
+  tunnels; both halves clean up on either side's EOF via a half-close
+  handshake (`TunnelOpen`/`TunnelOpened`/`TunnelData`/`TunnelClose`).
+  `SessionAccept` gained a `tunnel` flag, `PROTO_VERSION` bumps to 5
+  (old peers refuse to talk to the new one).
 - **Opt-in session recording (host-side)** — a host checkbox
   (`Host tab → Recording`) or `opacusr-agent --record` muxes every
   accepted session to a timestamped MP4

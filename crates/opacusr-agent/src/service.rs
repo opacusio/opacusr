@@ -522,6 +522,7 @@ impl AgentService {
             totp_secret: self.cfg.totp_secret.clone(),
             record: self.cfg.record,
             record_dir: self.cfg.record_dir.clone(),
+            tunnel: crate::tunnel::TunnelPolicy::parse(&self.cfg.tunnel),
             auth_gate: Some(gate.clone()),
         };
         // Per-session command channel: the UI pushes HostCommands (file

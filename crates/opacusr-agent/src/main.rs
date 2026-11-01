@@ -46,6 +46,10 @@ enum Cmd {
         /// (overrides config; H.264 codec only).
         #[arg(long)]
         record: bool,
+        /// Host-side TCP tunnel policy for viewers:
+        /// off | loopback | any (overrides config).
+        #[arg(long)]
+        tunnel: Option<String>,
     },
     /// Set the unattended access password (OS keychain, file fallback).
     Passwd {
@@ -85,6 +89,7 @@ async fn main() -> anyhow::Result<()> {
             capture,
             lock_input,
             record,
+            tunnel,
         } => {
             run(
                 server,
@@ -95,6 +100,7 @@ async fn main() -> anyhow::Result<()> {
                 capture,
                 lock_input,
                 record,
+                tunnel,
             )
             .await
         }
@@ -126,6 +132,7 @@ async fn run(
     capture: Option<String>,
     lock_input: bool,
     record: bool,
+    tunnel: Option<String>,
 ) -> anyhow::Result<()> {
     let mut cfg = load_cfg(server, name);
     if let Some(c) = capture {
@@ -139,6 +146,20 @@ async fn run(
     }
     if record {
         cfg.record = true;
+    }
+    if let Some(t) = tunnel {
+        cfg.tunnel = t;
+    }
+    match opacusr_agent::tunnel::TunnelPolicy::parse(&cfg.tunnel) {
+        opacusr_agent::tunnel::TunnelPolicy::Any => {
+            eprintln!(
+                "TCP tunnel policy: any target (viewer can reach any address this host can)."
+            );
+        }
+        opacusr_agent::tunnel::TunnelPolicy::Loopback => {
+            eprintln!("TCP tunnel policy: loopback-only targets.");
+        }
+        opacusr_agent::tunnel::TunnelPolicy::Off => {}
     }
     let (tx, mut rx) = mpsc::unbounded_channel();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);

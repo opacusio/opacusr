@@ -8,6 +8,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 
 use opacusr_agent::session::{HostCommand, HostEvent, SessionConfig, SessionHost};
+use opacusr_agent::tunnel::TunnelPolicy;
 use opacusr_capture::test::TestSource;
 use opacusr_client::session::{ClientEvent, Command, SessionClient, SessionSettings};
 use opacusr_input::{InputError, InputInjector, RecordingInjector};
@@ -107,6 +108,7 @@ async fn full_session_over_tcp() {
             totp_secret: None,
             record: false,
             record_dir: std::env::temp_dir(),
+            tunnel: TunnelPolicy::Loopback,
             auth_gate: Some(Arc::new(AuthGate::new(AuthGateConfig::default()))),
         };
         let session = SecureSession::new(Box::new(TcpTransport::from_stream(sock)), None);
@@ -390,6 +392,7 @@ async fn totp_second_factor_is_enforced() {
                 totp_secret: Some(TOTP_SECRET.into()),
                 record: false,
                 record_dir: std::env::temp_dir(),
+                tunnel: TunnelPolicy::Off,
                 auth_gate: None,
             };
             let (ev_tx, _ev_rx) = mpsc::unbounded_channel();
@@ -486,6 +489,7 @@ async fn session_recording_writes_mp4() {
             totp_secret: None,
             record: true,
             record_dir: dir_for_host,
+            tunnel: TunnelPolicy::Off,
             auth_gate: None,
         };
         let (ev_tx, mut ev_rx) = mpsc::unbounded_channel();
@@ -585,4 +589,273 @@ async fn session_recording_writes_mp4() {
     assert!(n >= 3, "expected several muxed frames, got {n}");
     let s1 = reader.read_sample(1, 1).unwrap().unwrap();
     assert!(s1.is_sync, "first sample must be a keyframe");
+}
+
+// ---------------------------------------------------------------------------
+// TCP tunneling (SSH-style local forwarding)
+// ---------------------------------------------------------------------------
+
+/// Host with the loopback tunnel policy: the viewer binds a local port,
+/// an app connects to it, and bytes round-trip to an echo server on the
+/// host through the session channel. The server closes after the echo so
+/// the viewer sees the host-side EOF as `TunnelClosed`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn tcp_tunnel_echo_roundtrip() {
+    // Single-shot echo server: echo exactly one payload, then close.
+    const PAYLOAD: &[u8] = b"e2e-tunnel-payload";
+    let echo = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let echo_port = echo.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let (mut sock, _) = echo.accept().await.unwrap();
+        let mut buf = [0u8; PAYLOAD.len()];
+        sock.read_exact(&mut buf).await.unwrap();
+        assert_eq!(&buf, PAYLOAD);
+        let _ = sock.write_all(&buf).await;
+        drop(sock); // close → host pump sees EOF → TunnelClose
+    });
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let host_task = tokio::spawn(async move {
+        let (sock, _) = listener.accept().await.unwrap();
+        let cfg = SessionConfig {
+            password: Some(PASSWORD.into()),
+            display_name: "e2e-host".into(),
+            fps: 60,
+            jpeg_quality: 80,
+            scale_percent: 100,
+            download_dir: std::env::temp_dir(),
+            auto_accept_files: true,
+            codec: opacusr_agent::session::CodecChoice::Auto,
+            view_only: false,
+            clipboard_sync: true,
+            adaptive_quality: false,
+            audio: false,
+            audio_device: String::new(),
+            lock_input: false,
+            totp_secret: None,
+            record: false,
+            record_dir: std::env::temp_dir(),
+            tunnel: TunnelPolicy::Loopback,
+            auth_gate: None,
+        };
+        let (ev_tx, _ev_rx) = mpsc::unbounded_channel();
+        let (_cmd_tx, cmd_rx) = mpsc::unbounded_channel();
+        let session = SecureSession::new(Box::new(TcpTransport::from_stream(sock)), None);
+        SessionHost {
+            cfg,
+            events: ev_tx,
+            commands: cmd_rx,
+        }
+        .run(
+            session,
+            Box::new(TestSource::new(320, 200)),
+            Box::new(opacusr_input::RecordingInjector::new()),
+        )
+        .await;
+    });
+
+    let (client, mut events) = SessionClient::connect_direct(
+        &addr,
+        SessionSettings {
+            password: PASSWORD.into(),
+            display_name: "e2e-viewer".into(),
+            download_dir: std::env::temp_dir(),
+            auto_accept_files: true,
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("connect");
+
+    let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
+    let runner = tokio::spawn(client.run(cmd_rx));
+
+    // Connected must announce tunnel support.
+    let ev = tokio::time::timeout(Duration::from_secs(15), events.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let ClientEvent::Connected { tunnel, .. } = ev else {
+        panic!("expected Connected, got {ev:?}");
+    };
+    assert!(tunnel, "loopback policy must announce tunnels");
+
+    // Bind an ephemeral local listener.
+    cmd_tx
+        .send(Command::TunnelListen {
+            listen_port: 0,
+            target_host: "127.0.0.1".into(),
+            target_port: echo_port,
+        })
+        .unwrap();
+    let listen_port = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if let ClientEvent::TunnelListening { listen_port, .. } = events.recv().await.unwrap() {
+                return listen_port;
+            }
+        }
+    })
+    .await
+    .expect("no TunnelListening event");
+    assert!(listen_port > 0);
+
+    // A local "app" connects through the forwarded port.
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut app = tokio::net::TcpStream::connect(("127.0.0.1", listen_port))
+        .await
+        .expect("local tunnel connect");
+    app.write_all(PAYLOAD).await.unwrap();
+
+    // Echo comes back through the session.
+    let mut buf = [0u8; PAYLOAD.len()];
+    tokio::time::timeout(Duration::from_secs(10), app.read_exact(&mut buf))
+        .await
+        .expect("echo timed out")
+        .expect("read failed");
+    assert_eq!(&buf, PAYLOAD, "echo mismatch");
+
+    // Host answered the open with success.
+    let opened = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if let ClientEvent::TunnelOpened { ok, error, .. } = events.recv().await.unwrap() {
+                return (ok, error);
+            }
+        }
+    })
+    .await
+    .expect("no TunnelOpened event");
+    assert!(opened.0, "tunnel must open: {:?}", opened.1);
+
+    // The server closes → host-side EOF → TunnelClosed event.
+    let closed = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if let ClientEvent::TunnelClosed { id } = events.recv().await.unwrap() {
+                return id;
+            }
+        }
+    })
+    .await
+    .expect("no TunnelClosed event");
+    assert!(closed > 0);
+
+    // Local app hangs up cleanly; the session stays alive (the pump
+    // completed the half-close handshake both ways).
+    drop(app);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Stopping the listener removes it.
+    cmd_tx.send(Command::TunnelStop { listen_port }).unwrap();
+    // A new connect to the stopped port must fail.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(
+        tokio::net::TcpStream::connect(("127.0.0.1", listen_port))
+            .await
+            .is_err(),
+        "listener must be closed after TunnelStop"
+    );
+
+    drop(runner);
+    drop(cmd_tx);
+    host_task.abort();
+}
+
+/// A view-only host never announces tunnels, and the viewer-side guard
+/// refuses `TunnelListen` locally (no listener, explicit notice).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn tunnel_refused_in_view_only() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let host_task = tokio::spawn(async move {
+        let (sock, _) = listener.accept().await.unwrap();
+        let cfg = SessionConfig {
+            password: Some(PASSWORD.into()),
+            display_name: "e2e-host".into(),
+            fps: 60,
+            jpeg_quality: 80,
+            scale_percent: 100,
+            download_dir: std::env::temp_dir(),
+            auto_accept_files: true,
+            codec: opacusr_agent::session::CodecChoice::Auto,
+            view_only: true,
+            clipboard_sync: true,
+            adaptive_quality: false,
+            audio: false,
+            audio_device: String::new(),
+            lock_input: false,
+            totp_secret: None,
+            record: false,
+            record_dir: std::env::temp_dir(),
+            tunnel: TunnelPolicy::Loopback,
+            auth_gate: None,
+        };
+        let (ev_tx, _ev_rx) = mpsc::unbounded_channel();
+        let (_cmd_tx, cmd_rx) = mpsc::unbounded_channel();
+        let session = SecureSession::new(Box::new(TcpTransport::from_stream(sock)), None);
+        SessionHost {
+            cfg,
+            events: ev_tx,
+            commands: cmd_rx,
+        }
+        .run(
+            session,
+            Box::new(TestSource::new(320, 200)),
+            Box::new(opacusr_input::RecordingInjector::new()),
+        )
+        .await;
+    });
+
+    let (client, mut events) = SessionClient::connect_direct(
+        &addr,
+        SessionSettings {
+            password: PASSWORD.into(),
+            display_name: "e2e-viewer".into(),
+            download_dir: std::env::temp_dir(),
+            auto_accept_files: true,
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("connect");
+
+    let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
+    let runner = tokio::spawn(client.run(cmd_rx));
+
+    let ev = tokio::time::timeout(Duration::from_secs(15), events.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let ClientEvent::Connected { tunnel, .. } = ev else {
+        panic!("expected Connected, got {ev:?}");
+    };
+    assert!(!tunnel, "view-only sessions must not announce tunnels");
+
+    // The viewer-side guard refuses before anything hits the wire.
+    cmd_tx
+        .send(Command::TunnelListen {
+            listen_port: 0,
+            target_host: "127.0.0.1".into(),
+            target_port: 80,
+        })
+        .unwrap();
+    let refused = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match events.recv().await.unwrap() {
+                ClientEvent::Notice(t) => return t,
+                ClientEvent::Frame { .. } => {}
+                _ => {}
+            }
+        }
+    })
+    .await
+    .expect("no refusal notice");
+    assert!(
+        refused.contains("tunnel"),
+        "expected a tunnel refusal notice, got: {refused}"
+    );
+
+    drop(runner);
+    drop(cmd_tx);
+    host_task.abort();
 }

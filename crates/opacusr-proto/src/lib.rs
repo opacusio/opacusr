@@ -27,7 +27,11 @@ pub use signal::*;
 /// v4 (0.6.0): `SessionAccept` gained a `recording` flag — hosts with
 /// opt-in session recording tell viewers their session is muxed to a
 /// video file.
-pub const PROTO_VERSION: u32 = 4;
+///
+/// v5 (0.6.0): `SessionAccept` gained a `tunnel` flag; new messages
+/// `TunnelOpen`/`TunnelOpened`/`TunnelData`/`TunnelClose` for SSH-style
+/// TCP port forwarding through the session.
+pub const PROTO_VERSION: u32 = 5;
 
 /// Application name used in handshakes and logs.
 pub const APP_NAME: &str = "OpacusR";

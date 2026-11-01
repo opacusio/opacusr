@@ -103,11 +103,18 @@ pub fn session_ui(ctx: &Context, s: &mut SessionHandle, cfg: &mut AgentConfig) {
             ui.toggle_value(&mut s.panel_files, "📁");
             ui.toggle_value(&mut s.panel_term, "⌨");
             ui.toggle_value(&mut s.panel_stats, "📊");
+            let mut tunnel_btn = ui
+                .toggle_value(&mut s.panel_tunnel, "🔗")
+                .on_hover_text("TCP tunnels (SSH-style port forwarding)");
+            tunnel_btn.enabled = s.tunnel_available;
+            if s.panel_tunnel && !s.tunnel_available {
+                s.panel_tunnel = false;
+            }
         });
     });
 
     // ---- right sidebar ---------------------------------------------------
-    if s.panel_chat || s.panel_files || s.panel_term || s.panel_stats {
+    if s.panel_chat || s.panel_files || s.panel_term || s.panel_stats || s.panel_tunnel {
         egui::SidePanel::right("session_sidebar")
             .min_width(280.0)
             .default_width(320.0)
@@ -126,6 +133,10 @@ pub fn session_ui(ctx: &Context, s: &mut SessionHandle, cfg: &mut AgentConfig) {
                 }
                 if s.panel_term {
                     terminal_panel(ui, s);
+                    ui.separator();
+                }
+                if s.panel_tunnel {
+                    tunnel_panel(ui, s);
                 }
             });
     }
@@ -540,4 +551,89 @@ fn terminal_panel(ui: &mut egui::Ui, s: &mut SessionHandle) {
         let _ = s.commands.send(Command::TermClose { id: 1 });
         s.term_open = false;
     }
+}
+
+fn tunnel_panel(ui: &mut egui::Ui, s: &mut SessionHandle) {
+    ui.heading("🔗 TCP tunnels");
+    if !s.tunnel_available {
+        crate::hint(
+            ui,
+            "The host does not forward tunnels (policy off or view-only session).",
+        );
+        return;
+    }
+
+    // Active listeners with stop buttons.
+    if s.tunnels.is_empty() {
+        ui.weak("no active tunnels");
+    } else {
+        egui::Grid::new("tunnel_list")
+            .num_columns(4)
+            .show(ui, |ui| {
+                for (port, host, tport) in s.tunnels.clone() {
+                    ui.monospace(format!("127.0.0.1:{port}"));
+                    ui.label("→");
+                    ui.monospace(format!("{host}:{tport}"));
+                    if ui.button("stop").clicked() {
+                        let _ = s.commands.send(Command::TunnelStop { listen_port: port });
+                        s.tunnels.retain(|(p, ..)| *p != port);
+                    }
+                    ui.end_row();
+                }
+            });
+    }
+    ui.separator();
+
+    ui.label("Forward a local port to a host-side target:");
+    egui::Grid::new("tunnel_form")
+        .num_columns(2)
+        .show(ui, |ui| {
+            ui.label("Local port");
+            ui.add(
+                egui::TextEdit::singleline(&mut s.tun_local_port)
+                    .hint_text("8080 (0 = auto)")
+                    .desired_width(120.0),
+            );
+            ui.end_row();
+            ui.label("Target (on host)");
+            ui.add(
+                egui::TextEdit::singleline(&mut s.tun_target_host)
+                    .hint_text("127.0.0.1")
+                    .desired_width(120.0),
+            );
+            ui.end_row();
+            ui.label("Target port");
+            ui.add(
+                egui::TextEdit::singleline(&mut s.tun_target_port)
+                    .hint_text("3000")
+                    .desired_width(120.0),
+            );
+            ui.end_row();
+        });
+
+    let local = s.tun_local_port.trim().parse::<u16>().ok();
+    let target = s.tun_target_port.trim().parse::<u16>().ok();
+    ui.horizontal(|ui| {
+        if ui
+            .add_enabled(
+                local.is_some() && target.is_some(),
+                egui::Button::new("Start"),
+            )
+            .clicked()
+        {
+            let _ = s.commands.send(Command::TunnelListen {
+                listen_port: local.unwrap_or(0),
+                target_host: s.tun_target_host.trim().to_string(),
+                target_port: target.unwrap_or(0),
+            });
+            s.tun_local_port.clear();
+        }
+        if ui.button("Stop all").clicked() {
+            for (port, ..) in s.tunnels.clone() {
+                let _ = s.commands.send(Command::TunnelStop { listen_port: port });
+            }
+            s.tunnels.clear();
+        }
+    });
+    ui.weak("Connect apps to 127.0.0.1:<local port>; the host relays them.");
 }
