@@ -573,6 +573,7 @@ impl eframe::App for App {
                     audio_available,
                     codec,
                     fps_hint,
+                    ..
                 } => {
                     sess.screen = screen;
                     sess.view_only = view_only;
