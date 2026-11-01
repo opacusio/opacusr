@@ -20,7 +20,10 @@ pub use signal::*;
 ///
 /// v2 (0.3.0): `SessionAccept` gained `view_only`/`screens`/`audio_available`;
 /// new messages `LinkStats`, `SelectScreen`, `AudioControl`, `AudioFrame`.
-pub const PROTO_VERSION: u32 = 2;
+///
+/// v3 (0.6.0): `AuthResponse` gained an optional `totp` code (RFC 6238
+/// second factor) — hosts that require 2FA reject responses without it.
+pub const PROTO_VERSION: u32 = 3;
 
 /// Application name used in handshakes and logs.
 pub const APP_NAME: &str = "OpacusR";

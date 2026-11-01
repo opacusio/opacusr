@@ -56,6 +56,9 @@ pub struct SessionConfig {
     /// full control (TeamViewer-style; view-only sessions never lock,
     /// fail-open when the platform cannot take the lock).
     pub lock_input: bool,
+    /// Optional RFC 6238 secret (base32). When set, viewers must present
+    /// a valid TOTP code in addition to the password.
+    pub totp_secret: Option<String>,
     /// Shared auth-failure limiter (rate limiting + lockout). One instance
     /// per accept path (signaling / LAN), shared by all its sessions.
     pub auth_gate: Option<Arc<AuthGate>>,
@@ -184,6 +187,7 @@ async fn run_session(
     let auth = host_handshake(
         session,
         cfg.password.as_deref(),
+        cfg.totp_secret.as_deref(),
         &cfg.display_name,
         cfg.auth_gate.as_deref(),
     )

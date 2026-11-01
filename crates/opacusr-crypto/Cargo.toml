@@ -11,6 +11,7 @@ homepage.workspace = true
 opacusr-proto = { workspace = true }
 rand = { workspace = true }
 sha2 = { workspace = true }
+sha1 = { workspace = true }
 hmac = { workspace = true }
 hkdf = { workspace = true }
 argon2 = { workspace = true }

@@ -173,6 +173,9 @@ pub struct SessionSettings {
     pub auto_accept_files: bool,
     /// Two-way clipboard synchronization.
     pub clipboard_sync: bool,
+    /// RFC 6238 code typed by the user (hosts with 2FA verify it in
+    /// addition to the password; ignored when the host has no secret).
+    pub totp: Option<String>,
     pub webrtc: WebRtcConfig,
 }
 
@@ -186,6 +189,7 @@ impl Default for SessionSettings {
                 .join("OpacusR-Received"),
             auto_accept_files: true,
             clipboard_sync: true,
+            totp: None,
             webrtc: WebRtcConfig {
                 ice_servers: vec![opacusr_transport::webrtc::IceServerConfig::stun(&[
                     "stun:stun.l.google.com:19302",
@@ -401,8 +405,13 @@ impl SessionClient {
         mut session: SecureSession,
         settings: SessionSettings,
     ) -> Result<(Self, mpsc::UnboundedReceiver<ClientEvent>), TransportError> {
-        let handshake =
-            viewer_handshake(&mut session, &settings.password, &settings.display_name).await?;
+        let handshake = viewer_handshake(
+            &mut session,
+            &settings.password,
+            &settings.display_name,
+            settings.totp.as_deref(),
+        )
+        .await?;
         let accept = match session.recv_msg().await? {
             Message::SessionAccept(a) => a,
             other => {

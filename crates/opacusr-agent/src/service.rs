@@ -519,6 +519,7 @@ impl AgentService {
             audio: self.cfg.audio,
             audio_device: self.cfg.audio_device.clone(),
             lock_input: self.cfg.lock_input,
+            totp_secret: self.cfg.totp_secret.clone(),
             auth_gate: Some(gate.clone()),
         };
         // Per-session command channel: the UI pushes HostCommands (file

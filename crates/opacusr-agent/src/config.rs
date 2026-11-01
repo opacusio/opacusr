@@ -131,6 +131,11 @@ pub struct AgentConfig {
     /// passes; view-only sessions never lock; Ctrl+Alt+Del stays available
     /// on Windows. Best-effort per platform (docs/platforms.md); fail-open.
     pub lock_input: bool,
+    /// Optional RFC 6238 secret for the second factor (base32, no
+    /// padding). When set, viewers must present a valid TOTP code in
+    /// addition to the unattended password. Generate via the Host tab
+    /// (`opacusr-crypto::totp::generate_secret`) or any base32 secret.
+    pub totp_secret: Option<String>,
 }
 
 impl Default for AgentConfig {
@@ -166,6 +171,7 @@ impl Default for AgentConfig {
             signal_listen: false,
             signal_listen_port: 8080,
             lock_input: false,
+            totp_secret: None,
         }
     }
 }

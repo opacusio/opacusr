@@ -38,10 +38,10 @@ async fn attempt(
     let host = tokio::spawn(async move {
         let (sock, _) = listener.accept().await.unwrap();
         let mut session = SecureSession::new(Box::new(TcpTransport::from_stream(sock)), None);
-        host_handshake(&mut session, Some(PW), "gate-test-host", Some(&gate)).await
+        host_handshake(&mut session, Some(PW), None, "gate-test-host", Some(&gate)).await
     });
     let mut vs = SecureSession::new(Box::new(TcpTransport::connect(addr).await.unwrap()), None);
-    let viewer = viewer_handshake(&mut vs, password, "gate-test-viewer").await;
+    let viewer = viewer_handshake(&mut vs, password, "gate-test-viewer", None).await;
     let host = host.await.unwrap();
     (host, viewer)
 }

@@ -143,6 +143,9 @@ pub struct App {
         std::sync::mpsc::Receiver<(PeerId, String, std::sync::mpsc::Sender<SessionDecision>)>,
     >,
 
+    /// Optional TOTP code typed for hosts that require a second factor.
+    pub totp_input: String,
+
     pub config: AgentConfig,
     pub status_message: String,
     pub host_password_input: String,
@@ -190,6 +193,7 @@ impl App {
             config,
             status_message: "Ready.".into(),
             host_password_input: String::new(),
+            totp_input: String::new(),
             book: AddressBook::load(),
             new_label: String::new(),
             new_target: String::new(),
@@ -227,6 +231,14 @@ impl App {
         let display_name = self.display_name.clone();
         let download_dir = self.config.download_dir.clone();
         let clipboard_sync = self.config.clipboard_sync;
+        let totp = {
+            let t = self.totp_input.trim();
+            if t.is_empty() {
+                None
+            } else {
+                Some(t.to_string())
+            }
+        };
         let make_settings =
             move |turn: Option<opacusr_transport::turn::TurnCredentials>| -> SessionSettings {
                 let mut ice = base_ice.clone();
@@ -244,6 +256,7 @@ impl App {
                     download_dir: download_dir.clone(),
                     auto_accept_files: true,
                     clipboard_sync,
+                    totp: totp.clone(),
                     webrtc: opacusr_transport::webrtc::WebRtcConfig { ice_servers: ice },
                 }
             };
@@ -804,6 +817,14 @@ impl App {
                         ui.add_sized(
                             [430.0, 26.0],
                             egui::TextEdit::singleline(&mut self.password_input).password(true),
+                        );
+                        ui.end_row();
+
+                        ui.label(egui::RichText::new("2FA code").strong());
+                        ui.add_sized(
+                            [430.0, 26.0],
+                            egui::TextEdit::singleline(&mut self.totp_input)
+                                .hint_text("6 digits — only if the host requires it"),
                         );
                         ui.end_row();
 

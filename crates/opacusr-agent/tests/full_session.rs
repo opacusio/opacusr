@@ -104,6 +104,7 @@ async fn full_session_over_tcp() {
             audio: false,
             audio_device: String::new(),
             lock_input: false,
+            totp_secret: None,
             auth_gate: Some(Arc::new(AuthGate::new(AuthGateConfig::default()))),
         };
         let session = SecureSession::new(Box::new(TcpTransport::from_stream(sock)), None);
@@ -341,4 +342,108 @@ async fn full_session_over_tcp() {
     host.await.unwrap();
     drop(runner);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ---------------------------------------------------------------------------
+// TOTP second factor
+// ---------------------------------------------------------------------------
+
+/// The RFC 6238 reference secret (base32 of ASCII "12345678901234567890").
+const TOTP_SECRET: &str = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+
+fn totp_code_now() -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    opacusr_crypto::totp::totp_at(TOTP_SECRET, now).unwrap()
+}
+
+/// Host with `totp_secret` set: a wrong 6-digit code must be rejected even
+/// with the correct password; the current code must let the session in.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn totp_second_factor_is_enforced() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+
+    // Host: handle both connection attempts sequentially.
+    let host_task = tokio::spawn(async move {
+        for _ in 0..2 {
+            let (sock, _) = listener.accept().await.unwrap();
+            let cfg = SessionConfig {
+                password: Some(PASSWORD.into()),
+                display_name: "e2e-host".into(),
+                fps: 60,
+                jpeg_quality: 80,
+                scale_percent: 100,
+                download_dir: std::env::temp_dir(),
+                auto_accept_files: true,
+                codec: opacusr_agent::session::CodecChoice::Auto,
+                view_only: false,
+                clipboard_sync: true,
+                adaptive_quality: false,
+                audio: false,
+                audio_device: String::new(),
+                lock_input: false,
+                totp_secret: Some(TOTP_SECRET.into()),
+                auth_gate: None,
+            };
+            let (ev_tx, _ev_rx) = mpsc::unbounded_channel();
+            let (_cmd_tx, cmd_rx) = mpsc::unbounded_channel();
+            let session = SecureSession::new(Box::new(TcpTransport::from_stream(sock)), None);
+            SessionHost {
+                cfg,
+                events: ev_tx,
+                commands: cmd_rx,
+            }
+            .run(
+                session,
+                Box::new(TestSource::new(320, 200)),
+                Box::new(opacusr_input::RecordingInjector::new()),
+            )
+            .await;
+        }
+    });
+
+    // Attempt 1: correct password, wrong code → rejected with a 2FA error.
+    let wrong = SessionSettings {
+        password: PASSWORD.into(),
+        display_name: "e2e-viewer".into(),
+        download_dir: std::env::temp_dir(),
+        auto_accept_files: true,
+        totp: Some("000000".into()),
+        ..Default::default()
+    };
+    match SessionClient::connect_direct(&addr, wrong).await {
+        Ok(_) => panic!("wrong 2FA code must be rejected"),
+        Err(e) => assert!(
+            e.to_string().contains("2FA"),
+            "expected a 2FA error, got: {e}"
+        ),
+    }
+
+    // Attempt 2: correct password + current code → session established.
+    let good = SessionSettings {
+        password: PASSWORD.into(),
+        display_name: "e2e-viewer".into(),
+        download_dir: std::env::temp_dir(),
+        auto_accept_files: true,
+        totp: Some(totp_code_now()),
+        ..Default::default()
+    };
+    let (client, mut events) = SessionClient::connect_direct(&addr, good)
+        .await
+        .expect("valid 2FA code must connect");
+    let runner = tokio::spawn(client.run(tokio::sync::mpsc::unbounded_channel().1));
+    let ev = tokio::time::timeout(Duration::from_secs(15), events.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        matches!(ev, ClientEvent::Connected { .. }),
+        "expected Connected, got {ev:?}"
+    );
+    drop(runner);
+
+    host_task.await.unwrap();
 }

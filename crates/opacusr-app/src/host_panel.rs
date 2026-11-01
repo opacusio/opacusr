@@ -169,6 +169,57 @@ pub fn host_ui(ctx: &Context, app: &mut App) {
             });
             ui.end_row();
 
+            ui.label(egui::RichText::new("Two-factor (TOTP)").strong());
+            ui.horizontal(|ui| {
+                if let Some(secret) = app.config.totp_secret.clone() {
+                    ui.label(
+                        egui::RichText::new("● enabled")
+                            .color(egui::Color32::from_rgb(90, 200, 120)),
+                    );
+                    if ui.small_button("Copy key").clicked() {
+                        ui.output_mut(|o| o.copied_text = secret.clone());
+                        app.status_message =
+                            "Base32 key copied — add it to your authenticator app.".into();
+                    }
+                    if ui.small_button("Disable").clicked() {
+                        app.config.totp_secret = None;
+                        match app.config.save() {
+                            Ok(p) => {
+                                app.status_message =
+                                    format!("2FA disabled (saved {}).", p.display())
+                            }
+                            Err(e) => app.status_message = format!("Save failed: {e}"),
+                        }
+                    }
+                } else {
+                    if ui.button("Enable 2FA…").clicked() {
+                        let key = opacusr_crypto::totp::generate_secret();
+                        ui.output_mut(|o| o.copied_text = key.clone());
+                        app.config.totp_secret = Some(key.clone());
+                        match app.config.save() {
+                            Ok(p) => {
+                                app.status_message = format!(
+                                    "2FA enabled (saved {}). Key copied to the clipboard — \
+                                     add it to your authenticator app \
+                                     (otpauth://totp/OpacusR?secret={key}&issuer=OpacusR).",
+                                    p.display()
+                                );
+                            }
+                            Err(e) => {
+                                app.config.totp_secret = None;
+                                app.status_message = format!("Save failed: {e}");
+                            }
+                        }
+                    }
+                    ui.label(
+                        egui::RichText::new("viewers must then type a 6-digit code")
+                            .weak()
+                            .small(),
+                    );
+                }
+            });
+            ui.end_row();
+
             ui.label(egui::RichText::new("Download folder").strong());
             ui.label(app.config.download_dir.display().to_string());
             ui.end_row();

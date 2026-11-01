@@ -14,6 +14,8 @@
 //!    sealed with a strictly monotonic counter as the nonce — this gives
 //!    replay protection for free.
 
+pub mod totp;
+
 use argon2::{Algorithm, Argon2, Params, Version};
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};

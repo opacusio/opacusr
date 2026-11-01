@@ -121,10 +121,14 @@ pub struct AuthChallenge {
     pub kdf: KdfParams,
 }
 
-/// Viewer → host: HMAC proof over the challenge nonce.
+/// Viewer → host: HMAC proof over the challenge nonce, plus an optional
+/// RFC 6238 TOTP code (second factor). Hosts that require 2FA reject
+/// responses without a valid code.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthResponse {
     pub proof: [u8; 32],
+    #[serde(default)]
+    pub totp: Option<String>,
 }
 
 /// Host → viewer: authentication verdict + session salt for key derivation.

@@ -8,6 +8,15 @@ SemVer-ish (breaking protocol changes bump the minor until 1.0).
 
 ### Added
 
+- **TOTP two-factor authentication (optional)** — hosts can enable a
+  second factor (`Host tab → Two-factor (TOTP) → Enable`): a random
+  base32 secret is generated and copied to the clipboard
+  (`otpauth://totp/OpacusR?secret=…` for authenticator apps; RFC 6238,
+  HMAC-SHA1, 30 s step, 6 digits, ±1 window for clock drift). Viewers
+  then type a 6-digit code in the Connect tab; hosts verify it *in
+  addition* to the password and feed wrong codes into the same
+  lockout as wrong passwords. `PROTO_VERSION` bumps to 3 (old peers are
+  refused cleanly). Verified against the RFC 6238 test vectors.
 - **Viewer address book** — save contacts (label, 9-digit ID or `ip:port`,
   optional per-contact signaling endpoint tried before the global list),
   favorites, one-click connect from the list. Stored locally in

@@ -27,11 +27,14 @@ pub struct ViewerHandshake {
     pub session_key: [u8; 32],
 }
 
-/// Viewer side of the handshake.
+/// Viewer side of the handshake. `totp: Option<&str>` — the RFC 6238 code
+/// typed by the user (hosts that require a second factor verify it in
+/// addition to the password).
 pub async fn viewer_handshake(
     session: &mut SecureSession,
     password: &str,
     display_name: &str,
+    totp: Option<&str>,
 ) -> std::result::Result<ViewerHandshake, TransportError> {
     tokio::time::timeout(HANDSHAKE_TIMEOUT, async {
         let hello = Hello {
@@ -77,7 +80,10 @@ pub async fn viewer_handshake(
             .map_err(|e| TransportError::Other(format!("kdf: {e}")))?;
         let proof = auth_proof(&psk, &challenge.salt, &challenge.nonce);
         session
-            .send_msg(&Message::AuthResponse(AuthResponse { proof }))
+            .send_msg(&Message::AuthResponse(AuthResponse {
+                proof,
+                totp: totp.map(str::to_string),
+            }))
             .await?;
 
         let result = match session.recv_msg().await? {
@@ -121,9 +127,15 @@ pub struct HostAuth {
 /// handshake is refused before any challenge material is sent while the
 /// gate is locked, and wrong proofs are recorded (a wrong proof is the
 /// only thing that counts — see [`crate::lockout`]).
+///
+/// `totp_secret: Option<&str>` — base32 RFC 6238 secret. When set, the
+/// viewer must present a valid code (previous/current/next window) in
+/// `AuthResponse.totp` in addition to the correct password; failures are
+/// recorded in the gate just like wrong passwords.
 pub async fn host_handshake(
     session: &mut SecureSession,
     password: Option<&str>,
+    totp_secret: Option<&str>,
     display_name: &str,
     gate: Option<&AuthGate>,
 ) -> std::result::Result<HostAuth, TransportError> {
@@ -218,9 +230,7 @@ pub async fn host_handshake(
             .map_err(|e| TransportError::Other(format!("kdf: {e}")))?;
         let expected = auth_proof(&psk, &salt, &nonce);
 
-        let (ok, error) = if ct_eq(&expected, &response.proof) {
-            (true, None)
-        } else {
+        let (ok, error) = if !ct_eq(&expected, &response.proof) {
             if let Some(gate) = gate {
                 match gate.record_failure() {
                     Some(lock) => tracing::warn!(target: "opacusr",
@@ -230,6 +240,32 @@ pub async fn host_handshake(
                 }
             }
             (false, Some("wrong password".to_string()))
+        } else if let Some(secret) = totp_secret {
+            // Password proof is valid — the second factor decides.
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let good = response
+                .totp
+                .as_deref()
+                .map(|code| opacusr_crypto::totp::verify_totp(secret, code, now))
+                .unwrap_or(false);
+            if good {
+                (true, None)
+            } else {
+                if let Some(gate) = gate {
+                    match gate.record_failure() {
+                        Some(lock) => tracing::warn!(target: "opacusr",
+                            "auth failed: invalid 2FA code (lockout engaged for {} s)",
+                            lock.as_secs()),
+                        None => tracing::warn!(target: "opacusr", "auth failed: invalid 2FA code"),
+                    }
+                }
+                (false, Some("invalid 2FA code".to_string()))
+            }
+        } else {
+            (true, None)
         };
         let session_salt = random_bytes::<16>();
         session
