@@ -579,7 +579,6 @@ impl eframe::App for App {
                     sess.view_only = view_only;
                     sess.screens = screens;
                     sess.audio_available = audio_available;
-                    sess.host_name = host_name;
                     sess.codec = Some(codec);
                     sess.fps_hint = fps_hint;
                     sess.selected_screen = 0;
@@ -588,6 +587,7 @@ impl eframe::App for App {
                         "connected to {host_name}{}",
                         if view_only { " (view only)" } else { "" }
                     );
+                    sess.host_name = host_name;
                     self.cur_connected_at = Some(now_secs());
                     if let Some(ts) = self.cur_hist_ts {
                         self.book.mark_outcome(ts, Outcome::Connected);
