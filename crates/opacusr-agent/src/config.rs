@@ -87,6 +87,12 @@ pub struct AgentConfig {
     /// STUN/TURN servers (one URL per entry; `user:pass@host` style TURN
     /// URLs are parsed by the app layer).
     pub ice_urls: Vec<String>,
+    /// Outbound proxy for the internet-facing paths (signaling WebSocket
+    /// and the TCP relay): `socks5://[user:pass@]host:port` (default port
+    /// 1080) or `http://[user:pass@]host:port` (explicit port). Empty =
+    /// direct. WebRTC ICE/UDP traffic does not go through the proxy —
+    /// behind strict firewalls the transport ladder lands on the relay.
+    pub proxy: String,
     /// Video codec: `auto` (H.264 when built with it, else JPEG), `jpeg`,
     /// or `h264` (falls back to JPEG when the feature is compiled out).
     pub codec: String,
@@ -178,6 +184,7 @@ impl Default for AgentConfig {
             lan_port: 54000,
             allow_lan: false,
             ice_urls: vec!["stun:stun.l.google.com:19302".into()],
+            proxy: String::new(),
             codec: "auto".into(),
             clipboard_sync: true,
             adaptive_quality: true,
@@ -437,5 +444,17 @@ mod tests {
         let back: AgentConfig = toml::from_str(&text).unwrap();
         assert!(back.allow_lan);
         assert_eq!(back.lan_port, 54001);
+    }
+
+    #[test]
+    fn proxy_defaults_empty_and_round_trips() {
+        assert_eq!(AgentConfig::default().proxy, "");
+        let cfg = AgentConfig {
+            proxy: "socks5://user:pass@proxy.corp:1080".into(),
+            ..Default::default()
+        };
+        let text = toml::to_string_pretty(&cfg).unwrap();
+        let back: AgentConfig = toml::from_str(&text).unwrap();
+        assert_eq!(back.proxy, "socks5://user:pass@proxy.corp:1080");
     }
 }

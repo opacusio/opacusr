@@ -13,6 +13,7 @@ use tokio::net::TcpStream;
 use opacusr_proto::framing::{encode_frame, FrameDecoder};
 use opacusr_proto::Channel;
 
+use crate::proxy::Proxy;
 use crate::{Result, Transport, TransportError};
 
 const READ_BUF: usize = 16 * 1024;
@@ -34,7 +35,25 @@ impl RelayTransport {
     /// Connect to `server` (`host:port` of the relay listener) with a ticket
     /// obtained from signaling.
     pub async fn connect(server: &str, ticket: [u8; 16], role: RelayRole) -> Result<Self> {
-        let mut stream = TcpStream::connect(server).await?;
+        Self::connect_via(server, ticket, role, None).await
+    }
+
+    /// Same, optionally dialing through an outbound proxy
+    /// (`crate::proxy::Proxy`) — the relay is the proxied fallback path
+    /// behind strict firewalls.
+    pub async fn connect_via(
+        server: &str,
+        ticket: [u8; 16],
+        role: RelayRole,
+        proxy: Option<&Proxy>,
+    ) -> Result<Self> {
+        let mut stream = match proxy {
+            None => TcpStream::connect(server).await?,
+            Some(p) => p
+                .connect(server)
+                .await
+                .map_err(|e| TransportError::Other(format!("proxy connect to {server}: {e}")))?,
+        };
         stream.set_nodelay(true).ok();
         // Preamble: ticket ‖ role byte. The server reads exactly 17 bytes
         // and starts piping once both sides of a ticket arrived.

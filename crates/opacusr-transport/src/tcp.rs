@@ -8,6 +8,7 @@ use tokio::net::TcpStream;
 use opacusr_proto::framing::{encode_frame, FrameDecoder};
 use opacusr_proto::Channel;
 
+use crate::proxy::Proxy;
 use crate::{Result, Transport, TransportError};
 
 const READ_BUF: usize = 16 * 1024;
@@ -20,7 +21,19 @@ pub struct TcpTransport {
 impl TcpTransport {
     /// Connect to a listener (LAN mode: `ip:port` of `opacusr-agent --listen`).
     pub async fn connect(addr: &str) -> Result<Self> {
-        let stream = TcpStream::connect(addr).await?;
+        Self::connect_via(addr, None).await
+    }
+
+    /// Connect directly, or through an outbound proxy when one is given
+    /// (see [`crate::proxy`]; LAN/direct use keeps `None`).
+    pub async fn connect_via(addr: &str, proxy: Option<&Proxy>) -> Result<Self> {
+        let stream = match proxy {
+            None => TcpStream::connect(addr).await?,
+            Some(p) => p
+                .connect(addr)
+                .await
+                .map_err(|e| TransportError::Other(format!("proxy connect to {addr}: {e}")))?,
+        };
         stream.set_nodelay(true).ok();
         Ok(Self {
             stream,

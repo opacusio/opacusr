@@ -257,7 +257,8 @@ impl AgentService {
         gate: &Arc<AuthGate>,
         turn: &TurnCredentialCache,
     ) -> anyhow::Result<()> {
-        let mut sig = SignalingClient::connect(url).await?;
+        let proxy = proxy_for_endpoint(&self.cfg.proxy, url)?;
+        let mut sig = SignalingClient::connect_via(url, proxy.as_ref()).await?;
         sig.send(&SignalMessage::Register(Register {
             platform: opacusr_proto::Platform::current(),
             display_name: self.cfg.name.clone(),
@@ -474,12 +475,14 @@ impl AgentService {
     ) -> anyhow::Result<()> {
         // Connect to the relay endpoint on the same host as THIS
         // signaling endpoint (fan-out: every endpoint carries its own
-        // relay).
+        // relay). The relay is the proxied fallback path.
         let host = relay_host_of(url)?;
-        let relay = opacusr_transport::relay::RelayTransport::connect(
+        let proxy = proxy_for_endpoint(&self.cfg.proxy, url)?;
+        let relay = opacusr_transport::relay::RelayTransport::connect_via(
             &format!("{host}:{port}"),
             ticket,
             opacusr_transport::relay::RelayRole::Host,
+            proxy.as_ref(),
         )
         .await?;
         self.spawn_host(
@@ -624,4 +627,111 @@ fn relay_host_of(url: &str) -> anyhow::Result<String> {
         .ok_or_else(|| anyhow::anyhow!("unsupported signaling url: {url}"))?;
     let host_port = rest.split('/').next().unwrap_or(rest);
     Ok(host_port.to_string())
+}
+
+/// Parse the configured outbound proxy URL (`""` = direct).
+pub fn parse_proxy(raw: &str) -> anyhow::Result<Option<opacusr_transport::proxy::Proxy>> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Ok(None);
+    }
+    opacusr_transport::proxy::Proxy::parse(raw)
+        .map(Some)
+        .map_err(|e| anyhow::anyhow!("bad proxy url {raw:?}: {e}"))
+}
+
+/// Proxy for a specific endpoint: `None` when unset, invalid, or when
+/// the endpoint itself is loopback — the embedded signaling server must
+/// never be tunneled through an external proxy.
+pub fn proxy_for_endpoint(
+    raw: &str,
+    url: &str,
+) -> anyhow::Result<Option<opacusr_transport::proxy::Proxy>> {
+    if is_loopback_endpoint(url) {
+        return Ok(None);
+    }
+    parse_proxy(raw)
+}
+
+/// True for ws:// URLs whose host part is a loopback address/name.
+fn is_loopback_endpoint(url: &str) -> bool {
+    let Some((_, rest)) = url.split_once("://") else {
+        return false;
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let authority = authority
+        .rsplit_once('@')
+        .map(|(_, a)| a)
+        .unwrap_or(authority);
+    let host = authority
+        .rsplit_once(':')
+        .map(|(h, p)| if p.is_empty() { authority } else { h })
+        .unwrap_or(authority);
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    host == "localhost"
+        || host == "::1"
+        || host.starts_with("127.")
+        || host.starts_with("::ffff:127.")
+}
+
+#[cfg(test)]
+mod proxy_tests {
+    use super::{is_loopback_endpoint, parse_proxy, proxy_for_endpoint};
+
+    #[test]
+    fn empty_proxy_is_direct() {
+        assert_eq!(parse_proxy("").unwrap(), None);
+        assert_eq!(parse_proxy("   ").unwrap(), None);
+    }
+
+    #[test]
+    fn parses_valid_proxy() {
+        let p = parse_proxy("socks5://u:p@1.2.3.4:1080").unwrap().unwrap();
+        assert_eq!(p.host, "1.2.3.4");
+        assert_eq!(p.port, 1080);
+    }
+
+    #[test]
+    fn rejects_broken_proxy() {
+        assert!(parse_proxy("http://no-port").is_err());
+        assert!(parse_proxy("https://x:1").is_err());
+    }
+
+    #[test]
+    fn loopback_endpoints_bypass_the_proxy() {
+        // Even with a proxy configured, the embedded loopback signaling
+        // server must be dialed directly.
+        assert_eq!(
+            proxy_for_endpoint("socks5://1.2.3.4:1080", "ws://127.0.0.1:8080/signal").unwrap(),
+            None
+        );
+        assert_eq!(
+            proxy_for_endpoint("socks5://1.2.3.4:1080", "ws://localhost:8080/signal").unwrap(),
+            None
+        );
+        assert_eq!(
+            proxy_for_endpoint("socks5://1.2.3.4:1080", "ws://[::1]:8080/signal").unwrap(),
+            None
+        );
+        // Non-loopback keeps the proxy.
+        let p = proxy_for_endpoint("socks5://1.2.3.4:1080", "ws://sig.example:80/signal")
+            .unwrap()
+            .unwrap();
+        assert_eq!(p.host, "1.2.3.4");
+    }
+
+    #[test]
+    fn loopback_detection_covers_common_spellings() {
+        for url in [
+            "ws://127.0.0.1:8080/signal",
+            "ws://localhost/signal",
+            "ws://[::1]:80/",
+            "ws://user@127.0.0.1:8080/signal",
+        ] {
+            assert!(is_loopback_endpoint(url), "{url}");
+        }
+        for url in ["ws://sig.example:80/signal", "ws://10.0.0.5:8080/signal"] {
+            assert!(!is_loopback_endpoint(url), "{url}");
+        }
+    }
 }

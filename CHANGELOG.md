@@ -8,6 +8,21 @@ SemVer-ish (breaking protocol changes bump the minor until 1.0).
 
 ### Added
 
+- **Outbound proxy support (SOCKS5 / HTTP CONNECT)** — new `proxy` key
+  in `agent.toml` (agent + viewer) and a Proxy field in the viewer's
+  connect form, plus `opacusr-agent run --proxy`. Formats:
+  `socks5://[user:pass@]host:port` (default port 1080, hostnames are
+  resolved by the proxy) and `http://[user:pass@]host:port` (explicit
+  port). The proxy carries the internet-facing paths: the signaling
+  WebSocket (TLS included — the tunnel is established first) and the
+  TCP relay, which is exactly the fallback path strict corporate
+  firewalls leave open. LAN/direct connections bypass the proxy, and
+  WebRTC ICE/UDP traffic cannot traverse a TCP proxy — the transport
+  ladder lands on the relay instead. Loopback endpoints (the embedded
+  signaling server) are never proxied. Hand-rolled minimal SOCKS5
+  (RFC 1928 + RFC 1929 auth, CONNECT only) and HTTP CONNECT in
+  `opacusr-transport/src/proxy.rs`, unit-tested against in-process fake
+  proxies (method negotiation, auth, error surfacing, round-trips).
 - **Windows service mode for the agent** — `opacusr-agent service
   install|uninstall|status|run` (SCM name `OpacusRAgent`, auto-start).
   The service is a session-0 supervisor that spawns a regular agent

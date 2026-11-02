@@ -17,5 +17,5 @@ pub mod win_service;
 
 pub use config::AgentConfig;
 pub use keychain::{delete_password, load_password, store_password};
-pub use service::{AgentService, SessionDecision};
+pub use service::{parse_proxy, proxy_for_endpoint, AgentService, SessionDecision};
 pub use session::{CodecChoice, HostEvent, SessionConfig, SessionHost};

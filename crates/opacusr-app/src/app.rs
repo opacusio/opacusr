@@ -279,6 +279,15 @@ impl App {
         let display_name = self.display_name.clone();
         let download_dir = self.config.download_dir.clone();
         let clipboard_sync = self.config.clipboard_sync;
+        // Outbound proxy for signaling + relay (validated early so the
+        // user sees the typo, not a cryptic connect failure).
+        let proxy_raw = self.config.proxy.trim().to_string();
+        if !proxy_raw.is_empty() {
+            if let Err(e) = opacusr_transport::Proxy::parse(&proxy_raw) {
+                self.status_message = format!("Bad proxy URL: {e}");
+                return;
+            }
+        }
         let totp = {
             let t = self.totp_input.trim();
             if t.is_empty() {
@@ -305,6 +314,11 @@ impl App {
                     auto_accept_files: true,
                     clipboard_sync,
                     totp: totp.clone(),
+                    proxy: if proxy_raw.is_empty() {
+                        None
+                    } else {
+                        Some(proxy_raw.clone())
+                    },
                     webrtc: opacusr_transport::webrtc::WebRtcConfig { ice_servers: ice },
                 }
             };
@@ -952,6 +966,18 @@ impl App {
 
                         ui.label(egui::RichText::new("Your name").strong());
                         ui.add_sized([430.0, 26.0], egui::TextEdit::singleline(&mut self.display_name));
+                        ui.end_row();
+
+                        ui.label(egui::RichText::new("Proxy").strong());
+                        ui.horizontal(|ui| {
+                            ui.add_sized(
+                                [430.0, 26.0],
+                                egui::TextEdit::singleline(&mut self.config.proxy).hint_text(
+                                    "socks5://user:pass@host:port or http://host:port — empty = direct",
+                                ),
+                            );
+                            crate::hint(ui, "routes signaling + relay; ICE/UDP stays direct");
+                        });
                         ui.end_row();
 
                         ui.label(egui::RichText::new("Transport").strong());

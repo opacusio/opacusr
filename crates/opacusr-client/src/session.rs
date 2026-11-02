@@ -246,6 +246,11 @@ pub struct SessionSettings {
     /// RFC 6238 code typed by the user (hosts with 2FA verify it in
     /// addition to the password; ignored when the host has no secret).
     pub totp: Option<String>,
+    /// Outbound proxy URL for the internet-facing paths (signaling +
+    /// relay): `socks5://[user:pass@]host:port` or
+    /// `http://[user:pass@]host:port`. `None`/empty = direct. LAN/direct
+    /// connections bypass it, as does WebRTC ICE/UDP.
+    pub proxy: Option<String>,
     pub webrtc: WebRtcConfig,
 }
 
@@ -260,6 +265,7 @@ impl Default for SessionSettings {
             auto_accept_files: true,
             clipboard_sync: true,
             totp: None,
+            proxy: None,
             webrtc: WebRtcConfig {
                 ice_servers: vec![opacusr_transport::webrtc::IceServerConfig::stun(&[
                     "stun:stun.l.google.com:19302",
@@ -451,7 +457,16 @@ impl SessionClient {
         settings: SessionSettings,
         choice: TransportChoice,
     ) -> Result<(Self, mpsc::UnboundedReceiver<ClientEvent>), TransportError> {
-        let mut sig = SignalingClient::connect(server_url).await?;
+        let mut proxy: Option<opacusr_transport::proxy::Proxy> = None;
+        if let Some(raw) = settings.proxy.as_deref() {
+            let raw = raw.trim();
+            if !raw.is_empty() {
+                proxy = Some(opacusr_transport::proxy::Proxy::parse(raw).map_err(|e| {
+                    TransportError::Signaling(format!("bad proxy url {raw:?}: {e}"))
+                })?);
+            }
+        }
+        let mut sig = SignalingClient::connect_via(server_url, proxy.as_ref()).await?;
         sig.send(&SignalMessage::Register(Register {
             platform: Platform::current(),
             display_name: settings.display_name.clone(),
@@ -505,13 +520,15 @@ impl SessionClient {
                     Ok(t) => Box::new(t),
                     Err(e) if choice == TransportChoice::Auto => {
                         tracing::warn!(target: "opacusr", "webrtc failed ({e}); falling back to the TCP relay");
-                        Box::new(Self::relay_via(&mut sig, host_id, server_url).await?)
+                        Box::new(
+                            Self::relay_via(&mut sig, host_id, server_url, proxy.as_ref()).await?,
+                        )
                     }
                     Err(e) => return Err(e),
                 }
             }
             TransportChoice::RelayOnly => {
-                Box::new(Self::relay_via(&mut sig, host_id, server_url).await?)
+                Box::new(Self::relay_via(&mut sig, host_id, server_url, proxy.as_ref()).await?)
             }
         };
 
@@ -566,6 +583,7 @@ impl SessionClient {
         sig: &mut SignalingClient,
         host_id: PeerId,
         server_url: &str,
+        proxy: Option<&opacusr_transport::proxy::Proxy>,
     ) -> Result<RelayTransport, TransportError> {
         // Ask the host to allocate a relay ticket.
         sig.send(&SignalMessage::PeerSend(PeerSend {
@@ -598,7 +616,8 @@ impl SessionClient {
         .map_err(|_| TransportError::Timeout)??;
 
         let host = relay_host(server_url)?;
-        RelayTransport::connect(&format!("{host}:{port}"), ticket, RelayRole::Viewer).await
+        RelayTransport::connect_via(&format!("{host}:{port}"), ticket, RelayRole::Viewer, proxy)
+            .await
     }
 
     /// Direct TCP connection to a LAN agent (`ip:port`).

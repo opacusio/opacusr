@@ -54,6 +54,11 @@ enum Cmd {
         /// off | loopback | any (overrides config).
         #[arg(long)]
         tunnel: Option<String>,
+        /// Outbound proxy for signaling/relay:
+        /// socks5://[user:pass@]host:port or http://[user:pass@]host:port
+        /// (overrides config).
+        #[arg(long)]
+        proxy: Option<String>,
     },
     /// Set the unattended access password (OS keychain, file fallback).
     Passwd {
@@ -118,6 +123,7 @@ async fn main() -> anyhow::Result<()> {
             lock_input,
             record,
             tunnel,
+            proxy,
         } => {
             run(
                 server,
@@ -130,6 +136,7 @@ async fn main() -> anyhow::Result<()> {
                 lock_input,
                 record,
                 tunnel,
+                proxy,
             )
             .await
         }
@@ -147,7 +154,7 @@ async fn main() -> anyhow::Result<()> {
                     // console session: run the plain agent (config-only).
                     eprintln!("OpacusR agent (service session instance)");
                     run(
-                        None, None, false, false, false, None, false, false, false, None,
+                        None, None, false, false, false, None, false, false, false, None, None,
                     )
                     .await
                 } else {
@@ -181,6 +188,7 @@ async fn run(
     lock_input: bool,
     record: bool,
     tunnel: Option<String>,
+    proxy: Option<String>,
 ) -> anyhow::Result<()> {
     let mut cfg = load_cfg(server, name);
     if let Some(c) = capture {
@@ -203,6 +211,17 @@ async fn run(
     }
     if let Some(t) = tunnel {
         cfg.tunnel = t;
+    }
+    if let Some(p) = proxy {
+        // Validate early: a typo should fail the run, not every reconnect.
+        opacusr_agent::parse_proxy(&p)?;
+        cfg.proxy = p;
+    }
+    if !cfg.proxy.trim().is_empty() {
+        eprintln!(
+            "Outbound proxy: {} (signaling + relay; ICE/UDP bypasses it).",
+            cfg.proxy.trim()
+        );
     }
     match opacusr_agent::tunnel::TunnelPolicy::parse(&cfg.tunnel) {
         opacusr_agent::tunnel::TunnelPolicy::Any => {
@@ -418,7 +437,9 @@ async fn id(server: Option<String>) -> anyhow::Result<()> {
 }
 
 async fn register_once(cfg: &AgentConfig, url: &str) -> anyhow::Result<opacusr_proto::PeerId> {
-    let mut sig = opacusr_transport::signaling::SignalingClient::connect(url).await?;
+    let proxy = opacusr_agent::proxy_for_endpoint(&cfg.proxy, url)?;
+    let mut sig =
+        opacusr_transport::signaling::SignalingClient::connect_via(url, proxy.as_ref()).await?;
     sig.send(&opacusr_proto::signal::SignalMessage::Register(
         opacusr_proto::signal::Register {
             platform: opacusr_proto::Platform::current(),
@@ -460,6 +481,14 @@ fn config_info() -> anyhow::Result<()> {
         "lan:         {} (port {})",
         if cfg.allow_lan { "on" } else { "off" },
         cfg.lan_port
+    );
+    println!(
+        "proxy:       {}",
+        if cfg.proxy.trim().is_empty() {
+            "direct".to_string()
+        } else {
+            cfg.proxy.trim().to_string()
+        }
     );
     println!("name:        {}", cfg.name);
     println!("fps:         {}", cfg.fps);
