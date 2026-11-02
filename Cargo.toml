@@ -37,7 +37,7 @@ opacusr-app = { path = "crates/opacusr-app", version = "0.9.0" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time", "fs", "signal"] }
 futures = "0.3"
 serde = { version = "1", features = ["derive"] }
-bincode = "1"
+bincode = "3"
 base64 = "0.22"
 thiserror = "2"
 anyhow = "1"
