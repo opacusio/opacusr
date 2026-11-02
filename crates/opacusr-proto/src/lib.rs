@@ -45,7 +45,12 @@ pub use signal::*;
 /// controller's live state for the viewer UI) and the chunked clipboard
 /// pair `ClipboardBegin`/`ClipboardChunk` for payloads that exceed the
 /// single-message caps (large text and large PNGs).
-pub const PROTO_VERSION: u32 = 8;
+///
+/// v9 (0.11.0): message/SignalMessage payloads moved from bincode 1.x to
+/// bincode 2.x `config::standard()` (varint integers, same serde types).
+/// The byte format is not backwards compatible — pre-0.11 peers fail the
+/// version check before any payload is decoded.
+pub const PROTO_VERSION: u32 = 9;
 
 /// Application name used in handshakes and logs.
 pub const APP_NAME: &str = "OpacusR";

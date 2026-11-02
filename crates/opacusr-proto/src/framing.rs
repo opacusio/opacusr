@@ -4,6 +4,12 @@
 //! WebRTC data channels preserve message boundaries, so they skip this
 //! layer; the [`crate::Channel`] tag still travels as the first byte when
 //! needed by simpler transports.
+//!
+//! Payloads are bincode 2.x (`bincode::serde` layer over the existing
+//! serde types, `config::standard()` — varint integers). This differs
+//! from the bincode 1.x byte format: peers must agree on
+//! [`crate::PROTO_VERSION`] ≥ 9, which is exactly what the handshake
+//! (and the mDNS TXT `proto` record) check.
 
 use std::collections::VecDeque;
 
@@ -13,24 +19,38 @@ use crate::{message::CryptoEnvelope, Channel, Message, ProtoError, PROTO_VERSION
 /// malicious length prefixes.
 pub const MAX_FRAME_LEN: usize = 8 * 1024 * 1024;
 
+/// bincode configuration used on every hop (the wire format is a
+/// protocol property — one definition, one config). Callers outside this
+/// module (e.g. sealed-envelope paths in `opacusr-transport`) reuse it so
+/// advertiser and receiver can never drift apart.
+pub fn bincode_config() -> bincode::config::Configuration {
+    bincode::config::standard()
+}
+
 /// Serialize a session message to a bincode payload (no framing).
 pub fn encode_message(msg: &Message) -> Result<Vec<u8>, ProtoError> {
-    bincode::serialize(msg).map_err(|e| ProtoError::Encode(e.to_string()))
+    bincode::serde::encode_to_vec(msg, bincode_config())
+        .map_err(|e| ProtoError::Encode(e.to_string()))
 }
 
 /// Deserialize a session message from a bincode payload.
 pub fn decode_message(payload: &[u8]) -> Result<Message, ProtoError> {
-    bincode::deserialize(payload).map_err(|e| ProtoError::Decode(e.to_string()))
+    bincode::serde::decode_from_slice(payload, bincode_config())
+        .map(|(msg, _)| msg)
+        .map_err(|e| ProtoError::Decode(e.to_string()))
 }
 
 /// Serialize a signaling message to a bincode payload.
 pub fn encode_signal(msg: &crate::SignalMessage) -> Result<Vec<u8>, ProtoError> {
-    bincode::serialize(msg).map_err(|e| ProtoError::Encode(e.to_string()))
+    bincode::serde::encode_to_vec(msg, bincode_config())
+        .map_err(|e| ProtoError::Encode(e.to_string()))
 }
 
 /// Deserialize a signaling message from a bincode payload.
 pub fn decode_signal(payload: &[u8]) -> Result<crate::SignalMessage, ProtoError> {
-    bincode::deserialize(payload).map_err(|e| ProtoError::Decode(e.to_string()))
+    bincode::serde::decode_from_slice(payload, bincode_config())
+        .map(|(msg, _)| msg)
+        .map_err(|e| ProtoError::Decode(e.to_string()))
 }
 
 /// Build one framed record for a stream transport.
@@ -55,7 +75,8 @@ pub fn encode_envelope_frame(
 ) -> Result<Vec<u8>, ProtoError> {
     encode_frame(
         channel,
-        &bincode::serialize(envelope).map_err(|e| ProtoError::Encode(e.to_string()))?,
+        &bincode::serde::encode_to_vec(envelope, bincode_config())
+            .map_err(|e| ProtoError::Encode(e.to_string()))?,
     )
 }
 
@@ -187,6 +208,24 @@ mod tests {
     }
 
     #[test]
+    fn bincode2_reports_bytes_read_and_stays_compact() {
+        // bincode 2.x standard: small messages shrink to a couple of
+        // varint bytes, and the serde decode entry point reports how many
+        // bytes it consumed. FrameDecoder hands decode_message exact
+        // length-prefixed slices, so the count must equal the payload
+        // length — anything else would mean a framing bug upstream.
+        let bytes = encode_message(&Message::Ping(7)).unwrap();
+        assert!(
+            bytes.len() < 8,
+            "varint keeps small messages tiny: {bytes:?}"
+        );
+        let (msg, read) =
+            bincode::serde::decode_from_slice::<Message, _>(&bytes, bincode_config()).unwrap();
+        assert!(matches!(msg, Message::Ping(7)));
+        assert_eq!(read, bytes.len(), "an exact slice is consumed fully");
+    }
+
+    #[test]
     fn envelope_frame_round_trip() {
         let env = CryptoEnvelope {
             counter: 5,
@@ -196,7 +235,9 @@ mod tests {
         let mut dec = FrameDecoder::new();
         dec.push(&frame);
         let (_, payload) = dec.poll().unwrap().unwrap();
-        let back: CryptoEnvelope = bincode::deserialize(&payload).unwrap();
+        let back: CryptoEnvelope = bincode::serde::decode_from_slice(&payload, bincode_config())
+            .unwrap()
+            .0;
         assert_eq!(back.counter, 5);
     }
 }

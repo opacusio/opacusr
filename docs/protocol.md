@@ -1,6 +1,6 @@
 # OpacusR Wire Protocol (v1)
 
-All multi-byte integers are little-endian. Everything above the transport is encoded with `bincode` (serde). This document covers: stream framing, the signaling exchange, the session handshake and the full message reference. Implementations live in `opacusr-proto` and `opacusr-transport`.
+All multi-byte integers are little-endian. Everything above the transport is encoded with `bincode` 2.x (the `bincode::serde` layer over plain serde types, `config::standard()` — varint-encoded integers, enum variant tags as varints). Since proto v9 the byte format is bincode 2.x; bincode 1.x payloads (fixed-width integers, proto ≤ v8) are **not** wire-compatible — peers exchange `proto_version` in the handshake and refuse a mismatch before decoding any payload. This document covers: stream framing, the signaling exchange, the session handshake and the full message reference. Implementations live in `opacusr-proto` and `opacusr-transport`.
 
 ## 1. Stream framing
 
@@ -185,3 +185,4 @@ Screen capture APIs drop the pointer, so the host polls it separately (Win32 `Ge
 
 - `proto_version` (u32) in `Hello` must match exactly for now; incompatible bumps will be accompanied by a negotiated fallback in a future release.
 - The framed format (`[channel][len][payload]`) is stable; new `Message` variants must be appended to the enum to keep bincode discriminants compatible within a minor version.
+- proto v9 (0.11.0): the payload codec moved from bincode 1.x to bincode 2.x `config::standard()` (varint integers). The framing, the handshake shape and all `Message`/`SignalMessage` types are unchanged; only the byte encoding of payloads differs. The single source of the configuration is `opacusr_proto::framing::bincode_config()`. The mDNS TXT `proto` record (LAN discovery) carries the same number, so mismatched peers are filtered out before anyone dials.

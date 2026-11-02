@@ -54,7 +54,11 @@ impl SecureSession {
         match &mut self.crypto {
             Some(crypto) => {
                 let envelope = crypto.seal(&raw);
-                let bytes = bincode::serialize(&envelope).map_err(|e| {
+                let bytes = bincode::serde::encode_to_vec(
+                    &envelope,
+                    opacusr_proto::framing::bincode_config(),
+                )
+                .map_err(|e| {
                     TransportError::Proto(opacusr_proto::ProtoError::Encode(e.to_string()))
                 })?;
                 self.inner.send(channel, &bytes).await
@@ -68,9 +72,12 @@ impl SecureSession {
         let (channel, payload) = self.inner.recv().await?;
         let raw = match &mut self.crypto {
             Some(crypto) => {
-                let envelope: CryptoEnvelope = bincode::deserialize(&payload).map_err(|_| {
-                    TransportError::Other("invalid crypto envelope on the wire".into())
-                })?;
+                let envelope: CryptoEnvelope = bincode::serde::decode_from_slice(
+                    &payload,
+                    opacusr_proto::framing::bincode_config(),
+                )
+                .map(|(env, _)| env)
+                .map_err(|_| TransportError::Other("invalid crypto envelope on the wire".into()))?;
                 crypto.open(&envelope)?
             }
             None => payload,

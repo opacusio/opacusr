@@ -49,6 +49,24 @@ SemVer-ish (breaking protocol changes bump the minor until 1.0).
   reminder). The plist generation is pure and unit-tested on every
   platform; `service` help texts now describe both mechanisms.
 
+### Changed
+
+- **Wire codec: bincode 1.x → bincode 2.x (proto v9)** — session and
+  signaling payloads are now encoded with bincode 2.0
+  (`bincode::serde` layer over the same serde types,
+  `config::standard()`): integers are varint-encoded, so small messages
+  shrink from a dozen of fixed-width bytes to 2–4 bytes (`Ping(7)` is
+  2 bytes vs 12 in 1.x). The framing (`[channel][len][payload]`), the
+  handshake shape and every `Message`/`SignalMessage` type are
+  unchanged — only the byte encoding differs, so **proto v9 is not
+  wire-compatible with ≤ v8**: the handshake (and the mDNS TXT `proto`
+  record on LAN) refuses mismatched peers before any payload is
+  decoded. Update both sides together (the self-updater delivers
+  0.11.0+ binaries as one unit). The configuration lives in one place,
+  `opacusr_proto::framing::bincode_config()`; the bincode 1.3.3 that
+  remains in the lockfile is pulled only transitively by `webrtc →
+  dtls` and no longer touches the wire.
+
 ## [0.10.0] — 2026-11-02
 
 ### Added

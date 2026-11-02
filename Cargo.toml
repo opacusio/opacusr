@@ -37,7 +37,9 @@ opacusr-app = { path = "crates/opacusr-app", version = "0.10.0" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time", "fs", "signal"] }
 futures = "0.3"
 serde = { version = "1", features = ["derive"] }
-bincode = "1"
+# 2.x wire format differs from 1.x (varint ints) — bumped PROTO_VERSION to 9
+# in the same batch; peers must be 0.11.0+ on both sides.
+bincode = { version = "2", features = ["serde"] }
 base64 = "0.23"
 thiserror = "2"
 anyhow = "1"
