@@ -21,7 +21,7 @@ jobs:
       # the Wayland/PipeWire variant build below.
       LIBCLANG_PATH: /usr/lib/llvm-18/lib
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - name: Install X11 + PipeWire dev packages
         run: |
@@ -113,7 +113,7 @@ jobs:
     name: Windows (msi + zip)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: actions/cache@v6
         with:
@@ -162,7 +162,7 @@ jobs:
     name: macOS (tar.gz, experimental)
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - name: Install pkg-config
         run: brew install pkg-config
@@ -224,7 +224,7 @@ jobs:
     needs: [linux, windows, macos]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
           merge-multiple: true
