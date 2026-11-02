@@ -44,7 +44,7 @@ impl SignalingClient {
     pub async fn send(&mut self, msg: &SignalMessage) -> Result<()> {
         let bytes = encode_signal(msg)?;
         self.ws
-            .send(WsMessage::Binary(bytes))
+            .send(WsMessage::Binary(bytes.into()))
             .await
             .map_err(|e| TransportError::Signaling(format!("send failed: {e}")))
     }
