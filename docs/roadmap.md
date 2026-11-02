@@ -34,7 +34,7 @@ Design in [serverless.md](serverless.md); goal: a working connection with **0 �
 - **Path ladder** (viewer `connect = "auto"`): LAN direct → P2P/STUN → TURN → TCP relay, with the active mode shown in the UI.
 - ~~**Phase 1**: `signaling_urls` list on the agent (fan-out registration), viewer auto-connect ladder~~ **done** — supervised per-endpoint reconnect loops; the viewer tries endpoints in order with per-endpoint TURN minting.
 - ~~**Phase 2**: embedded signaling listener in the agent + tunnel cookbook (cloudflared / Tailscale Funnel)~~ **done** — `signal_listen = true` serves registry + relay + `/turn` in the agent; cookbook in [serverless.md](serverless.md) §7.
-- ~~**Phase 3**: mDNS discovery (`hostname.local`) for LAN addresses~~ **done** — agents advertise `_opacusr._tcp.local.` (best-effort, `mdns_advertise` / `--no-mdns`); the connect tab lists discovered hosts and fills the URL (and the LAN target) on Use. See [serverless.md](serverless.md) §5.
+- ~~**Phase 3**: mDNS discovery (`hostname.local`) for LAN addresses~~ **done** — agents advertise `_opacusr._tcp.local.` (best-effort, `mdns_advertise` / `--no-mdns`); the connect tab lists discovered hosts and fills the URL (and the LAN target) on Use; the `lan` TXT carries the direct-LAN port when `allow_lan` is set. See [serverless.md](serverless.md) §5.
 - **Phase 4**: manual offer/answer "meeting codes" as the fully serverless fallback.
 
 ## M3 — Scale & operations

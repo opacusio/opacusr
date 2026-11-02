@@ -41,8 +41,9 @@ fn service_fqdn(instance: &str) -> String {
 ///
 /// * `name` — display name (sanitized into a dot-free instance label);
 /// * `port` — the advertised signaling port;
-/// * `lan_port` — direct-LAN TCP port when the host accepts `ip:port`
-///   sessions (`None` while `allow_lan` is CLI-only).
+/// * `lan_port` — the direct-LAN TCP port advertised in the `lan` TXT
+///   record (the listener itself is served by the caller); `None`
+///   omits the record (the `allow_lan` default).
 ///
 /// Returns `None` when mDNS is unavailable (no multicast socket, no
 /// daemon) — callers treat that as "discovery disabled", not an error.

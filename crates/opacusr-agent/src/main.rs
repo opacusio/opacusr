@@ -28,7 +28,8 @@ enum Cmd {
         /// (useful in VMs/CI).
         #[arg(long)]
         demo: bool,
-        /// Also accept direct TCP sessions (LAN mode).
+        /// Also accept direct TCP LAN sessions (overrides config;
+        /// the session still needs the password).
         #[arg(long)]
         allow_lan: bool,
         /// Serve the embedded signaling registry + relay in this process
@@ -156,6 +157,9 @@ async fn run(
     if record {
         cfg.record = true;
     }
+    if allow_lan {
+        cfg.allow_lan = true;
+    }
     if let Some(t) = tunnel {
         cfg.tunnel = t;
     }
@@ -191,6 +195,12 @@ async fn run(
     }
     if cfg.record {
         eprintln!("Session recording: enabled ({}).", cfg.record_dir.display());
+    }
+    if cfg.allow_lan {
+        eprintln!(
+            "Direct LAN: accepting `ip:port` sessions on port {} (advertised via mDNS).",
+            cfg.lan_port
+        );
     }
 
     let service = AgentService {
@@ -257,7 +267,7 @@ async fn run(
     };
 
     let lan_task = async {
-        if allow_lan {
+        if cfg.allow_lan {
             let lan_service = AgentService {
                 cfg: cfg.clone(),
                 events: mpsc::unbounded_channel().0,
@@ -404,6 +414,11 @@ fn config_info() -> anyhow::Result<()> {
     println!(
         "mdns:        {}",
         if cfg.mdns_advertise { "on" } else { "off" }
+    );
+    println!(
+        "lan:         {} (port {})",
+        if cfg.allow_lan { "on" } else { "off" },
+        cfg.lan_port
     );
     println!("name:        {}", cfg.name);
     println!("fps:         {}", cfg.fps);

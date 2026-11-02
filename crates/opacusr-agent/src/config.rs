@@ -78,6 +78,12 @@ pub struct AgentConfig {
     pub download_dir: PathBuf,
     /// TCP port for direct LAN sessions (`--allow-lan`).
     pub lan_port: u16,
+    /// Accept direct TCP LAN sessions (`ip:port`) on `lan_port`: serves
+    /// the listener and advertises the direct-LAN `lan` TXT record over
+    /// mDNS so viewers on this network can connect without a signaling
+    /// server. Sessions are still password-gated (unattended access
+    /// rules apply). `--allow-lan` overrides this to `true` for one run.
+    pub allow_lan: bool,
     /// STUN/TURN servers (one URL per entry; `user:pass@host` style TURN
     /// URLs are parsed by the app layer).
     pub ice_urls: Vec<String>,
@@ -170,6 +176,7 @@ impl Default for AgentConfig {
             auto_accept_files: true,
             download_dir,
             lan_port: 54000,
+            allow_lan: false,
             ice_urls: vec!["stun:stun.l.google.com:19302".into()],
             codec: "auto".into(),
             clipboard_sync: true,
@@ -416,5 +423,19 @@ mod tests {
             crate::tunnel::TunnelPolicy::parse(&back.tunnel),
             crate::tunnel::TunnelPolicy::Any
         );
+    }
+
+    #[test]
+    fn allow_lan_defaults_off_and_round_trips() {
+        assert!(!AgentConfig::default().allow_lan);
+        let cfg = AgentConfig {
+            allow_lan: true,
+            lan_port: 54001,
+            ..Default::default()
+        };
+        let text = toml::to_string_pretty(&cfg).unwrap();
+        let back: AgentConfig = toml::from_str(&text).unwrap();
+        assert!(back.allow_lan);
+        assert_eq!(back.lan_port, 54001);
     }
 }

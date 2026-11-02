@@ -123,7 +123,8 @@ tunneled host. Still, for UDP throughput the options are:
    registers on the local endpoint like on any other. The tunnel cookbook
    below makes it reachable from outside for free.
 3. **mDNS discovery** — **shipped**: agents advertise
-   `_opacusr._tcp.local.` (TXT `path`/`proto`, optional `lan`) while
+   `_opacusr._tcp.local.` (TXT `path`/`proto`, plus `lan` when
+   `allow_lan` is on) while
    running (`mdns_advertise`, `--no-mdns` to disable; best-effort — no
    multicast, no problem); the viewer's connect tab lists discovered
    hosts with a Use button that fills the signaling URL, and a direct

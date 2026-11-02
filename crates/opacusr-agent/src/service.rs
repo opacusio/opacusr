@@ -131,9 +131,15 @@ impl AgentService {
 
         // LAN discovery (Phase 3): announce the signaling endpoint over
         // mDNS while running. Best-effort — no multicast, no problem.
-        // `lan` stays None until `allow_lan` reaches the config struct.
+        // When `allow_lan` is set the advertisement also carries the
+        // direct-LAN `lan` port, so viewers on this network can connect
+        // to `ip:port` without any signaling server.
         let _mdns_guard = if self.cfg.mdns_advertise {
-            crate::discovery::advertise(&self.cfg.name, self.cfg.signal_listen_port, None)
+            crate::discovery::advertise(
+                &self.cfg.name,
+                self.cfg.signal_listen_port,
+                self.cfg.allow_lan.then_some(self.cfg.lan_port),
+            )
         } else {
             None
         };

@@ -74,7 +74,7 @@ webrtc-rs 0.14 has no *negotiated* channels, so the standard pattern is used: th
 
 ### 4.2 TCP direct (LAN)
 
-`tcp.rs`: plain stream framing, used when viewer and host are reachable directly (same network or port-forward). The agent listens on `lan_port` (default 54000) when started with `--allow-lan`.
+`tcp.rs`: plain stream framing, used when viewer and host are reachable directly (same network or port-forward). The agent listens on `lan_port` (default 54000) when `allow_lan` is set (config key or `--allow-lan`).
 
 ### 4.3 TCP relay (fallback)
 

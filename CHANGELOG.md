@@ -4,6 +4,19 @@ All notable changes to OpacusR are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is
 SemVer-ish (breaking protocol changes bump the minor until 1.0).
 
+## [Unreleased]
+
+### Added
+
+- **`allow_lan` is a config key now** — the direct-LAN listener and the
+  mDNS `lan` TXT record are driven by `allow_lan` in `agent.toml`
+  (default off) instead of the `--allow-lan` CLI flag only; the flag
+  still overrides for one run. When it is on, the agent advertises the
+  direct-LAN port in its mDNS advertisement, so the viewer's
+  "Discovered on this network" list offers the `ip:port` target without
+  any signaling server; sessions still require the password.
+  `opacusr-agent config` reports `lan: on/off (port N)`.
+
 ## [0.9.0] — 2026-11-02
 
 ### Added
