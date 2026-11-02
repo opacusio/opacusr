@@ -59,8 +59,17 @@ jobs:
         # wayland.rs is behind the opt-in `pipewire` feature; without this
         # step it would never be compiled anywhere and could rot silently
         # (the cursor overlay shipped two platform regressions that way).
+        #
+        # LIBCLANG_PATH pins clang 18: libspa-sys 0.8 builds its bindings
+        # with bindgen 0.69, which misparses against the runner's default
+        # LLVM 23 libclang (`spa_pod_builder` comes out as an opaque
+        # `_address` blob and libspa fails to compile). LLVM 18 is the
+        # newest that generates complete bindings for these headers.
         if: runner.os == 'Linux'
+        env:
+          LIBCLANG_PATH: /usr/lib/llvm-18/lib
         run: |
+          sudo apt-get install -y libclang-18-dev
           cargo clippy -p opacusr-capture --features pipewire --all-targets -- -D warnings
           cargo clippy -p opacusr-capture --no-default-features --all-targets -- -D warnings
 
