@@ -64,7 +64,7 @@ mp4 = "0.14"
 x11rb = { version = "0.13", features = ["randr", "xfixes"] }
 enigo = "0.6"
 arboard = "3"
-portable-pty = "0.8"
+portable-pty = "0.9"
 cpal = "0.15"
 audiopus = "0.2"
 
