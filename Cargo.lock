@@ -3957,7 +3957,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
- "toml 0.8.23",
+ "toml 1.1.8+spec-1.1.0",
  "tracing",
  "tracing-subscriber",
  "windows 0.59.0",
@@ -3984,7 +3984,7 @@ dependencies = [
  "rfd",
  "serde",
  "tokio",
- "toml 0.8.23",
+ "toml 1.1.8+spec-1.1.0",
  "tracing",
  "tracing-subscriber",
  "winresource",
@@ -4025,7 +4025,7 @@ dependencies = [
  "sha2",
  "thiserror 2.0.21",
  "tokio",
- "toml 0.8.23",
+ "toml 1.1.8+spec-1.1.0",
  "tracing",
 ]
 
@@ -5917,7 +5917,6 @@ dependencies = [
  "serde",
  "serde_spanned 0.6.9",
  "toml_datetime 0.6.11",
- "toml_write",
  "winnow 0.7.15",
 ]
 
@@ -5941,12 +5940,6 @@ checksum = "baa693a8032d7e1cada7d0041e96126df243179ff061456783ac7f12bda4744c"
 dependencies = [
  "winnow 1.0.4",
 ]
-
-[[package]]
-name = "toml_write"
-version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5d99f8c9a7727884afe522e9bd5edbfc91a3312b36a77b5fb8926e4c31a41801"
 
 [[package]]
 name = "toml_writer"
