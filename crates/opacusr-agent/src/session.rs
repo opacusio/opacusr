@@ -17,7 +17,10 @@ use tokio::sync::mpsc;
 
 use opacusr_capture::{resize_nearest, CursorSource, ScreenCapture};
 use opacusr_codec::make_pair;
-use opacusr_input::clipboard::{hash_clip, ClipContent, ClipboardHandle};
+use opacusr_input::clipboard::{
+    hash_clip, ChunkAssembler, ChunkKind, ChunkPayload, ClipContent, ClipboardHandle,
+    CLIPBOARD_CHUNK_SIZE,
+};
 use opacusr_input::InputInjector;
 use opacusr_proto::message::{self, ByeReason, CodecId, SessionAccept};
 use opacusr_proto::{Message, Platform};
@@ -210,6 +213,75 @@ const CLIPBOARD_MAX_BYTES: usize = opacusr_input::clipboard::CLIPBOARD_MAX_BYTES
 const CLIPBOARD_IMAGE_MAX_PNG_BYTES: usize =
     opacusr_input::clipboard::CLIPBOARD_IMAGE_MAX_PNG_BYTES;
 
+/// Cap for chunked clipboard payloads (reassembly guard on the peer).
+const CLIPBOARD_CHUNKED_MAX_BYTES: usize = opacusr_input::clipboard::CLIPBOARD_CHUNKED_MAX_BYTES;
+
+/// Send `payload` as a chunked clipboard transfer (proto v8): a
+/// `ClipboardBegin` followed by fixed-size `ClipboardChunk`s on the
+/// ordered control channel.
+async fn send_clipboard_chunked(
+    session: &mut SecureSession,
+    transfer_id: u32,
+    kind: message::ClipboardKind,
+    width: u32,
+    height: u32,
+    payload: &[u8],
+) -> Result<(), TransportError> {
+    session
+        .send_msg(&Message::ClipboardBegin(message::ClipboardBegin {
+            transfer_id,
+            kind,
+            width,
+            height,
+            total_len: payload.len() as u64,
+            chunk_size: CLIPBOARD_CHUNK_SIZE as u32,
+        }))
+        .await?;
+    for (seq, data) in payload.chunks(CLIPBOARD_CHUNK_SIZE).enumerate() {
+        session
+            .send_msg(&Message::ClipboardChunk(message::ClipboardChunk {
+                transfer_id,
+                seq: seq as u32,
+                data: data.to_vec(),
+            }))
+            .await?;
+    }
+    Ok(())
+}
+
+/// Apply a completed chunked clipboard payload like its single-message
+/// equivalent (write the system clipboard, refresh the echo markers).
+fn apply_clipboard_payload(
+    clip_applied: &mut Option<u64>,
+    clip_sent: &mut Option<u64>,
+    payload: ChunkPayload,
+) {
+    match payload {
+        ChunkPayload::Text(text) => {
+            set_clipboard(&text);
+            let hash = hash_clip(&ClipContent::Text(text));
+            *clip_applied = Some(hash);
+            *clip_sent = Some(hash);
+        }
+        ChunkPayload::Image(_, _, png) => match opacusr_input::clipboard::decode_png(&png) {
+            Some((width, height, rgba)) => {
+                set_clipboard_image(width, height, &rgba);
+                let hash = hash_clip(&ClipContent::Image {
+                    width,
+                    height,
+                    rgba,
+                });
+                *clip_applied = Some(hash);
+                *clip_sent = Some(hash);
+            }
+            None => {
+                tracing::debug!(target: "opacusr",
+                        "malformed chunked clipboard image, dropped");
+            }
+        },
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_session(
     cfg: &SessionConfig,
@@ -308,6 +380,19 @@ async fn run_session(
     let mut fps = adaptive.params().fps.max(1);
     let mut quality = adaptive.params().jpeg_quality;
     let mut scale = adaptive.params().scale_percent;
+
+    // Tell the viewer where the adaptive-quality controller starts (also
+    // covers the disabled case: `enabled = false` hides the tier UI).
+    session
+        .send_msg(&Message::QualityTier(message::QualityTier {
+            tier: adaptive.tier() as u8,
+            fps,
+            jpeg_quality: quality,
+            scale_percent: scale,
+            enabled: adaptive.is_enabled(),
+        }))
+        .await?;
+
     let mut paused = false;
     let mut seq: u64 = 0;
 
@@ -325,6 +410,8 @@ async fn run_session(
     };
     let mut clip_sent: Option<u64> = None;
     let mut clip_applied: Option<u64> = None;
+    let mut next_clip_xfer: u32 = 1;
+    let mut clip_chunks = ChunkAssembler::default();
 
     // Audio stream (started/stopped via AudioControl from the viewer).
     #[cfg(feature = "audio")]
@@ -434,12 +521,33 @@ async fn run_session(
                         if Some(hash) == clip_sent || Some(hash) == clip_applied {
                             continue;
                         }
-                        let msg = match content {
+                        match content {
                             ClipContent::Text(text) => {
-                                if text.len() > CLIPBOARD_MAX_BYTES {
+                                if text.len() > CLIPBOARD_CHUNKED_MAX_BYTES {
+                                    tracing::debug!(target: "opacusr",
+                                        "clipboard text too large, dropped");
                                     continue;
                                 }
-                                Message::ClipboardText(message::ClipboardText { text })
+                                clip_sent = Some(hash);
+                                if text.len() <= CLIPBOARD_MAX_BYTES {
+                                    session.send_msg(&Message::ClipboardText(
+                                        message::ClipboardText { text },
+                                    ))
+                                    .await?;
+                                } else {
+                                    // Oversized text rides the chunked path
+                                    // (proto v8) instead of being dropped.
+                                    send_clipboard_chunked(
+                                        session,
+                                        next_clip_xfer,
+                                        message::ClipboardKind::Text,
+                                        0,
+                                        0,
+                                        text.as_bytes(),
+                                    )
+                                    .await?;
+                                    next_clip_xfer = next_clip_xfer.wrapping_add(1);
+                                }
                             }
                             ClipContent::Image { width, height, rgba } => {
                                 // Encoding happens only for *new* content —
@@ -449,20 +557,33 @@ async fn run_session(
                                 ) else {
                                     continue;
                                 };
-                                if png.len() > CLIPBOARD_IMAGE_MAX_PNG_BYTES {
+                                if png.len() > CLIPBOARD_CHUNKED_MAX_BYTES {
                                     tracing::debug!(target: "opacusr",
                                         "clipboard image too large after encode, dropped");
                                     continue;
                                 }
-                                Message::ClipboardImage(message::ClipboardImage {
-                                    width,
-                                    height,
-                                    png,
-                                })
+                                clip_sent = Some(hash);
+                                if png.len() <= CLIPBOARD_IMAGE_MAX_PNG_BYTES {
+                                    session.send_msg(&Message::ClipboardImage(
+                                        message::ClipboardImage { width, height, png },
+                                    ))
+                                    .await?;
+                                } else {
+                                    // Big screenshots ride the chunked path
+                                    // (proto v8) instead of being dropped.
+                                    send_clipboard_chunked(
+                                        session,
+                                        next_clip_xfer,
+                                        message::ClipboardKind::Image,
+                                        width,
+                                        height,
+                                        &png,
+                                    )
+                                    .await?;
+                                    next_clip_xfer = next_clip_xfer.wrapping_add(1);
+                                }
                             }
-                        };
-                        clip_sent = Some(hash);
-                        session.send_msg(&msg).await?;
+                        }
                     }
                 }
             }
@@ -555,6 +676,30 @@ async fn run_session(
                             }
                         }
                     }
+                    Message::ClipboardBegin(b) => {
+                        let kind = match b.kind {
+                            message::ClipboardKind::Text => ChunkKind::Text,
+                            message::ClipboardKind::Image => ChunkKind::Image,
+                        };
+                        if let Err(e) = clip_chunks.begin(
+                            kind, b.width, b.height, b.total_len, b.chunk_size,
+                        ) {
+                            tracing::debug!(target: "opacusr",
+                                "clipboard transfer rejected: {e}");
+                        }
+                    }
+                    Message::ClipboardChunk(c) => {
+                        match clip_chunks.chunk(c.seq, &c.data) {
+                            Ok(Some(payload)) => {
+                                apply_clipboard_payload(&mut clip_applied, &mut clip_sent, payload);
+                            }
+                            Ok(None) => {}
+                            Err(e) => {
+                                tracing::debug!(target: "opacusr",
+                                    "clipboard chunk dropped: {e}");
+                            }
+                        }
+                    }
                     Message::QualitySet(q) => {
                         // A manual setting wins for the rest of the session.
                         adaptive.manual_override();
@@ -566,6 +711,17 @@ async fn run_session(
                             ticker = tokio::time::interval(std::time::Duration::from_millis(1000 / fps as u64));
                             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
                         }
+                        // Tell the viewer adaptation is off (hides the tier
+                        // badge in the UI).
+                        session
+                            .send_msg(&Message::QualityTier(message::QualityTier {
+                                tier: 0,
+                                fps,
+                                jpeg_quality: quality,
+                                scale_percent: scale,
+                                enabled: false,
+                            }))
+                            .await?;
                     }
                     Message::LinkStats(s) => {
                         if let Some(p) = adaptive.on_link_stats(s.rtt_ms, s.recv_fps, s.jitter_ms) {
@@ -580,6 +736,16 @@ async fn run_session(
                             tracing::debug!(target: "opacusr",
                                 "adaptive tier {} → fps {fps} quality {quality} scale {scale}%",
                                 adaptive.tier());
+                            // Surface the new tier in the viewer UI.
+                            session
+                                .send_msg(&Message::QualityTier(message::QualityTier {
+                                    tier: adaptive.tier() as u8,
+                                    fps,
+                                    jpeg_quality: quality,
+                                    scale_percent: scale,
+                                    enabled: true,
+                                }))
+                                .await?;
                         }
                     }
                     Message::SelectScreen(sel) => {

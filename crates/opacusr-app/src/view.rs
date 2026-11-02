@@ -89,6 +89,23 @@ pub fn session_ui(ctx: &Context, s: &mut SessionHandle, cfg: &mut AgentConfig) {
             }
             ui.separator();
             ui.label(format!("RTT {} ms", s.rtt));
+            // Adaptive-quality tier: what the host's controller is currently
+            // streaming at (hidden while a manual quality setting is in
+            // force — the sliders above are authoritative then).
+            if s.quality_adaptive {
+                if let Some(tier) = s.quality_tier {
+                    ui.separator();
+                    let (text, color) = tier_badge(tier);
+                    ui.label(egui::RichText::new(text).color(color).strong())
+                        .on_hover_text(match s.quality_params {
+                            Some((fps, q, sc)) => format!(
+                                "Adaptive quality tier {tier}/3 — streaming at \
+                                 {fps} fps, JPEG {q}, scale {sc}%"
+                            ),
+                            None => format!("Adaptive quality tier {tier}/3"),
+                        });
+                }
+            }
             if s.recording {
                 ui.separator();
                 ui.label(
@@ -198,6 +215,17 @@ pub fn session_ui(ctx: &Context, s: &mut SessionHandle, cfg: &mut AgentConfig) {
 
         capture_input(ui, &response, rect, s);
     });
+}
+
+/// Toolbar label + color for an adaptive-quality tier (0 = full quality…
+/// 3 = very constrained link).
+fn tier_badge(tier: u8) -> (&'static str, Color32) {
+    match tier {
+        0 => ("⚡ best", Color32::from_rgb(120, 220, 120)),
+        1 => ("⚡ tier 1", Color32::from_rgb(235, 210, 90)),
+        2 => ("⚡ tier 2", Color32::from_rgb(240, 160, 70)),
+        _ => ("⚡ tier 3", Color32::from_rgb(235, 100, 90)),
+    }
 }
 
 /// Scale the remote screen into the available rect preserving aspect.
@@ -416,6 +444,34 @@ fn stats_panel(ui: &mut egui::Ui, s: &mut SessionHandle) {
 
             ui.label("RTT");
             ui.label(format!("{} ms", s.rtt));
+            ui.end_row();
+
+            ui.label("Quality tier");
+            if s.quality_adaptive {
+                match s.quality_tier {
+                    Some(tier) => {
+                        let (text, color) = tier_badge(tier);
+                        ui.label(
+                            egui::RichText::new(format!("{text} ({tier}/3)"))
+                                .color(color)
+                                .strong(),
+                        )
+                        .on_hover_text(
+                            "Driven by RTT/jitter reports; \
+                             tiers: <60 ms best, <120 ms t1, <250 ms t2, ≥250 ms t3",
+                        );
+                    }
+                    None => {
+                        ui.label("adaptive");
+                    }
+                }
+            } else if s.quality_params.is_some() {
+                ui.label("manual").on_hover_text(
+                    "A manual quality setting disabled adaptive quality for this session.",
+                );
+            } else {
+                ui.label("—");
+            }
             ui.end_row();
 
             ui.label("State");

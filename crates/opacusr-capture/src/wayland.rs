@@ -17,9 +17,21 @@
 //! duplication: idle timeouts re-serve the last frame. When the portal is
 //! unavailable (headless, X11 session), [`platform_capture`] falls back to
 //! the X11 backend (XWayland covers most apps).
+//!
+//! The stream is negotiated with `CursorMode::Metadata`, so the compositor
+//! attaches a `spa_meta_cursor` to every buffer (position + inline bitmap
+//! when the sprite changes). Those updates land in a shared
+//! [`PwCursorState`]; [`PwCursor`] — the session's `CursorSource` on
+//! Wayland — reads them from there, closing the cursor gap with the X11
+//! and Windows backends.
 
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
+use std::sync::{Arc, Mutex, OnceLock};
 
+use crate::cursor::{CursorBitmap, CursorPosition, CursorSource};
+use crate::cursor_meta::{
+    bitmap_to_rgba, parse_cursor_meta, CURSOR_BITMAP_MAX_BYTES, SPA_META_CURSOR,
+};
 use crate::source::{ScreenCapture, ScreenDesc};
 use crate::{bgra_to_rgba, CaptureError, Frame};
 
@@ -41,6 +53,10 @@ impl PipeWireCapture {
     /// the portal dialog may sit unanswered while `capture()` keeps
     /// returning `Unsupported`/cached frames.
     pub fn connect() -> Result<Self, CaptureError> {
+        // Make sure the shared cursor slot exists as soon as a portal
+        // capture is created, so `platform_cursor` and the worker agree on
+        // the same state no matter which is constructed first.
+        let _ = pw_cursor_state();
         let (tx, rx) = channel::<PwMsg>();
         std::thread::Builder::new()
             .name("opacusr-pw".into())
@@ -118,6 +134,164 @@ impl ScreenCapture for PipeWireCapture {
 }
 
 // ---------------------------------------------------------------------------
+// Cursor metadata (portal CursorMode::Metadata)
+// ---------------------------------------------------------------------------
+
+/// Latest Wayland cursor state, written by the PipeWire worker thread and
+/// read by [`PwCursor`] on the session thread.
+#[derive(Default)]
+pub struct PwCursorState {
+    /// Last reported position (hotspot in stream pixels).
+    pos: Option<CursorPosition>,
+    /// Current sprite; keyed by `serial`.
+    bitmap: Option<CursorBitmap>,
+    /// Bumped whenever the sprite bitmap changes (compositor-independent:
+    /// we diff the converted RGBA, not the metadata `id`).
+    serial: u64,
+    /// `false` after the compositor signals an empty sprite or parks the
+    /// cursor at (-1, -1).
+    visible: bool,
+}
+
+static PW_CURSOR_STATE: OnceLock<Arc<Mutex<PwCursorState>>> = OnceLock::new();
+
+/// The shared cursor state slot (created on first use).
+fn pw_cursor_state() -> Arc<Mutex<PwCursorState>> {
+    PW_CURSOR_STATE
+        .get_or_init(|| Arc::new(Mutex::new(PwCursorState::default())))
+        .clone()
+}
+
+/// `CursorSource` fed by the PipeWire stream's cursor metadata. Always
+/// succeeds; `poll` yields `None` until the portal capture has produced
+/// its first cursor update.
+pub struct PwCursor;
+
+impl PwCursor {
+    /// Create the Wayland cursor poller.
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for PwCursor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl CursorSource for PwCursor {
+    fn poll(&mut self) -> Option<CursorPosition> {
+        let state = pw_cursor_state();
+        let st = state.lock().ok()?;
+        st.pos
+    }
+
+    fn shape(&mut self, serial: u64) -> Option<CursorBitmap> {
+        let state = pw_cursor_state();
+        let st = state.lock().ok()?;
+        if st.serial == serial {
+            st.bitmap.clone()
+        } else {
+            None
+        }
+    }
+
+    fn backend(&self) -> &'static str {
+        "pipewire-cursor"
+    }
+}
+
+/// Extract the `spa_meta_cursor` of one dequeued buffer and fold it into
+/// the shared state. The safe `Buffer` wrapper exposes only the data
+/// planes, so the containing `spa_buffer` (and with it the metadata
+/// array) is reached from element 0 of the `datas` array via the
+/// (computed) offset of the `datas` field.
+fn update_cursor_from_buffer(datas: &[pipewire::spa::buffer::Data]) {
+    use pipewire::spa::sys::{spa_buffer, spa_meta};
+
+    let Some(first) = datas.first() else {
+        return;
+    };
+    let probe = std::mem::MaybeUninit::<spa_buffer>::zeroed();
+    let datas_off =
+        unsafe { std::ptr::addr_of!((*probe.as_ptr()).datas) as usize } - probe.as_ptr() as usize;
+    let Some(base) = (std::ptr::from_ref(first) as usize).checked_sub(datas_off) else {
+        return;
+    };
+    if base == 0 {
+        return;
+    }
+    // SAFETY: `first` points at element 0 of this buffer's `datas` array,
+    // so `base` is the start of the `spa_buffer` owning it; both stay
+    // valid for the duration of the process callback.
+    let sbuf = unsafe { &*(base as *const spa_buffer) };
+    if sbuf.n_metas == 0 || sbuf.n_metas > 64 || sbuf.metas.is_null() {
+        return;
+    }
+    // SAFETY: `metas` is `n_metas` valid `spa_meta` entries.
+    let metas =
+        unsafe { std::slice::from_raw_parts(sbuf.metas as *const spa_meta, sbuf.n_metas as usize) };
+    for m in metas {
+        if m.type_ != SPA_META_CURSOR || m.data.is_null() || m.size == 0 {
+            continue;
+        }
+        let len = (m.size as usize).min(CURSOR_BITMAP_MAX_BYTES);
+        // SAFETY: `m.data` covers `m.size` writable bytes of this buffer's
+        // metadata region.
+        let bytes = unsafe { std::slice::from_raw_parts(m.data as *const u8, len) };
+        if let Some(cur) = parse_cursor_meta(bytes) {
+            if cur.id == 0 {
+                continue; // "an id of 0 is an invalid id and means that
+                          // there is no new cursor data"
+            }
+            apply_cursor_meta(cur);
+        }
+    }
+}
+
+fn apply_cursor_meta(cur: crate::cursor_meta::CursorMeta<'_>) {
+    let state = pw_cursor_state();
+    let Ok(mut st) = state.lock() else {
+        return;
+    };
+
+    if let Some(bm) = &cur.bitmap {
+        match bm.pixels {
+            Some(pixels) => {
+                if let Some(rgba) =
+                    bitmap_to_rgba(bm.format, bm.width, bm.height, bm.stride, pixels)
+                {
+                    let bitmap = CursorBitmap {
+                        width: bm.width,
+                        height: bm.height,
+                        hotspot_x: cur.hotspot_x.clamp(0, bm.width as i32) as u32,
+                        hotspot_y: cur.hotspot_y.clamp(0, bm.height as i32) as u32,
+                        rgba,
+                    };
+                    if st.bitmap.as_ref() != Some(&bitmap) {
+                        st.serial = st.serial.wrapping_add(1);
+                        st.bitmap = Some(bitmap);
+                    }
+                    st.visible = true;
+                }
+            }
+            // Valid bitmap header without image data: the cursor became
+            // invisible (compositor's "empty sprite").
+            None => st.visible = false,
+        }
+    }
+
+    let visible = st.visible && !(cur.x == -1 && cur.y == -1);
+    st.pos = Some(CursorPosition {
+        x: cur.x,
+        y: cur.y,
+        visible,
+        serial: st.serial,
+    });
+}
+
+// ---------------------------------------------------------------------------
 // Worker: portal handshake + PipeWire stream
 // ---------------------------------------------------------------------------
 
@@ -149,7 +323,10 @@ fn portal_negotiate() -> Result<(std::os::fd::OwnedFd, u32, (i32, i32)), String>
         proxy
             .select_sources(
                 &session,
-                CursorMode::Hidden,
+                // Metadata mode: the compositor attaches spa_meta_cursor
+                // to every buffer, giving us the real pointer even though
+                // capture APIs see none.
+                CursorMode::Metadata,
                 SourceType::Monitor.into(),
                 false,
                 None,
@@ -266,6 +443,9 @@ fn pipewire_loop(
             if datas.is_empty() || !ud.negotiated {
                 return;
             }
+            // Cursor metadata rides on the same buffer; the frame path
+            // below only looks at `datas[0]`, so read the metadata first.
+            update_cursor_from_buffer(datas);
             let data = &mut datas[0];
             let w = ud.format.size().width;
             let h = ud.format.size().height;

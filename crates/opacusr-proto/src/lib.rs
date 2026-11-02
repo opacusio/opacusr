@@ -35,7 +35,15 @@ pub use signal::*;
 /// v6 (0.6.0): new host→viewer messages `CursorShape`/`CursorPos` — the
 /// host streams the remote pointer (bitmap + hotspot + position) so
 /// viewers always see it, even where capture APIs drop the cursor.
-pub const PROTO_VERSION: u32 = 7;
+///
+/// v7 (0.7.0): new message `ClipboardImage` — image clipboard sync via
+/// PNG-encoded RGBA payloads.
+///
+/// v8: new host→viewer message `QualityTier` (the adaptive-quality
+/// controller's live state for the viewer UI) and the chunked clipboard
+/// pair `ClipboardBegin`/`ClipboardChunk` for payloads that exceed the
+/// single-message caps (large text and large PNGs).
+pub const PROTO_VERSION: u32 = 8;
 
 /// Application name used in handshakes and logs.
 pub const APP_NAME: &str = "OpacusR";

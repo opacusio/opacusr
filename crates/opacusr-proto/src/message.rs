@@ -292,6 +292,47 @@ pub struct ClipboardImage {
     pub png: Vec<u8>,
 }
 
+/// Which payload a chunked clipboard transfer carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ClipboardKind {
+    /// UTF-8 text.
+    Text,
+    /// PNG-encoded image (see `width`/`height`).
+    Image,
+}
+
+/// Either side → other: start a chunked clipboard transfer — the escape
+/// hatch for payloads that do not fit a single message (text above the
+/// 512 KiB text cap, PNG above the 6 MiB single-image cap). The data
+/// follows as [`ClipboardChunk`]s on the ordered control channel; the
+/// receiver applies the assembled payload exactly like the equivalent
+/// single message. A receiver keeps at most one transfer in flight; a
+/// new `ClipboardBegin` replaces a stale partial one.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClipboardBegin {
+    /// Sender-unique within one direction; discriminates re-sends.
+    pub transfer_id: u32,
+    pub kind: ClipboardKind,
+    /// Decoded image dimensions (0 for text; receivers trust the decoded
+    /// PNG dimensions, these are informational).
+    pub width: u32,
+    pub height: u32,
+    /// Exact payload length across all chunks.
+    pub total_len: u64,
+    /// Every chunk carries `chunk_size` bytes except the last.
+    pub chunk_size: u32,
+}
+
+/// Either side → other: one chunk of a chunked clipboard transfer.
+/// `seq` counts chunks from 0; the receiver enforces order and the
+/// declared total.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClipboardChunk {
+    pub transfer_id: u32,
+    pub seq: u32,
+    pub data: Vec<u8>,
+}
+
 /// Either side → other: one chat bubble.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
@@ -534,6 +575,31 @@ pub enum Message {
     CursorShape(CursorShape),
     /// Host → viewer: pointer moved (hotspot position in screen pixels).
     CursorPos(CursorPos),
+
+    // --- adaptive quality ---
+    /// Host → viewer: the adaptive-quality controller's current state
+    /// (sent after `SessionAccept`, on every tier change and when manual
+    /// settings disable the controller).
+    QualityTier(QualityTier),
+
+    // --- chunked clipboard ---
+    ClipboardBegin(ClipboardBegin),
+    ClipboardChunk(ClipboardChunk),
+}
+
+/// Host → viewer: the adaptive-quality controller's current state.
+/// `tier` is 0..=3 (0 = full quality, 3 = very constrained link);
+/// `fps`/`jpeg_quality`/`scale_percent` are the parameters the host
+/// streams with right now. `enabled = false` means the viewer set quality
+/// manually (or the host disabled adaptation) — the UI should not display
+/// a tier then.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct QualityTier {
+    pub tier: u8,
+    pub fps: u8,
+    pub jpeg_quality: u8,
+    pub scale_percent: u16,
+    pub enabled: bool,
 }
 
 impl Message {

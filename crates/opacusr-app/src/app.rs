@@ -88,6 +88,13 @@ pub struct SessionHandle {
     pub panel_stats: bool,
     /// (arrival, wire bytes) samples for the fps/bitrate window.
     pub stats_win: std::collections::VecDeque<(std::time::Instant, u64)>,
+    /// Adaptive-quality tier (0..=3) the host currently streams at;
+    /// `None` = not reported yet (or adaptation off).
+    pub quality_tier: Option<u8>,
+    /// Parameters the host streams with (fps, jpeg quality, scale %).
+    pub quality_params: Option<(u8, u8, u16)>,
+    /// `false` = a manual quality setting disabled the controller.
+    pub quality_adaptive: bool,
     /// Remote cursor shapes seen this session (bounded cache).
     pub cursor_shapes: std::collections::HashMap<u64, RemoteCursor>,
     /// Latest cursor position: (x, y, visible, shape id) in native
@@ -136,6 +143,9 @@ impl SessionHandle {
             stream_res: (0, 0),
             panel_stats: false,
             stats_win: std::collections::VecDeque::new(),
+            quality_tier: None,
+            quality_params: None,
+            quality_adaptive: false,
             cursor_shapes: std::collections::HashMap::new(),
             cursor_pos: None,
             status: "connecting…".into(),
@@ -783,6 +793,17 @@ impl eframe::App for App {
                     }
                 }
                 ClientEvent::TunnelClosed { .. } => {}
+                ClientEvent::QualityTier {
+                    tier,
+                    fps,
+                    jpeg_quality,
+                    scale_percent,
+                    enabled,
+                } => {
+                    sess.quality_adaptive = enabled;
+                    sess.quality_tier = if enabled { Some(tier) } else { None };
+                    sess.quality_params = Some((fps, jpeg_quality, scale_percent));
+                }
                 ClientEvent::Notice(t) => sess.status = t,
                 ClientEvent::Closed(reason) => {
                     sess.status = format!("closed: {reason}");

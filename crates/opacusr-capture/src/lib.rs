@@ -13,6 +13,8 @@
 //!   and `opacusr-agent --demo` (no real screen required).
 
 pub mod cursor;
+/// Byte-level `spa_meta_cursor` reader for the PipeWire/portal backend.
+pub mod cursor_meta;
 pub mod source;
 
 #[cfg(feature = "x11")]

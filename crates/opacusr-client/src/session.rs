@@ -14,7 +14,8 @@ use tokio::sync::mpsc;
 use opacusr_capture::Frame;
 use opacusr_codec::{make_pair, VideoDecoder};
 use opacusr_input::clipboard::{
-    hash_clip, ClipContent, ClipboardHandle, CLIPBOARD_IMAGE_MAX_PNG_BYTES,
+    hash_clip, ChunkAssembler, ChunkKind, ChunkPayload, ClipContent, ClipboardHandle,
+    CLIPBOARD_CHUNK_SIZE, CLIPBOARD_IMAGE_MAX_PNG_BYTES,
 };
 use opacusr_proto::message::{self, ByeReason, CodecId};
 use opacusr_proto::signal::*;
@@ -219,6 +220,16 @@ pub enum ClientEvent {
         visible: bool,
         shape_id: u64,
     },
+    /// Host → viewer: the adaptive-quality controller's state. `tier` is
+    /// 0..=3 (0 = full quality); `enabled = false` means the viewer took
+    /// manual control (or the host disabled adaptation) — no tier UI.
+    QualityTier {
+        tier: u8,
+        fps: u8,
+        jpeg_quality: u8,
+        scale_percent: u16,
+        enabled: bool,
+    },
     Notice(String),
     Closed(String),
 }
@@ -409,6 +420,10 @@ pub struct SessionClient {
     clipboard: Option<ClipboardHandle>,
     clip_sent: Option<u64>,
     clip_applied: Option<u64>,
+    /// Sender-unique ids for chunked clipboard transfers (proto v8).
+    next_clip_xfer: u32,
+    /// Reassembly of inbound chunked clipboard transfers.
+    clip_chunks: ChunkAssembler,
     /// Audio playback (created lazily on the first `AudioFrame`).
     #[cfg(feature = "audio")]
     player: Option<crate::audio::AudioPlayer>,
@@ -665,6 +680,8 @@ impl SessionClient {
             clipboard,
             clip_sent: None,
             clip_applied: None,
+            next_clip_xfer: 1,
+            clip_chunks: ChunkAssembler::default(),
             #[cfg(feature = "audio")]
             player: None,
             frames_since_stats: 0,
@@ -709,12 +726,45 @@ impl SessionClient {
                             {
                                 continue;
                             }
-                            let msg = match content {
+                            match content {
                                 ClipContent::Text(text) => {
-                                    if text.len() > opacusr_input::clipboard::CLIPBOARD_MAX_BYTES {
+                                    if text.len()
+                                        > opacusr_input::clipboard::CLIPBOARD_CHUNKED_MAX_BYTES
+                                    {
+                                        tracing::debug!(target: "opacusr",
+                                            "clipboard text too large, dropped");
                                         continue;
                                     }
-                                    Message::ClipboardText(message::ClipboardText { text })
+                                    self.clip_sent = Some(hash);
+                                    if text.len()
+                                        <= opacusr_input::clipboard::CLIPBOARD_MAX_BYTES
+                                    {
+                                        let msg = Message::ClipboardText(
+                                            message::ClipboardText { text },
+                                        );
+                                        if self.session.send_msg(&msg).await.is_err() {
+                                            break;
+                                        }
+                                    } else {
+                                        // Oversized text rides the chunked
+                                        // path (proto v8) instead of being
+                                        // dropped.
+                                        let id = self.next_clip_xfer;
+                                        self.next_clip_xfer = self.next_clip_xfer.wrapping_add(1);
+                                        if send_clipboard_chunked(
+                                            &mut self.session,
+                                            id,
+                                            message::ClipboardKind::Text,
+                                            0,
+                                            0,
+                                            text.as_bytes(),
+                                        )
+                                        .await
+                                        .is_err()
+                                        {
+                                            break;
+                                        }
+                                    }
                                 }
                                 ClipContent::Image { width, height, rgba } => {
                                     // Encoding happens only for *new* content —
@@ -724,21 +774,42 @@ impl SessionClient {
                                     ) else {
                                         continue;
                                     };
-                                    if png.len() > CLIPBOARD_IMAGE_MAX_PNG_BYTES {
+                                    if png.len()
+                                        > opacusr_input::clipboard::CLIPBOARD_CHUNKED_MAX_BYTES
+                                    {
                                         tracing::debug!(target: "opacusr",
                                             "clipboard image too large after encode, dropped");
                                         continue;
                                     }
-                                    Message::ClipboardImage(message::ClipboardImage {
-                                        width,
-                                        height,
-                                        png,
-                                    })
+                                    self.clip_sent = Some(hash);
+                                    if png.len() <= CLIPBOARD_IMAGE_MAX_PNG_BYTES {
+                                        let msg = Message::ClipboardImage(
+                                            message::ClipboardImage { width, height, png },
+                                        );
+                                        if self.session.send_msg(&msg).await.is_err() {
+                                            break;
+                                        }
+                                    } else {
+                                        // Big screenshots ride the chunked
+                                        // path (proto v8) instead of being
+                                        // dropped.
+                                        let id = self.next_clip_xfer;
+                                        self.next_clip_xfer = self.next_clip_xfer.wrapping_add(1);
+                                        if send_clipboard_chunked(
+                                            &mut self.session,
+                                            id,
+                                            message::ClipboardKind::Image,
+                                            width,
+                                            height,
+                                            &png,
+                                        )
+                                        .await
+                                        .is_err()
+                                        {
+                                            break;
+                                        }
+                                    }
                                 }
-                            };
-                            self.clip_sent = Some(hash);
-                            if self.session.send_msg(&msg).await.is_err() {
-                                break;
                             }
                         }
                     }
@@ -829,10 +900,28 @@ impl SessionClient {
             }
             Command::SendClipboard(text) => {
                 // Manual push (viewer sidebar button): record the marker so
-                // the next poll does not echo it straight back.
+                // the next poll does not echo it straight back. Oversized
+                // payloads go out chunked (proto v8).
                 let hash = hash_clip(&ClipContent::Text(text.clone()));
                 self.clip_sent = Some(hash);
-                Message::ClipboardText(message::ClipboardText { text })
+                if text.len() <= opacusr_input::clipboard::CLIPBOARD_MAX_BYTES {
+                    Message::ClipboardText(message::ClipboardText { text })
+                } else {
+                    let id = self.next_clip_xfer;
+                    self.next_clip_xfer = self.next_clip_xfer.wrapping_add(1);
+                    send_clipboard_chunked(
+                        &mut self.session,
+                        id,
+                        message::ClipboardKind::Text,
+                        0,
+                        0,
+                        text.as_bytes(),
+                    )
+                    .await?;
+                    // The chunked path already went out; nothing more to send.
+                    self.pump_outgoing().await?;
+                    return Ok(true);
+                }
             }
             Command::SelectScreen(id) => Message::SelectScreen(message::SelectScreen { id }),
             Command::ClipboardSync(on) => {
@@ -1054,6 +1143,39 @@ impl SessionClient {
                     }
                 }
             }
+            Message::ClipboardBegin(b) => {
+                if self.settings.clipboard_sync {
+                    let kind = match b.kind {
+                        message::ClipboardKind::Text => ChunkKind::Text,
+                        message::ClipboardKind::Image => ChunkKind::Image,
+                    };
+                    if let Err(e) =
+                        self.clip_chunks
+                            .begin(kind, b.width, b.height, b.total_len, b.chunk_size)
+                    {
+                        tracing::debug!(target: "opacusr",
+                            "remote clipboard transfer rejected: {e}");
+                    }
+                }
+            }
+            Message::ClipboardChunk(c) => {
+                if self.settings.clipboard_sync {
+                    match self.clip_chunks.chunk(c.seq, &c.data) {
+                        Ok(Some(payload)) => {
+                            apply_clipboard_payload(
+                                &mut self.clip_applied,
+                                &mut self.clip_sent,
+                                payload,
+                            );
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            tracing::debug!(target: "opacusr",
+                                "remote clipboard chunk dropped: {e}");
+                        }
+                    }
+                }
+            }
             Message::Pong(n) => {
                 if let Some(start) = self.ping_times.remove(&n) {
                     let rtt = start.elapsed().as_millis() as u32;
@@ -1117,6 +1239,15 @@ impl SessionClient {
                     y: p.y,
                     visible: p.visible,
                     shape_id: p.shape_id,
+                });
+            }
+            Message::QualityTier(t) => {
+                let _ = self.events.send(ClientEvent::QualityTier {
+                    tier: t.tier,
+                    fps: t.fps,
+                    jpeg_quality: t.jpeg_quality,
+                    scale_percent: t.scale_percent,
+                    enabled: t.enabled,
                 });
             }
             other => {
@@ -1203,6 +1334,71 @@ impl SessionClient {
     /// Whether the host forwards TCP tunnels for this session.
     pub fn tunnel_available(&self) -> bool {
         self.tunnel_available
+    }
+}
+
+/// Forward a payload to the host as a chunked clipboard transfer (proto
+/// v8): `ClipboardBegin` + fixed-size `ClipboardChunk`s.
+async fn send_clipboard_chunked(
+    session: &mut SecureSession,
+    transfer_id: u32,
+    kind: message::ClipboardKind,
+    width: u32,
+    height: u32,
+    payload: &[u8],
+) -> Result<(), TransportError> {
+    session
+        .send_msg(&Message::ClipboardBegin(message::ClipboardBegin {
+            transfer_id,
+            kind,
+            width,
+            height,
+            total_len: payload.len() as u64,
+            chunk_size: CLIPBOARD_CHUNK_SIZE as u32,
+        }))
+        .await?;
+    for (seq, data) in payload.chunks(CLIPBOARD_CHUNK_SIZE).enumerate() {
+        session
+            .send_msg(&Message::ClipboardChunk(message::ClipboardChunk {
+                transfer_id,
+                seq: seq as u32,
+                data: data.to_vec(),
+            }))
+            .await?;
+    }
+    Ok(())
+}
+
+/// Apply a completed chunked clipboard payload like its single-message
+/// equivalent (write the local clipboard, refresh the echo markers).
+fn apply_clipboard_payload(
+    clip_applied: &mut Option<u64>,
+    clip_sent: &mut Option<u64>,
+    payload: ChunkPayload,
+) {
+    match payload {
+        ChunkPayload::Text(text) => {
+            set_local_clipboard(&text);
+            let hash = hash_clip(&ClipContent::Text(text));
+            *clip_applied = Some(hash);
+            *clip_sent = Some(hash);
+        }
+        ChunkPayload::Image(_, _, png) => match opacusr_input::clipboard::decode_png(&png) {
+            Some((width, height, rgba)) => {
+                set_local_clipboard_image(width, height, &rgba);
+                let hash = hash_clip(&ClipContent::Image {
+                    width,
+                    height,
+                    rgba,
+                });
+                *clip_applied = Some(hash);
+                *clip_sent = Some(hash);
+            }
+            None => {
+                tracing::debug!(target: "opacusr",
+                        "malformed remote chunked clipboard image, dropped");
+            }
+        },
     }
 }
 

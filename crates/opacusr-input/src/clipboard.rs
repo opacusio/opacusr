@@ -32,6 +32,14 @@ pub const CLIPBOARD_IMAGE_MAX_PNG_BYTES: usize = 6 * 1024 * 1024;
 /// bomb guard; a 4K frame is ~33 MB).
 pub const CLIPBOARD_IMAGE_MAX_RGBA_BYTES: usize = 64 * 1024 * 1024;
 
+/// Upper bound for a chunked clipboard payload (reassembly buffer). Only
+/// enforced on the wire side; the decoded-image guard above still applies.
+pub const CLIPBOARD_CHUNKED_MAX_BYTES: usize = 64 * 1024 * 1024;
+
+/// Wire chunk size for chunked clipboard transfers. Comfortably below
+/// the 8 MiB transport frame limit so chunk overhead stays negligible.
+pub const CLIPBOARD_CHUNK_SIZE: usize = 256 * 1024;
+
 /// One clipboard snapshot, either side of the session.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClipContent {
@@ -157,6 +165,124 @@ impl ClipboardHandle {
             height,
             rgba: rgba.to_vec(),
         }));
+    }
+}
+
+/// Kind of a chunked clipboard payload (proto-independent twin of
+/// `opacusr_proto::message::ClipboardKind`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChunkKind {
+    /// UTF-8 text.
+    Text,
+    /// PNG-encoded image.
+    Image,
+}
+
+/// Receiver-side reassembly of a chunked clipboard transfer (proto v8).
+///
+/// The control channel is ordered and reliable, so assembly is a plain
+/// accumulation: one `begin` followed by `chunk`×N in sequence order.
+/// A new `begin` replaces a stale partial transfer; a completed payload
+/// is surfaced exactly once and the assembler resets.
+#[derive(Debug, Default)]
+pub struct ChunkAssembler {
+    kind: Option<ChunkKind>,
+    width: u32,
+    height: u32,
+    total: u64,
+    next_seq: u32,
+    buf: Vec<u8>,
+}
+
+/// One completed chunked clipboard payload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChunkPayload {
+    Text(String),
+    /// (width, height, PNG bytes) — dimensions as announced by the
+    /// sender; receivers re-derive them from the decoded PNG.
+    Image(u32, u32, Vec<u8>),
+}
+
+impl ChunkAssembler {
+    /// Start a new transfer. Rejects empty/oversized payloads and
+    /// nonsensical chunk sizes so a malformed peer cannot make us
+    /// allocate without bound.
+    pub fn begin(
+        &mut self,
+        kind: ChunkKind,
+        width: u32,
+        height: u32,
+        total_len: u64,
+        chunk_size: u32,
+    ) -> Result<(), String> {
+        if total_len == 0 {
+            return Err("empty clipboard payload".into());
+        }
+        if total_len > CLIPBOARD_CHUNKED_MAX_BYTES as u64 {
+            return Err(format!("clipboard payload too large ({total_len} bytes)"));
+        }
+        if chunk_size == 0 || chunk_size as usize > CLIPBOARD_CHUNK_SIZE {
+            return Err(format!("bad clipboard chunk size {chunk_size}"));
+        }
+        if kind == ChunkKind::Image {
+            let rgba = (width as u64) * (height as u64) * 4;
+            if width == 0 || height == 0 || rgba > CLIPBOARD_IMAGE_MAX_RGBA_BYTES as u64 {
+                return Err(format!(
+                    "clipboard image dimensions {width}×{height} rejected"
+                ));
+            }
+        }
+        self.kind = Some(kind);
+        self.width = width;
+        self.height = height;
+        self.total = total_len;
+        self.next_seq = 0;
+        self.buf = Vec::with_capacity((total_len as usize).min(4 * 1024 * 1024));
+        Ok(())
+    }
+
+    /// Feed one chunk. Returns the finished payload when the transfer is
+    /// complete (then the assembler is reset and ready for the next one).
+    pub fn chunk(&mut self, seq: u32, data: &[u8]) -> Result<Option<ChunkPayload>, String> {
+        let Some(kind) = self.kind else {
+            return Err("clipboard chunk without begin".into());
+        };
+        if seq != self.next_seq {
+            return Err(format!(
+                "clipboard chunk out of order (got {seq}, want {})",
+                self.next_seq
+            ));
+        }
+        let remaining = self.total - self.buf.len() as u64;
+        if data.len() as u64 > remaining {
+            return Err("clipboard chunk overruns the declared size".into());
+        }
+        self.buf.extend_from_slice(data);
+        self.next_seq = self.next_seq.wrapping_add(1);
+        if self.buf.len() as u64 == self.total {
+            let buf = std::mem::take(&mut self.buf);
+            let (w, h) = (self.width, self.height);
+            self.kind = None;
+            self.total = 0;
+            self.next_seq = 0;
+            self.width = 0;
+            self.height = 0;
+            let payload = match kind {
+                ChunkKind::Text => ChunkPayload::Text(
+                    String::from_utf8(buf)
+                        .map_err(|_| "clipboard text is not UTF-8".to_string())?,
+                ),
+                ChunkKind::Image => ChunkPayload::Image(w, h, buf),
+            };
+            Ok(Some(payload))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// A transfer is mid-flight (incomplete).
+    pub fn is_active(&self) -> bool {
+        self.kind.is_some()
     }
 }
 
@@ -318,6 +444,97 @@ mod tests {
         assert_ne!(
             hash_clip(&ClipContent::Text("hi".into())),
             hash_clip(&ClipContent::Text("ho".into()))
+        );
+    }
+
+    // -- ChunkAssembler -----------------------------------------------------
+
+    fn chunked_roundtrip(kind: ChunkKind, payload: &[u8], chunk_size: usize) -> Vec<u8> {
+        let mut asm = ChunkAssembler::default();
+        let (w, h) = match kind {
+            ChunkKind::Image => (3, 2),
+            ChunkKind::Text => (0, 0),
+        };
+        asm.begin(kind, w, h, payload.len() as u64, chunk_size as u32)
+            .expect("begin");
+        assert!(asm.is_active());
+        let mut last = None;
+        for (seq, data) in payload.chunks(chunk_size.max(1)).enumerate() {
+            last = asm.chunk(seq as u32, data).expect("chunk");
+        }
+        assert!(!asm.is_active(), "assembler resets after completion");
+        let next = asm.chunk(0, b"x");
+        assert!(next.is_err(), "chunk after completion is rejected");
+        match last.expect("final chunk completes") {
+            ChunkPayload::Text(t) => t.into_bytes(),
+            ChunkPayload::Image(_, _, png) => png,
+        }
+    }
+
+    #[test]
+    fn chunk_assembler_text_roundtrip_multi_chunk() {
+        // Valid UTF-8 (the assembler validates text payloads), including
+        // multibyte characters split across chunk boundaries.
+        let payload = "опакusр-clipboard-🚀-payload ".repeat(5000);
+        let out = chunked_roundtrip(ChunkKind::Text, payload.as_bytes(), 4096);
+        assert_eq!(out, payload.into_bytes());
+    }
+
+    #[test]
+    fn chunk_assembler_image_roundtrip_single_chunk() {
+        let png = encode_png(3, 2, &sample_rgba().2).expect("encode");
+        let out = chunked_roundtrip(ChunkKind::Image, &png, CLIPBOARD_CHUNK_SIZE);
+        assert_eq!(out, png);
+    }
+
+    #[test]
+    fn chunk_assembler_rejects_bad_flow() {
+        let mut asm = ChunkAssembler::default();
+        // Chunk before begin.
+        assert!(asm.chunk(0, b"hi").is_err());
+        // Nonsensical begin parameters.
+        assert!(asm.begin(ChunkKind::Text, 0, 0, 0, 1024).is_err());
+        assert!(asm
+            .begin(
+                ChunkKind::Text,
+                0,
+                0,
+                CLIPBOARD_CHUNKED_MAX_BYTES as u64 + 1,
+                1024
+            )
+            .is_err());
+        assert!(asm.begin(ChunkKind::Text, 0, 0, 10, 0).is_err());
+        assert!(asm
+            .begin(ChunkKind::Text, 0, 0, 10, CLIPBOARD_CHUNK_SIZE as u32 + 1)
+            .is_err());
+        assert!(asm.begin(ChunkKind::Image, 0, 10, 10, 1024).is_err());
+        asm.begin(ChunkKind::Text, 0, 0, 10, 1024)
+            .expect("begin ok");
+        // Out of order.
+        assert!(asm.chunk(1, b"aaaa").is_err());
+        // Overrun: declared 10 bytes, sending more.
+        assert!(asm.chunk(0, &[0u8; 11]).is_err());
+        // Exactly 10 bytes completes.
+        let mut asm = ChunkAssembler::default();
+        asm.begin(ChunkKind::Text, 0, 0, 10, 1024).unwrap();
+        assert!(asm.chunk(0, b"0123456789").unwrap().is_some());
+        // Invalid UTF-8 text payload surfaces as an error.
+        let mut asm = ChunkAssembler::default();
+        asm.begin(ChunkKind::Text, 0, 0, 2, 1024).unwrap();
+        assert!(asm.chunk(0, &[0xff, 0xfe]).is_err());
+    }
+
+    #[test]
+    fn chunk_assembler_new_begin_replaces_stale_transfer() {
+        let mut asm = ChunkAssembler::default();
+        asm.begin(ChunkKind::Text, 0, 0, 100, 1024).unwrap();
+        asm.chunk(0, b"partial").unwrap();
+        assert!(asm.is_active());
+        // A fresh begin discards the partial buffer.
+        asm.begin(ChunkKind::Text, 0, 0, 4, 1024).unwrap();
+        assert_eq!(
+            asm.chunk(0, b"done").unwrap(),
+            Some(ChunkPayload::Text("done".into()))
         );
     }
 }

@@ -6,8 +6,12 @@
 //! enough to call every streamed frame, while [`CursorSource::shape`] runs
 //! only when the cursor's appearance changes (the position carries a
 //! `serial` that changes with the shape). Backends without cursor support
-//! (Wayland/PipeWire, macOS stub) return `None` from `poll` and the host
-//! simply never sends cursor messages.
+//! (e.g. macOS) return `None` from `poll` and the host simply never sends
+//! cursor messages.
+//!
+//! Wayland: the portal screencast stream carries `spa_meta_cursor`
+//! metadata (see [`crate::wayland`]); [`CursorPoller`] picks that backend
+//! up when built with the `pipewire` feature inside a Wayland session.
 
 /// Cursor position (the hotspot) in *global* screen coordinates.
 ///
@@ -63,7 +67,8 @@ pub fn platform_cursor() -> Box<dyn CursorSource> {
 // ---------------------------------------------------------------------------
 
 /// Platform cursor poller: Win32 (`GetCursorInfo` + `GetIconInfo`) on
-/// Windows, XFixes on X11, empty on Wayland/macOS.
+/// Windows, XFixes on X11, PipeWire cursor metadata in Wayland sessions,
+/// empty elsewhere.
 pub struct CursorPoller {
     inner: Option<Inner>,
 }
@@ -72,7 +77,9 @@ enum Inner {
     #[cfg(windows)]
     Win32,
     #[cfg(all(target_os = "linux", feature = "x11"))]
-    X11(X11Cursor),
+    X11(Box<X11Cursor>),
+    #[cfg(all(target_os = "linux", feature = "pipewire"))]
+    PipeWire(crate::wayland::PwCursor),
 }
 
 #[cfg(all(target_os = "linux", feature = "x11"))]
@@ -98,17 +105,31 @@ impl CursorPoller {
         {
             Some(Inner::Win32)
         }
+        #[cfg(all(target_os = "linux", feature = "pipewire"))]
+        {
+            // Native Wayland sessions: the cursor metadata rides on the
+            // portal's PipeWire stream (XFixes would only see the
+            // XWayland cursor, not the real one).
+            if crate::is_wayland_session() {
+                return Some(Inner::PipeWire(crate::wayland::PwCursor::new()));
+            }
+        }
         #[cfg(all(target_os = "linux", feature = "x11"))]
         {
-            // Native Wayland sessions: XFixes would only see the XWayland
-            // cursor, not the real one — report unsupported instead.
+            // Native Wayland sessions without the pipewire feature:
+            // XFixes would only see the XWayland cursor, not the real
+            // one — report unsupported instead.
             if crate::is_wayland_session() {
                 return None;
             }
             let (conn, _screen) = x11rb::rust_connection::RustConnection::connect(None).ok()?;
-            Some(Inner::X11(X11Cursor { conn, ready: false }))
+            Some(Inner::X11(Box::new(X11Cursor { conn, ready: false })))
         }
-        #[cfg(not(any(windows, all(target_os = "linux", feature = "x11"))))]
+        #[cfg(not(any(
+            windows,
+            all(target_os = "linux", feature = "x11"),
+            all(target_os = "linux", feature = "pipewire")
+        )))]
         {
             None
         }
@@ -128,13 +149,23 @@ impl CursorSource for CursorPoller {
             Inner::Win32 => win32::poll(),
             #[cfg(all(target_os = "linux", feature = "x11"))]
             Inner::X11(c) => c.poll(),
-            #[cfg(not(any(windows, all(target_os = "linux", feature = "x11"))))]
+            #[cfg(all(target_os = "linux", feature = "pipewire"))]
+            Inner::PipeWire(c) => c.poll(),
+            #[cfg(not(any(
+                windows,
+                all(target_os = "linux", feature = "x11"),
+                all(target_os = "linux", feature = "pipewire")
+            )))]
             _ => None,
         }
     }
 
     #[cfg_attr(
-        not(any(windows, all(target_os = "linux", feature = "x11"))),
+        not(any(
+            windows,
+            all(target_os = "linux", feature = "x11"),
+            all(target_os = "linux", feature = "pipewire")
+        )),
         allow(unused_variables)
     )]
     fn shape(&mut self, serial: u64) -> Option<CursorBitmap> {
@@ -143,7 +174,13 @@ impl CursorSource for CursorPoller {
             Inner::Win32 => win32::shape(serial),
             #[cfg(all(target_os = "linux", feature = "x11"))]
             Inner::X11(c) => c.shape(serial),
-            #[cfg(not(any(windows, all(target_os = "linux", feature = "x11"))))]
+            #[cfg(all(target_os = "linux", feature = "pipewire"))]
+            Inner::PipeWire(c) => c.shape(serial),
+            #[cfg(not(any(
+                windows,
+                all(target_os = "linux", feature = "x11"),
+                all(target_os = "linux", feature = "pipewire")
+            )))]
             _ => None,
         }
     }
@@ -154,8 +191,14 @@ impl CursorSource for CursorPoller {
             Some(Inner::Win32) => "win32-cursor",
             #[cfg(all(target_os = "linux", feature = "x11"))]
             Some(Inner::X11(_)) => "xfixes-cursor",
+            #[cfg(all(target_os = "linux", feature = "pipewire"))]
+            Some(Inner::PipeWire(_)) => "pipewire-cursor",
             None => "none",
-            #[cfg(not(any(windows, all(target_os = "linux", feature = "x11"))))]
+            #[cfg(not(any(
+                windows,
+                all(target_os = "linux", feature = "x11"),
+                all(target_os = "linux", feature = "pipewire")
+            )))]
             _ => "none",
         }
     }

@@ -14,6 +14,7 @@ use opacusr_capture::TestCursor;
 use opacusr_client::session::{ClientEvent, Command, SessionClient, SessionSettings};
 use opacusr_input::{InputError, InputInjector, RecordingInjector};
 use opacusr_proto::message::{MouseButtonId, OpKey};
+use opacusr_proto::{message, Message};
 use opacusr_transport::auth::viewer_handshake;
 use opacusr_transport::lockout::{AuthGate, AuthGateConfig};
 use opacusr_transport::secure::SecureSession;
@@ -1011,4 +1012,242 @@ async fn tunnel_refused_in_view_only() {
     drop(runner);
     drop(cmd_tx);
     host_task.abort();
+}
+
+// ---------------------------------------------------------------------------
+// Adaptive-quality tier reporting + chunked clipboard (proto v8)
+// ---------------------------------------------------------------------------
+
+/// Raw-protocol viewer: asserts the tier lifecycle (initial state → manual
+/// override → tier change driven by `LinkStats`) and drives the chunked
+/// clipboard path end-to-end, including payloads that must be rejected.
+/// Headless-safe: clipboard *application* is a best-effort no-op, so the
+/// assertions target what is observable — the messages on the wire, the
+/// controller state and session liveness (a chat round-trip).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn adaptive_tier_and_chunked_clipboard_over_tcp() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+
+    let (host_events_tx, mut host_events_rx) = mpsc::unbounded_channel();
+    let (_cmd_tx, cmd_rx) = mpsc::unbounded_channel();
+    let host_task = tokio::spawn(async move {
+        let (sock, _) = listener.accept().await.unwrap();
+        let cfg = SessionConfig {
+            password: Some(PASSWORD.into()),
+            display_name: "e2e-host".into(),
+            fps: 30,
+            jpeg_quality: 80,
+            scale_percent: 100,
+            download_dir: std::env::temp_dir(),
+            auto_accept_files: true,
+            codec: opacusr_agent::session::CodecChoice::Auto,
+            view_only: false,
+            clipboard_sync: true,
+            adaptive_quality: true,
+            audio: false,
+            audio_device: String::new(),
+            lock_input: false,
+            totp_secret: None,
+            record: false,
+            record_dir: std::env::temp_dir(),
+            tunnel: TunnelPolicy::Off,
+            auth_gate: None,
+        };
+        let session = SecureSession::new(Box::new(TcpTransport::from_stream(sock)), None);
+        SessionHost {
+            cfg,
+            events: host_events_tx,
+            commands: cmd_rx,
+        }
+        .run(
+            session,
+            Box::new(TestSource::new(320, 200)),
+            Box::new(RecordingInjector::new()),
+            Box::new(TestCursor::new((320, 200))),
+        )
+        .await;
+    });
+
+    // Handshake as a raw viewer.
+    let transport = TcpTransport::connect(&addr).await.unwrap();
+    let mut session = SecureSession::new(Box::new(transport), None);
+    let _handshake = viewer_handshake(&mut session, PASSWORD, "e2e-raw-viewer", None)
+        .await
+        .expect("handshake");
+
+    // Receive one message, skipping the video/cursor chatter.
+    async fn next_tier(session: &mut SecureSession) -> (u8, u8, u8, u16, bool) {
+        loop {
+            match session.recv_msg().await.expect("message") {
+                Message::QualityTier(t) => {
+                    return (t.tier, t.fps, t.jpeg_quality, t.scale_percent, t.enabled)
+                }
+                Message::VideoFrame(_) | Message::CursorShape(_) | Message::CursorPos(_) => {}
+                other => panic!("expected QualityTier, got {other:?}"),
+            }
+        }
+    }
+
+    // 1. Initial controller state arrives right after SessionAccept
+    //    (SessionAccept itself is consumed by the handshake helper's caller
+    //    — read it first).
+    match session.recv_msg().await.unwrap() {
+        Message::SessionAccept(_) => {}
+        other => panic!("expected SessionAccept, got {other:?}"),
+    }
+    let tier = tokio::time::timeout(Duration::from_secs(10), next_tier(&mut session))
+        .await
+        .expect("initial QualityTier");
+    assert_eq!(
+        tier,
+        (0, 30, 80, 100, true),
+        "initial state: tier 0 at the configured base params"
+    );
+
+    // 2. A bad link report degrades to tier 3 immediately and is announced
+    //    (base 30/80/100 → tier 3 caps at fps 8, JPEG 35, scale 60).
+    session
+        .send_msg(&Message::LinkStats(message::LinkStats {
+            rtt_ms: 300,
+            recv_fps: 15,
+            jitter_ms: 0,
+        }))
+        .await
+        .unwrap();
+    let tier = tokio::time::timeout(Duration::from_secs(10), next_tier(&mut session))
+        .await
+        .expect("QualityTier after LinkStats");
+    assert_eq!(
+        tier,
+        (3, 8, 35, 60, true),
+        "degrade: tier 3 with capped parameters"
+    );
+
+    // 3. A manual quality setting disables the controller and is echoed
+    //    back as `enabled = false` (tier UI hidden).
+    session
+        .send_msg(&Message::QualitySet(message::QualitySet {
+            fps: 30,
+            jpeg_quality: 70,
+            scale_percent: 100,
+        }))
+        .await
+        .unwrap();
+    let tier = tokio::time::timeout(Duration::from_secs(10), next_tier(&mut session))
+        .await
+        .expect("QualityTier after manual override");
+    assert_eq!(
+        tier,
+        (0, 30, 70, 100, false),
+        "manual mode hides the tier UI"
+    );
+
+    // 4. Reports after a manual override are ignored: no QualityTier may
+    //    arrive for a while (only the video/cursor chatter does).
+    session
+        .send_msg(&Message::LinkStats(message::LinkStats {
+            rtt_ms: 400,
+            recv_fps: 15,
+            jitter_ms: 0,
+        }))
+        .await
+        .unwrap();
+    let quiet = tokio::time::timeout(Duration::from_millis(1500), async {
+        loop {
+            match session.recv_msg().await.expect("message") {
+                Message::QualityTier(_) => {
+                    panic!("controller must stay disabled after a manual override")
+                }
+                Message::VideoFrame(_) | Message::CursorShape(_) | Message::CursorPos(_) => {}
+                _ => {}
+            }
+        }
+    })
+    .await;
+    assert!(
+        quiet.is_err(),
+        "timeout expected (no QualityTier while manual override is active)"
+    );
+
+    // 5. Chunked clipboard: an oversized text payload (> 512 KiB single cap)
+    //    arrives as begin + chunks and is assembled without killing the
+    //    session; malformed transfers are rejected instead.
+    let payload: Vec<u8> = (0..(600 * 1024)).map(|i| (i % 249) as u8).collect();
+    // Garbage first: over the reassembly cap, then a chunk without begin.
+    session
+        .send_msg(&Message::ClipboardBegin(message::ClipboardBegin {
+            transfer_id: 77,
+            kind: message::ClipboardKind::Text,
+            width: 0,
+            height: 0,
+            total_len: opacusr_input::clipboard::CLIPBOARD_CHUNKED_MAX_BYTES as u64 + 1,
+            chunk_size: 1024,
+        }))
+        .await
+        .unwrap();
+    session
+        .send_msg(&Message::ClipboardChunk(message::ClipboardChunk {
+            transfer_id: 78,
+            seq: 0,
+            data: b"orphan".to_vec(),
+        }))
+        .await
+        .unwrap();
+    // Now a valid 600 KiB transfer in 256 KiB chunks.
+    session
+        .send_msg(&Message::ClipboardBegin(message::ClipboardBegin {
+            transfer_id: 79,
+            kind: message::ClipboardKind::Text,
+            width: 0,
+            height: 0,
+            total_len: payload.len() as u64,
+            chunk_size: opacusr_input::clipboard::CLIPBOARD_CHUNK_SIZE as u32,
+        }))
+        .await
+        .unwrap();
+    for (seq, data) in payload
+        .chunks(opacusr_input::clipboard::CLIPBOARD_CHUNK_SIZE)
+        .enumerate()
+    {
+        session
+            .send_msg(&Message::ClipboardChunk(message::ClipboardChunk {
+                transfer_id: 79,
+                seq: seq as u32,
+                data: data.to_vec(),
+            }))
+            .await
+            .unwrap();
+    }
+
+    // 6. Liveness probe: the host still processes messages after all of
+    //    the above landed.
+    session
+        .send_msg(&Message::ChatMessage(message::ChatMessage {
+            id: 1,
+            text: "chunked-clipboard-liveness".into(),
+            ts_ms: 0,
+        }))
+        .await
+        .unwrap();
+    let alive = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if let HostEvent::Chat(text) = host_events_rx.recv().await.unwrap() {
+                if text.contains("chunked-clipboard-liveness") {
+                    return;
+                }
+            }
+        }
+    })
+    .await;
+    assert!(
+        alive.is_ok(),
+        "host stopped processing after chunked clipboard traffic"
+    );
+
+    let _ = session
+        .send_msg(&Message::Bye(message::ByeReason::Normal))
+        .await;
+    session.close().await;
+    host_task.await.unwrap();
 }
