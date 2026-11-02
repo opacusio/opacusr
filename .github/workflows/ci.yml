@@ -74,4 +74,10 @@ jobs:
           cargo clippy -p opacusr-capture --no-default-features --all-targets -- -D warnings
 
       - name: Tests
+        # macOS: the bundled OpenH264 crashes (foreign-exception abort or
+        # SIGSEGV) when several e2e tests instantiate encoders/decoders
+        # concurrently in one process — serialize the harness there. Unit
+        # tests are fast, so the single-threaded suite stays cheap.
         run: cargo test --workspace
+        env:
+          RUST_TEST_THREADS: ${{ runner.os == 'macOS' && '1' || '4' }}
