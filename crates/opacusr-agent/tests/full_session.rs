@@ -596,7 +596,10 @@ async fn clipboard_image_garbage_is_dropped_gracefully() {
             break;
         }
     }
-    assert!(probe, "host never delivered the chat probe after the bad image");
+    assert!(
+        probe,
+        "host never delivered the chat probe after the bad image"
+    );
 
     drop(session);
     let _ = host_task.await;
