@@ -59,6 +59,11 @@ pub struct SessionHandle {
     /// Active tunnel listeners: (bound port, target host, target port).
     pub tunnels: Vec<(u16, String, u16)>,
     pub last_mouse: Option<(u32, u32)>,
+    /// Last decoded frame (w, h, rgba) — refreshed at most twice a
+    /// second — for the "print current frame" action.
+    pub last_frame: Option<(u32, u32, Vec<u8>)>,
+    /// Instant of the last `last_frame` refresh (throttle).
+    pub last_frame_at: Option<std::time::Instant>,
     pub chat: Vec<String>,
     pub chat_input: String,
     pub term_out: String,
@@ -124,6 +129,8 @@ impl SessionHandle {
             panel_tunnel: false,
             tunnels: Vec::new(),
             last_mouse: None,
+            last_frame: None,
+            last_frame_at: None,
             chat: Vec::new(),
             chat_input: String::new(),
             term_out: String::new(),
@@ -687,8 +694,19 @@ impl eframe::App for App {
                                 Some(ctx.load_texture("remote", img, egui::TextureOptions::LINEAR));
                         }
                     }
-                    // Link statistics: sliding 2 s window of (arrival, wire bytes).
+                    // Keep the last frame for "print current frame":
+                    // refreshed at most twice a second (a full RGBA copy
+                    // per frame would be wasteful at 60 fps).
                     let now = std::time::Instant::now();
+                    if sess
+                        .last_frame_at
+                        .map(|t| now.duration_since(t).as_millis() >= 500)
+                        .unwrap_or(true)
+                    {
+                        sess.last_frame = Some((frame.width, frame.height, frame.rgba.clone()));
+                        sess.last_frame_at = Some(now);
+                    }
+                    // Link statistics: sliding 2 s window of (arrival, wire bytes).
                     sess.stream_res = (frame.width, frame.height);
                     sess.stats_win.push_back((now, wire_bytes as u64));
                     while let Some(&(t, _)) = sess.stats_win.front() {

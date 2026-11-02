@@ -4085,6 +4085,7 @@ dependencies = [
  "eframe",
  "egui",
  "futures",
+ "image",
  "mdns-sd",
  "opacusr-agent",
  "opacusr-capture",

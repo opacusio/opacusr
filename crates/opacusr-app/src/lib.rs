@@ -5,6 +5,7 @@
 pub mod app;
 pub mod discovery;
 pub mod host_panel;
+pub mod print;
 pub mod update_banner;
 pub mod view;
 

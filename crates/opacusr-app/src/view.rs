@@ -60,6 +60,31 @@ pub fn session_ui(ctx: &Context, s: &mut SessionHandle, cfg: &mut AgentConfig) {
             if ui.toggle_value(&mut s.clipboard_sync, "📋 sync").changed() {
                 let _ = s.commands.send(Command::ClipboardSync(s.clipboard_sync));
             }
+            if ui
+                .button("🖨")
+                .on_hover_text("Print the current remote frame on your local printer")
+                .clicked()
+            {
+                match &s.last_frame {
+                    Some((w, h, rgba)) => {
+                        let secs = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_secs())
+                            .unwrap_or(0);
+                        match crate::print::print_png(*w, *h, rgba, secs) {
+                            Ok(path) => {
+                                s.status = format!("printed: {}", path.display());
+                            }
+                            Err(e) => {
+                                s.status = format!("print failed: {e}");
+                            }
+                        }
+                    }
+                    None => {
+                        s.status = "print: no frame received yet".into();
+                    }
+                }
+            }
             if s.audio_available && ui.toggle_value(&mut s.audio_on, "🔊").changed() {
                 let _ = s.commands.send(Command::Audio(s.audio_on));
             }

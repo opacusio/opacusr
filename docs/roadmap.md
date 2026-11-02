@@ -20,7 +20,7 @@ Where OpacusR is heading. Items are grouped by milestone; security items from [s
 - **VP9/AV1 evaluation** behind the existing codec traits (web-optimized fallback for slow links).
 - **H.264 incremental/region encode** for lower CPU on static screens (dirty-rect driven).
 - **Privacy mode (virtual display)** — large epic: a Windows IddCx virtual-display driver (needs driver signing / test-signing workflow) plus an X11 Xvfb fallback, so the viewer sees a dedicated desktop while the physical screen shows nothing sensitive.
-- **Printing** — large epic: redirect remote documents to the viewer's local printers (virtual printer per platform + a print channel in the protocol).
+- **Printing** — large epic: redirect remote documents to the viewer's local printers (virtual printer per platform + a print channel in the protocol). **V1 shipped**: the viewer can print the current remote frame to its local printer (PNG + CUPS/`lp` or the Windows print verb) — no protocol channel yet.
 
 ## M2 — Trust & accounts
 

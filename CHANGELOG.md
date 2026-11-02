@@ -8,6 +8,16 @@ SemVer-ish (breaking protocol changes bump the minor until 1.0).
 
 ### Added
 
+- **Printing v1 (current frame → local printer)** — the viewer toolbar
+  gains a 🖨 button: it encodes the last decoded remote frame to a
+  lossless PNG (kept in the platform temp dir as
+  `opacusr-print-<secs>.png`) and hands it to the local print system —
+  CUPS `lp` on Linux/macOS, PowerShell `Start-Process -Verb Print` on
+  Windows (association's print dialog). Pure viewer-side action: no
+  protocol change, no host involvement; the frame copy is refreshed at
+  most twice a second. The larger "redirect remote documents" epic
+  stays on the roadmap.
+
 - **Privacy mode v1 (display blanking)** — new opt-in `privacy_mode`
   key in `agent.toml` (plus `opacusr-agent run --privacy`): while a
   session is active the host's physical displays are put to sleep, so a
