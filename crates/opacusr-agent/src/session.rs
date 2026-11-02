@@ -568,7 +568,7 @@ async fn run_session(
                         }
                     }
                     Message::LinkStats(s) => {
-                        if let Some(p) = adaptive.on_link_stats(s.rtt_ms, s.recv_fps) {
+                        if let Some(p) = adaptive.on_link_stats(s.rtt_ms, s.recv_fps, s.jitter_ms) {
                             let old_fps = fps;
                             fps = p.fps.max(1);
                             quality = p.jpeg_quality;

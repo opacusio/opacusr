@@ -415,6 +415,11 @@ pub struct SessionClient {
     /// Frames received since the last `LinkStats` report (for recv_fps).
     frames_since_stats: u32,
     stats_started: Instant,
+    /// Frame-arrival jitter (RFC 3550-style EWMA of |Δ − Δ̄|, ms) for the
+    /// `LinkStats` report; drives the host's adaptive-quality tiers.
+    last_frame_arrival: Option<Instant>,
+    smoothed_delta_ms: f32,
+    jitter_ms: f32,
 }
 
 impl SessionClient {
@@ -664,6 +669,9 @@ impl SessionClient {
             player: None,
             frames_since_stats: 0,
             stats_started: Instant::now(),
+            last_frame_arrival: None,
+            smoothed_delta_ms: 0.0,
+            jitter_ms: 0.0,
         };
         Ok((client, rx))
     }
@@ -969,6 +977,24 @@ impl SessionClient {
             Message::VideoFrame(frame) => {
                 self.screen = (frame.width, frame.height);
                 self.frames_since_stats = self.frames_since_stats.saturating_add(1);
+                // Arrival jitter (RFC 3550-ish): smooth the inter-arrival
+                // time, then EWMA the deviation from that smooth estimate.
+                let now = Instant::now();
+                if let Some(prev) = self.last_frame_arrival {
+                    let delta = now.duration_since(prev).as_secs_f32() * 1000.0;
+                    self.smoothed_delta_ms = if self.smoothed_delta_ms == 0.0 {
+                        delta
+                    } else {
+                        self.smoothed_delta_ms + (delta - self.smoothed_delta_ms) / 16.0
+                    };
+                    let sample = (delta - self.smoothed_delta_ms).abs();
+                    self.jitter_ms = if self.jitter_ms == 0.0 {
+                        sample
+                    } else {
+                        self.jitter_ms + (sample - self.jitter_ms) / 16.0
+                    };
+                }
+                self.last_frame_arrival = Some(now);
                 let wire_bytes = frame.data.len() as u32;
                 match self.decoder.decode(&frame.data, frame.width, frame.height) {
                     Ok(f) => {
@@ -1046,6 +1072,7 @@ impl SessionClient {
                         .send_msg(&Message::LinkStats(message::LinkStats {
                             rtt_ms: rtt,
                             recv_fps,
+                            jitter_ms: self.jitter_ms.round().clamp(0.0, 65535.0) as u16,
                         }))
                         .await;
                 }

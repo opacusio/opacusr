@@ -193,13 +193,17 @@ pub struct QualitySet {
     pub scale_percent: u16,
 }
 
-/// Viewer → host: periodic link-quality report (measured RTT and the
-/// frame rate the viewer actually received). The host feeds this into the
-/// adaptive-quality controller.
+/// Viewer → host: periodic link-quality report (measured RTT, the
+/// frame rate the viewer actually received and the frame-arrival jitter
+/// it measures). The host feeds this into the adaptive-quality
+/// controller.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct LinkStats {
     pub rtt_ms: u32,
     pub recv_fps: u16,
+    /// EWMA of |inter-arrival − smoothed inter-arrival| in ms (RFC 3550
+    /// style); 0 = unknown (first report).
+    pub jitter_ms: u16,
 }
 
 /// Viewer → host: stream a different monitor (id from `SessionAccept.screens`).

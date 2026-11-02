@@ -101,6 +101,16 @@ SemVer-ish (breaking protocol changes bump the minor until 1.0).
   drives the push (sha256-verified on arrival). The viewer's Files panel
   gains a `⬆ Send files…` picker next to drag & drop.
 
+### Changed
+
+- **Adaptive quality considers arrival jitter** — the viewer now measures
+  frame-arrival jitter (RFC 3550-style EWMA of |Δ − Δ̄|) and reports it in
+  `LinkStats.jitter_ms` alongside RTT and received FPS. The host takes the
+  worse of the RTT tier and the jitter tier (≥120 ms → at least tier 1,
+  ≥250 ms → at least tier 2; jitter alone never reaches tier 3), so a link
+  that bursts instead of streaming steadily now gets a gentler stream even
+  when its RTT looks fine. Covered by five new controller unit tests.
+
 ## [0.5.0] — 2026-11-01
 
 ### Added

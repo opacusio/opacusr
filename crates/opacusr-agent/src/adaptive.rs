@@ -20,6 +20,12 @@
 /// `<250` → 2, `>=250` → 3.
 pub const TIER_RTT_MS: [u32; 3] = [60, 120, 250];
 
+/// Frame-arrival jitter thresholds (ms) that pinch the link even when
+/// RTT looks fine: `<120` → no penalty, `<250` → at least tier 1,
+/// `>=250` → at least tier 2. Jitter alone never reaches tier 3 — that
+/// is reserved for sustained RTT/throughput problems.
+pub const TIER_JITTER_MS: [u16; 2] = [120, 250];
+
 /// Below this received-FPS a *good-RTT* link is still considered
 /// throughput-starved and pushed down a tier.
 const STARVED_FPS: u16 = 5;
@@ -64,12 +70,20 @@ impl AdaptiveQuality {
     /// Feed one viewer report. Returns the new parameters when the tier
     /// changed, `None` otherwise (steady state, disabled, or hysteresis
     /// still pending).
-    pub fn on_link_stats(&mut self, rtt_ms: u32, recv_fps: u16) -> Option<StreamParams> {
+    pub fn on_link_stats(
+        &mut self,
+        rtt_ms: u32,
+        recv_fps: u16,
+        jitter_ms: u16,
+    ) -> Option<StreamParams> {
         if !self.enabled || self.disabled_reason.is_some() {
             return None;
         }
 
-        let mut want = Self::tier_for_rtt(rtt_ms);
+        // The worse of the two signals decides the tier: sustained RTT
+        // and arrival jitter each indicate congestion, whichever fires
+        // first.
+        let mut want = Self::tier_for_rtt(rtt_ms).max(Self::tier_for_jitter(jitter_ms));
         // Throughput starvation: RTT looks fine but the viewer receives
         // far fewer frames than we produce — treat the link as worse.
         if want == 0 && recv_fps > 0 && recv_fps < STARVED_FPS {
@@ -155,6 +169,16 @@ impl AdaptiveQuality {
         }
         tier
     }
+
+    fn tier_for_jitter(jitter_ms: u16) -> usize {
+        let mut tier = 0;
+        for &t in &TIER_JITTER_MS {
+            if jitter_ms >= t {
+                tier += 1;
+            }
+        }
+        tier
+    }
 }
 
 #[cfg(test)]
@@ -182,7 +206,7 @@ mod tests {
     #[test]
     fn degrades_immediately_on_bad_rtt() {
         let mut c = controller();
-        let p = c.on_link_stats(300, 15);
+        let p = c.on_link_stats(300, 15, 0);
         assert_eq!(p.map(|p| p.fps), Some(8));
         assert_eq!(c.tier(), 3);
     }
@@ -190,11 +214,11 @@ mod tests {
     #[test]
     fn upgrades_only_after_three_reports() {
         let mut c = controller();
-        c.on_link_stats(300, 10);
+        c.on_link_stats(300, 10, 0);
         // One good report must NOT upgrade.
-        assert!(c.on_link_stats(20, 15).is_none());
-        assert!(c.on_link_stats(20, 15).is_none());
-        let p = c.on_link_stats(20, 15);
+        assert!(c.on_link_stats(20, 15, 0).is_none());
+        assert!(c.on_link_stats(20, 15, 0).is_none());
+        let p = c.on_link_stats(20, 15, 0);
         assert_eq!(c.tier(), 0);
         assert_eq!(p.map(|p| p.fps), Some(30));
     }
@@ -202,23 +226,60 @@ mod tests {
     #[test]
     fn starved_link_downgrades_despite_good_rtt() {
         let mut c = controller();
-        let p = c.on_link_stats(10, 2);
+        let p = c.on_link_stats(10, 2, 0);
         assert_eq!(p.map(|p| p.fps), Some(20)); // tier 1
         assert_eq!(c.tier(), 1);
     }
 
     #[test]
+    fn jittery_link_downgrades_despite_good_rtt() {
+        let mut c = controller();
+        assert!(c.on_link_stats(10, 15, 0).is_none()); // tier 0, steady
+                                                       // 260 ms of arrival jitter → at least tier 2, immediately.
+        let p = c.on_link_stats(10, 15, 260);
+        assert_eq!(p.map(|p| p.fps), Some(12));
+        assert_eq!(c.tier(), 2);
+    }
+
+    #[test]
+    fn jitter_below_threshold_is_ignored() {
+        let mut c = controller();
+        assert!(c.on_link_stats(10, 15, 119).is_none());
+        assert_eq!(c.tier(), 0);
+    }
+
+    #[test]
+    fn jitter_alone_never_reaches_tier_three() {
+        let mut c = controller();
+        let p = c.on_link_stats(10, 15, 600);
+        assert_eq!(c.tier(), 2);
+        assert_eq!(p.map(|p| p.fps), Some(12));
+    }
+
+    #[test]
+    fn rtt_and_jitter_take_the_worse_tier() {
+        let mut c = controller();
+        // RTT alone → tier 1 (60 ≤ rtt < 120); jitter adds nothing.
+        c.on_link_stats(70, 15, 0);
+        assert_eq!(c.tier(), 1);
+        // Jitter alone would want tier 2; the max wins.
+        let p = c.on_link_stats(70, 15, 300);
+        assert_eq!(c.tier(), 2);
+        assert!(p.is_some());
+    }
+
+    #[test]
     fn mixed_readings_reset_hysteresis() {
         let mut c = controller();
-        assert!(c.on_link_stats(300, 10).is_some()); // degrade → tier 3
-        assert!(c.on_link_stats(20, 15).is_none()); // good #1 (upgrade pending)
-                                                    // A bad reading resets the upgrade counter (and, being a no-op on
-                                                    // tier 3, emits nothing).
-        assert!(c.on_link_stats(400, 10).is_none());
+        assert!(c.on_link_stats(300, 10, 0).is_some()); // degrade → tier 3
+        assert!(c.on_link_stats(20, 15, 0).is_none()); // good #1 (upgrade pending)
+                                                       // A bad reading resets the upgrade counter (and, being a no-op on
+                                                       // tier 3, emits nothing).
+        assert!(c.on_link_stats(400, 10, 0).is_none());
         // Upgrade counter was reset: needs 3 fresh good reports.
-        assert!(c.on_link_stats(20, 15).is_none());
-        assert!(c.on_link_stats(20, 15).is_none());
-        let p = c.on_link_stats(20, 15);
+        assert!(c.on_link_stats(20, 15, 0).is_none());
+        assert!(c.on_link_stats(20, 15, 0).is_none());
+        let p = c.on_link_stats(20, 15, 0);
         assert!(p.is_some());
         assert_eq!(c.tier(), 0);
     }
@@ -228,21 +289,21 @@ mod tests {
         let mut c = controller();
         c.manual_override();
         assert!(!c.is_enabled());
-        assert!(c.on_link_stats(300, 10).is_none());
+        assert!(c.on_link_stats(300, 10, 0).is_none());
         assert_eq!(c.tier(), 0);
     }
 
     #[test]
     fn disabled_controller_is_inert() {
         let mut c = AdaptiveQuality::new(false, 30, 80, 100);
-        assert!(c.on_link_stats(300, 10).is_none());
+        assert!(c.on_link_stats(300, 10, 0).is_none());
     }
 
     #[test]
     fn tier_bounds_respect_base() {
         // A base below the tier cap must not be raised.
         let mut c = AdaptiveQuality::new(true, 10, 25, 50);
-        c.on_link_stats(300, 10);
+        c.on_link_stats(300, 10, 0);
         assert_eq!(
             c.params(),
             StreamParams {
