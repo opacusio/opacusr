@@ -19,6 +19,8 @@ Where OpacusR is heading. Items are grouped by milestone; security items from [s
 - **Session UX**: fullscreen hotkeys, quality presets, session stats panel (tier, encode time, packet loss).
 - **VP9/AV1 evaluation** behind the existing codec traits (web-optimized fallback for slow links).
 - **H.264 incremental/region encode** for lower CPU on static screens (dirty-rect driven).
+- **Privacy mode (virtual display)** — large epic: a Windows IddCx virtual-display driver (needs driver signing / test-signing workflow) plus an X11 Xvfb fallback, so the viewer sees a dedicated desktop while the physical screen shows nothing sensitive.
+- **Printing** — large epic: redirect remote documents to the viewer's local printers (virtual printer per platform + a print channel in the protocol).
 
 ## M2 — Trust & accounts
 
@@ -47,7 +49,7 @@ Design in [serverless.md](serverless.md); goal: a working connection with **0 �
 - **TLS everywhere by default**: built-in `wss://` with ACME, or documented single-command reverse-proxy setup (Caddy).
 - **Metrics & admin UI**: ~~Prometheus endpoint on the server~~ **done** (`GET /metrics`, text exposition 0.0.4: upgrades, registrations, peers, relay tickets/pairs/pipes/bytes, TURN mints, rate limits, build info); session/relay dashboards remain.
 - **Meeting-style features**: multi-viewer observation of one host (viewer count policies), ~~session recording (opt-in, host-side)~~ (done, v0.6.0 WIP).
-- **Auto-update** channel for desktop clients (check-on-start + in-app "update available" notice; signed artifacts already produced by the release pipeline).
+- ~~**Auto-update**~~ **done** — check-on-start + in-app notice since v0.4.0; the opt-in, SHA-256-verified download-and-swap (viewer banner button + `opacusr-agent update`) completes the channel. Authenticode signing remains the last hardening step.
 
 ## M4 — Mobile & embed
 

@@ -2,8 +2,9 @@
 //!
 //! Once per app run a background thread asks GitHub for the latest release
 //! (see `opacusr_transport::update`). When a newer version exists, a
-//! dismissible banner is drawn above the top bar. Informational only:
-//! nothing is ever downloaded or installed automatically.
+//! dismissible banner is drawn above the top bar with an opt-in
+//! "Update now" button: it downloads the release asset, verifies the
+//! SHA-256 and swaps the binary; nothing happens without the click.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, TryRecvError};
@@ -16,8 +17,19 @@ struct BannerState {
     latest: Option<LatestRelease>,
 }
 
+/// Self-update button lifecycle (per process; one update at a time).
+#[derive(Default, Clone)]
+enum Phase {
+    #[default]
+    Idle,
+    Running,
+    Done(String),
+    Failed(String),
+}
+
 static STARTED: AtomicBool = AtomicBool::new(false);
 static DISMISSED: AtomicBool = AtomicBool::new(false);
+static PHASE: Mutex<Phase> = Mutex::new(Phase::Idle);
 static STATE: OnceLock<Mutex<Option<BannerState>>> = OnceLock::new();
 
 /// Start the background check exactly once per process. Safe to call on
@@ -96,8 +108,53 @@ pub fn paint(ctx: &egui::Context) {
                 if ui.small_button("x").clicked() {
                     DISMISSED.store(true, Ordering::Relaxed);
                 }
+                paint_update_button(ui, ctx);
             });
         });
         ui.add_space(5.0);
     });
+}
+
+/// The opt-in download/install button plus its progress/result text.
+fn paint_update_button(ui: &mut egui::Ui, ctx: &egui::Context) {
+    let Ok(mut phase) = PHASE.lock() else {
+        return;
+    };
+    match phase.clone() {
+        Phase::Idle => {
+            if ui.button("Update now").clicked() {
+                *phase = Phase::Running;
+                drop(phase);
+                std::thread::Builder::new()
+                    .name("opacusr-self-update".into())
+                    .spawn(move || {
+                        let res = opacusr_transport::update::self_update("opacusr");
+                        if let Ok(mut p) = PHASE.lock() {
+                            *p = match res {
+                                Ok(msg) => Phase::Done(msg),
+                                Err(e) => Phase::Failed(e),
+                            };
+                        }
+                    })
+                    .ok();
+                ctx.request_repaint_after(std::time::Duration::from_millis(400));
+            }
+        }
+        Phase::Running => {
+            ui.spinner();
+            ui.label("downloading + verifying…");
+            ctx.request_repaint_after(std::time::Duration::from_millis(400));
+        }
+        Phase::Done(msg) => {
+            ui.label(egui::RichText::new(format!("✔ {msg} — restart to apply")).strong());
+        }
+        Phase::Failed(e) => {
+            ui.colored_label(egui::Color32::LIGHT_RED, format!("update failed: {e}"));
+            if ui.small_button("retry").clicked() {
+                if let Ok(mut p) = PHASE.lock() {
+                    *p = Phase::Idle;
+                }
+            }
+        }
+    }
 }

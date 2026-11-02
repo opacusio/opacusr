@@ -75,6 +75,14 @@ enum Cmd {
     },
     /// Print the effective config location and summary.
     Config,
+    /// Download and install the latest release binary for this platform
+    /// (SHA-256-verified; the running binary is kept as <name>.opacusr-old
+    /// for rollback; the new version activates on the next start).
+    Update {
+        /// Skip the confirmation prompt.
+        #[arg(long)]
+        yes: bool,
+    },
     /// Windows service management (SCM supervisor + per-session agent).
     Service {
         #[command(subcommand)]
@@ -144,6 +152,7 @@ async fn main() -> anyhow::Result<()> {
         Cmd::PasswdClear => passwd_clear(),
         Cmd::Id { server } => id(server).await,
         Cmd::Config => config_info(),
+        Cmd::Update { yes } => update_cmd(yes),
         Cmd::Service { action } => match action {
             ServiceAction::Install => opacusr_agent::win_service::install(),
             ServiceAction::Uninstall => opacusr_agent::win_service::uninstall(),
@@ -454,6 +463,31 @@ async fn register_once(cfg: &AgentConfig, url: &str) -> anyhow::Result<opacusr_p
         opacusr_proto::signal::SignalMessage::Error { message } => anyhow::bail!(message),
         other => anyhow::bail!("unexpected reply: {other:?}"),
     }
+}
+
+/// Download and install the latest release binary (self-update).
+fn update_cmd(yes: bool) -> anyhow::Result<()> {
+    let current = env!("CARGO_PKG_VERSION");
+    if !yes {
+        let latest = opacusr_transport::update::fetch_latest_release()
+            .map(|r| r.tag)
+            .unwrap_or_else(|e| format!("<unknown: {e}>"));
+        print!("Download and replace this binary with {latest}? [y/N] ");
+        use std::io::Write;
+        std::io::stderr().flush()?;
+        let mut line = String::new();
+        std::io::stdin().read_line(&mut line)?;
+        if !matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
+            println!("aborted");
+            return Ok(());
+        }
+    }
+    println!("downloading the latest release (currently running {current})…");
+    match opacusr_transport::update::self_update("opacusr-agent") {
+        Ok(msg) => println!("{msg}"),
+        Err(e) => anyhow::bail!(e),
+    }
+    Ok(())
 }
 
 fn config_info() -> anyhow::Result<()> {

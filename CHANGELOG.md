@@ -8,6 +8,20 @@ SemVer-ish (breaking protocol changes bump the minor until 1.0).
 
 ### Added
 
+- **Self-update (opt-in, SHA-256 verified)** — `opacusr-agent update`
+  (CLI, `--yes` for scripts) and an "Update now" button on the viewer's
+  update banner: downloads the release asset for the running platform
+  (`opacusr-<ver>-windows-x86_64.zip` / `opacusr-<ver>-linux-x86_64.tar.gz`
+  / `opacusr-<ver>-macos-aarch64.tar.gz`, matching the release pipeline
+  names), streams it while hashing, verifies the SHA-256 against the
+  release's `SHA256SUMS`, extracts the binary and swaps the running
+  executable aside (`<name>.opacusr-old` = rollback copy); the new
+  version activates on the next start. Refuses `/usr`/`/opt` installs
+  (use the package manager), verifies the running binary name before
+  touching anything, and rolls back if the install step fails. The
+  checksum comes over HTTPS from the same release channel — corruption
+  protection, not a code signature. `OPACUSR_NO_UPDATE_CHECK=1` still
+  disables the background check; an explicit update command works.
 - **Outbound proxy support (SOCKS5 / HTTP CONNECT)** — new `proxy` key
   in `agent.toml` (agent + viewer) and a Proxy field in the viewer's
   connect form, plus `opacusr-agent run --proxy`. Formats:

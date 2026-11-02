@@ -108,6 +108,15 @@ sc start OpacusRAgent
 
 The service is a thin supervisor in session 0: whenever a user is logged on to the console, it spawns a regular `opacusr-agent` **inside that session** (with the user's token, environment and keychain — so the config and the unattended password are the user's own) and stops the instance at logoff, session switch or service stop. Capture and input therefore always run in the interactive session, never in session 0. Other subcommands: `service status`, `service uninstall`. On Linux the systemd user unit plays the same role; macOS launchd is a roadmap item.
 
+#### Updating
+
+Both binaries check GitHub on startup and show a notice (disable with `OPACUSR_NO_UPDATE_CHECK=1`). The update itself is opt-in:
+
+- **Viewer**: click **Update now** on the yellow banner — the app downloads the release asset for your platform, verifies its SHA-256 against the release's `SHA256SUMS`, swaps the running binary aside (`opacusr.opacusr-old` keeps the previous version for rollback) and asks you to restart.
+- **Agent**: `opacusr-agent update` (or `opacusr-agent update --yes` for scripts) — the same download/verify/swap flow.
+
+The checksum is fetched over HTTPS from the same release channel — it protects against corrupted or truncated downloads, but is not a code signature. Portable/tarball installs update in place; deb installs should keep using `apt`/`dpkg` (self-update refuses `/usr`/`/opt` paths), and on Windows the running exe is renamed rather than deleted, so no uninstaller step is needed.
+
 #### Verifying downloads (all OSes)
 
 Every release ships a `SHA256SUMS` file with a checksum per asset. Check your
