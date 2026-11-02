@@ -44,6 +44,10 @@ Dependency rules (enforced by crate boundaries):
 
 Files are handled by `opacusr-transport/src/ft.rs`: `FtEngine` chunks at 64 KiB, keeps a sliding window of 8 in-flight chunks, processes cumulative acks and buffers out-of-order arrivals in a `BTreeMap`, then verifies SHA-256 on completion. Resume is supported via the `offset` in `FtAccept`.
 
+### 2.1 Windows service topology
+
+The Windows service (`opacusr-agent service install`, SCM name `OpacusRAgent`) is a thin **supervisor** that never captures or signs up for signaling. Running as LocalSystem in session 0, it polls the active console session every 5 s and keeps exactly one **per-session child** (`opacusr-agent service run --in-session`) alive there — created with the user's token, environment block and `winsta0\default` desktop, and bound to a kill-on-close job object so it cannot outlive a crashed supervisor. The child is a regular agent: capture, input injection, signaling registration, config and OS-keychain password all belong to the logged-on user, and the session-0 isolation problem never touches the capture/input paths. The supervisor restarts the child after a crash, respawns it on fast user switching and kills it at logoff or service stop.
+
 ## 3. Session data flow (viewer side)
 
 `opacusr-client/src/session.rs` (`SessionClient`) mirrors the host: a command channel (`Command`) in, an event channel (`ClientEvent`) out, one `run` loop consuming both plus transport inbound. The GUI (`opacusr-app/src/view.rs`) renders frames as they arrive, scales remote pixels to the widget, converts local widget input to `MouseMove/MouseButton/MouseWheel/KeyEvent` messages and forwards chat/files/terminal traffic. `Ping/Pong` round-trips are timed to display RTT.

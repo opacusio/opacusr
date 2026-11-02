@@ -96,6 +96,18 @@ cargo run --release -p opacusr-app
 
 Артефакты собираются автоматически на каждый тег `v*` ([.github/workflows/release.yml](.github/workflows/release.yml): Linux deb + tar.gz, Windows MSI + zip, macOS tar.gz). Локально: `cargo deb -p opacusr-app -p opacusr-agent` (нужен `cargo install cargo-deb`); MSI — см. шапку `wix/main.wxs`.
 
+#### Windows: агент как служба
+
+Чтобы unattended-доступ переживал перезагрузки, зарегистрируйте встроенную службу Windows из консоли с правами администратора:
+
+```bat
+opacusr-agent passwd              :: сначала задайте unattended-пароль
+opacusr-agent service install     :: регистрирует OpacusRAgent (автозапуск)
+sc start OpacusRAgent
+```
+
+Служба — это тонкий супервизор в сессии 0: когда в консоли есть залогиненный пользователь, он запускает обычный `opacusr-agent` **внутри этой сессии** (с токеном, окружением и кейчейном пользователя — конфиг и unattended-пароль остаются пользовательскими) и останавливает экземпляр при выходе из системы, смене сессии или остановке службы. Захват и ввод всегда живут в интерактивной сессии, а не в сессии 0. Прочие подкоманды: `service status`, `service uninstall`. Роль этой службы на Linux играет systemd user-юнит; macOS launchd — пункт роадмапа.
+
 #### Проверка загрузок (все ОС)
 
 К каждому релизу прилагается `SHA256SUMS` — контрольная сумма для каждого файла. Проверьте загрузку, прежде что-либо запускать:

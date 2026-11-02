@@ -73,6 +73,17 @@ jobs:
           cargo clippy -p opacusr-capture --features pipewire --all-targets -- -D warnings
           cargo clippy -p opacusr-capture --no-default-features --all-targets -- -D warnings
 
+      - name: Clippy — agent cross-check for Windows (Linux)
+        # The Windows-service supervisor in opacusr-agent is cfg(windows)
+        # and would otherwise be compiled only by the release workflow on
+        # tag push. Cross-check it on every push via mingw-w64 (audio is
+        # off: the vendored Opus does not cross-build for windows-gnu).
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get install -y mingw-w64
+          rustup target add x86_64-pc-windows-gnu
+          cargo clippy -p opacusr-agent --target x86_64-pc-windows-gnu --no-default-features -- -D warnings
+
       - name: Tests
         # macOS: the bundled OpenH264 crashes (foreign-exception abort or
         # SIGSEGV) when several e2e tests instantiate encoders/decoders

@@ -8,6 +8,18 @@ SemVer-ish (breaking protocol changes bump the minor until 1.0).
 
 ### Added
 
+- **Windows service mode for the agent** — `opacusr-agent service
+  install|uninstall|status|run` (SCM name `OpacusRAgent`, auto-start).
+  The service is a session-0 supervisor that spawns a regular agent
+  child inside the active console session (user token + environment +
+  `winsta0\default` desktop, kill-on-close job object), restarts it
+  after a crash and stops it at logoff or service stop — so capture and
+  input always run in the interactive session, never in session 0. The
+  child uses the user's own config and OS-keychain unattended password;
+  `service install` warns when no unattended password is set (the child
+  has no console for the attended consent prompt). CI now cross-checks
+  the agent for `x86_64-pc-windows-gnu` (mingw-w64) so the
+  `cfg(windows)` service code is compiled on every push.
 - **`allow_lan` is a config key now** — the direct-LAN listener and the
   mDNS `lan` TXT record are driven by `allow_lan` in `agent.toml`
   (default off) instead of the `--allow-lan` CLI flag only; the flag

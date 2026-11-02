@@ -96,6 +96,18 @@ In the GUI: enter the signaling URL, connect, pick the host from the list (or ty
 
 Assets are produced automatically on every `v*` tag by [.github/workflows/release.yml](.github/workflows/release.yml) (Linux deb + tar.gz, Windows MSI + zip, macOS tar.gz). To build locally: `cargo deb -p opacusr-app -p opacusr-agent` (needs `cargo install cargo-deb`); MSI: see `wix/main.wxs` header.
 
+#### Windows: run the agent as a service
+
+For unattended access that survives reboots, register the built-in Windows service from an elevated prompt:
+
+```bat
+opacusr-agent passwd              :: set the unattended password first
+opacusr-agent service install     :: registers OpacusRAgent (auto-start)
+sc start OpacusRAgent
+```
+
+The service is a thin supervisor in session 0: whenever a user is logged on to the console, it spawns a regular `opacusr-agent` **inside that session** (with the user's token, environment and keychain — so the config and the unattended password are the user's own) and stops the instance at logoff, session switch or service stop. Capture and input therefore always run in the interactive session, never in session 0. Other subcommands: `service status`, `service uninstall`. On Linux the systemd user unit plays the same role; macOS launchd is a roadmap item.
+
 #### Verifying downloads (all OSes)
 
 Every release ships a `SHA256SUMS` file with a checksum per asset. Check your

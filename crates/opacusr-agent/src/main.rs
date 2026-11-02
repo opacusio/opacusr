@@ -70,6 +70,29 @@ enum Cmd {
     },
     /// Print the effective config location and summary.
     Config,
+    /// Windows service management (SCM supervisor + per-session agent).
+    Service {
+        #[command(subcommand)]
+        action: ServiceAction,
+    },
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum ServiceAction {
+    /// Register an auto-start Windows service that supervises a
+    /// per-session agent instance (run as Administrator).
+    Install,
+    /// Remove the Windows service registration (run as Administrator).
+    Uninstall,
+    /// Show the Windows service status.
+    Status,
+    /// SCM entry point — do not run interactively; the supervisor spawns
+    /// the real agent with `--in-session` inside the user's session.
+    Run {
+        /// Internal: run the regular agent in this (already interactive) session.
+        #[arg(long, hide = true)]
+        in_session: bool,
+    },
 }
 
 #[tokio::main]
@@ -114,6 +137,24 @@ async fn main() -> anyhow::Result<()> {
         Cmd::PasswdClear => passwd_clear(),
         Cmd::Id { server } => id(server).await,
         Cmd::Config => config_info(),
+        Cmd::Service { action } => match action {
+            ServiceAction::Install => opacusr_agent::win_service::install(),
+            ServiceAction::Uninstall => opacusr_agent::win_service::uninstall(),
+            ServiceAction::Status => opacusr_agent::win_service::status(),
+            ServiceAction::Run { in_session } => {
+                if in_session {
+                    // Spawned by the service supervisor inside the user's
+                    // console session: run the plain agent (config-only).
+                    eprintln!("OpacusR agent (service session instance)");
+                    run(
+                        None, None, false, false, false, None, false, false, false, None,
+                    )
+                    .await
+                } else {
+                    opacusr_agent::win_service::dispatch()
+                }
+            }
+        },
     }
 }
 
