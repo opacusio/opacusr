@@ -38,7 +38,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-uti
 futures = "0.3"
 serde = { version = "1", features = ["derive"] }
 bincode = "1"
-base64 = "0.22"
+base64 = "0.23"
 thiserror = "2"
 anyhow = "1"
 async-trait = "0.1"
