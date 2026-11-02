@@ -30,8 +30,11 @@ Where OpacusR is heading. Items are grouped by milestone; security items from [s
 - ~~**Windows service**~~ **done** — `opacusr-agent service
   install/uninstall/status` registers an auto-start SCM service that
   supervises a per-session agent child in the active console session
-  (session-0 isolation never touches capture/input). **macOS launchd**
-  remains.
+  (session-0 isolation never touches capture/input).
+- ~~**macOS launchd**~~ **done** — `service install` registers
+  a per-user LaunchAgent (`io.opacusr.agent`, RunAtLoad + KeepAlive);
+  the agent already lives in the interactive session, TCC grants are
+  one-time per binary.
 
 ## Zero-infra networking (no rented servers)
 

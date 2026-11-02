@@ -106,7 +106,19 @@ opacusr-agent service install     :: registers OpacusRAgent (auto-start)
 sc start OpacusRAgent
 ```
 
-The service is a thin supervisor in session 0: whenever a user is logged on to the console, it spawns a regular `opacusr-agent` **inside that session** (with the user's token, environment and keychain — so the config and the unattended password are the user's own) and stops the instance at logoff, session switch or service stop. Capture and input therefore always run in the interactive session, never in session 0. Other subcommands: `service status`, `service uninstall`. On Linux the systemd user unit plays the same role; macOS launchd is a roadmap item.
+The service is a thin supervisor in session 0: whenever a user is logged on to the console, it spawns a regular `opacusr-agent` **inside that session** (with the user's token, environment and keychain — so the config and the unattended password are the user's own) and stops the instance at logoff, session switch or service stop. Capture and input therefore always run in the interactive session, never in session 0. Other subcommands: `service status`, `service uninstall`. On Linux the systemd user unit plays the same role.
+
+#### macOS: run the agent as a launchd agent
+
+`opacusr-agent service install` registers a per-user **LaunchAgent** (`io.opacusr.agent`) that starts at login and is kept alive by launchd; `service status` / `service uninstall` manage it:
+
+```bash
+opacusr-agent passwd              # set the unattended password first
+opacusr-agent service install     # writes ~/Library/LaunchAgents/io.opacusr.agent.plist and loads it
+opacusr-agent service status
+```
+
+The agent already lives in the interactive GUI session, so capture and input work directly — no session-0-style topology is needed. Logs go to `~/Library/Logs/opacusr-agent.log`. On first use macOS asks for **Screen Recording** and **Accessibility** permissions (System Settings → Privacy & Security); grant them once for the binary and the agent keeps working across reboots.
 
 #### Updating
 

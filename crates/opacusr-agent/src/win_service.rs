@@ -23,8 +23,10 @@
 //! extra privileges; the LocalSystem service holds the ones required to
 //! query the session token (`WTSQueryUserToken`).
 //!
-//! On non-Windows targets every operation returns an error; Linux ships
-//! a systemd **user** unit instead (see README).
+//! On non-Windows targets the Windows-specific operations return an
+//! error; `install|uninstall|status` are routed by platform: macOS goes
+//! to the per-user launchd LaunchAgent (see [`crate::launchd_service`]),
+//! Linux ships a systemd **user** unit instead (see README).
 
 pub const SERVICE_NAME: &str = "OpacusRAgent";
 
@@ -45,7 +47,11 @@ pub fn install() -> anyhow::Result<()> {
     {
         imp::install()
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        crate::launchd_service::install()
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         anyhow::bail!(
             "service management is Windows-only; on Linux use the systemd user unit (see README)"
@@ -59,7 +65,11 @@ pub fn uninstall() -> anyhow::Result<()> {
     {
         imp::uninstall()
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        crate::launchd_service::uninstall()
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         anyhow::bail!(
             "service management is Windows-only; on Linux use the systemd user unit (see README)"
@@ -73,7 +83,11 @@ pub fn status() -> anyhow::Result<()> {
     {
         imp::status()
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        crate::launchd_service::status()
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         anyhow::bail!(
             "service management is Windows-only; on Linux use the systemd user unit (see README)"

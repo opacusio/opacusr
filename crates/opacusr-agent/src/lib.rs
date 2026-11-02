@@ -7,6 +7,7 @@ pub mod audio;
 pub mod config;
 pub mod discovery;
 pub mod keychain;
+pub mod launchd_service;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub mod pty;
 pub mod recording;

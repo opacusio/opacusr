@@ -4,6 +4,24 @@ All notable changes to OpacusR are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is
 SemVer-ish (breaking protocol changes bump the minor until 1.0).
 
+## [Unreleased]
+
+### Added
+
+- **macOS launchd agent** — `opacusr-agent service install` now works
+  on macOS: it writes a per-user LaunchAgent
+  (`~/Library/LaunchAgents/io.opacusr.agent.plist`, `RunAtLoad` +
+  `KeepAlive` + `ProcessType: Interactive`, logs in
+  `~/Library/Logs/opacusr-agent.log`) and loads it via `launchctl`;
+  `service status` reports the loaded state and `service uninstall`
+  unloads and removes it. Unlike the Windows SCM service there is no
+  session-0-style topology: the LaunchAgent already lives in the
+  interactive GUI session, so capture and input run directly — the only
+  platform-specific step is the one-time TCC grant (Screen Recording +
+  Accessibility) that macOS asks for on first use (install prints the
+  reminder). The plist generation is pure and unit-tested on every
+  platform; `service` help texts now describe both mechanisms.
+
 ## [0.10.0] — 2026-11-02
 
 ### Added

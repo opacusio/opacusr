@@ -83,7 +83,8 @@ enum Cmd {
         #[arg(long)]
         yes: bool,
     },
-    /// Windows service management (SCM supervisor + per-session agent).
+    /// OS service management: Windows — SCM supervisor + per-session
+    /// agent; macOS — per-user launchd LaunchAgent.
     Service {
         #[command(subcommand)]
         action: ServiceAction,
@@ -92,12 +93,14 @@ enum Cmd {
 
 #[derive(Debug, clap::Subcommand)]
 enum ServiceAction {
-    /// Register an auto-start Windows service that supervises a
-    /// per-session agent instance (run as Administrator).
+    /// Register an auto-start OS service: Windows — SCM supervisor
+    /// `OpacusRAgent` (run as Administrator); macOS — per-user LaunchAgent
+    /// `io.opacusr.agent` (starts at login, kept alive).
     Install,
-    /// Remove the Windows service registration (run as Administrator).
+    /// Remove the OS service registration (Windows: run as Administrator).
     Uninstall,
-    /// Show the Windows service status.
+    /// Show the OS service status (SCM state on Windows, launchctl list
+    /// on macOS).
     Status,
     /// SCM entry point — do not run interactively; the supervisor spawns
     /// the real agent with `--in-session` inside the user's session.
