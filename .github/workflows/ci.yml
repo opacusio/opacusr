@@ -81,3 +81,15 @@ jobs:
         run: cargo test --workspace
         env:
           RUST_TEST_THREADS: ${{ runner.os == 'macOS' && '1' || '4' }}
+
+      - name: Retry tests once
+        # macOS: even single-threaded the vendored OpenH264 rarely still
+        # aborts the full_session e2e with "Rust cannot catch foreign
+        # exceptions" (seen on the v0.7.0 release runs). The same suite
+        # passes on every nearby commit, so give the leg one free retry
+        # before declaring the push red. A real regression fails both
+        # attempts and stays red.
+        if: failure() && runner.os == 'macOS'
+        run: cargo test --workspace
+        env:
+          RUST_TEST_THREADS: '1'
