@@ -1,0 +1,51 @@
+# cargo-audit policy — accepted advisories with justifications.
+# Run: cargo audit (or the prebuilt cargo-audit binary) from the repo root.
+# Every entry MUST carry a reason; re-evaluate on dependency upgrades.
+# Last full run: 2026-11-02, cargo-audit 0.22.2, advisory-db 1402 entries.
+
+[advisories]
+ignore = [
+    # crypto-bigint 0.5.5 (timing variability in constant-time ops).
+    # Chain: webrtc 0.14 -> dtls 0.13 -> p256 0.13 -> elliptic-curve
+    # 0.13 -> crypto-bigint 0.5. The fix (>=0.7.6) requires the
+    # rtc-based webrtc 0.21 stack — a full transport rewrite, planned
+    # as its own batch. Practical risk: ECDSA timing side channel in
+    # the DTLS handshake; not realistically exploitable over a network.
+    "RUSTSEC-2026-0387",
+    # quick-xml <0.41 (quadratic runtime + unbounded namespace
+    # allocation, both DoS-class). Chain: egui-winit 0.29 ->
+    # accesskit_unix 0.12 -> atspi -> zbus_xml 4. The XML is parsed
+    # from the LOCAL accessibility bus, never from the wire. Proper
+    # fix rides a future egui 0.30+ upgrade.
+    "RUSTSEC-2026-0194",
+    "RUSTSEC-2026-0195",
+    # bincode archived/unmaintained (applies to the lock's 1.3.3
+    # transitive copy and our direct 2.0.1). Deliberate wire-codec
+    # choice (PROTO v9): payloads are length-framed with
+    # MAX_FRAME_LEN guards and decoded via bincode 2's safe API.
+    # Revisit with the next wire-format change.
+    "RUSTSEC-2025-0141",
+    # audiopus_sys unmaintained. audio is an optional feature; no
+    # known advisories against it. Watch for a maintained Opus
+    # binding before acting.
+    "RUSTSEC-2026-0150",
+    # async-std discontinued. Transitive only (smol-based ashpd /
+    # accesskit stack); the workspace runtime is tokio.
+    "RUSTSEC-2025-0052",
+    # zvariant / zbus_names / zvariant_derive unmaintained.
+    # Transitive via zbus <- ashpd (XDG portals in the GUI). No known
+    # advisories; follow the zbus 5.x line on the next GUI bump.
+    "RUSTSEC-2026-0370",
+    "RUSTSEC-2026-0371",
+    "RUSTSEC-2026-0372",
+    # ttf-parser unmaintained. Transitive via egui/epaint font
+    # rasterization; parser runs on locally supplied font data.
+    "RUSTSEC-2026-0192",
+    # paste unmaintained. Transitive macro helper; no runtime
+    # surface.
+    "RUSTSEC-2024-0436",
+    # serial unmaintained. Transitive via portable-pty (terminal
+    # feature of the agent); check for a portable-pty release that
+    # moved to serial2.
+    "RUSTSEC-2017-0008",
+]
