@@ -101,7 +101,7 @@ jobs:
             'up on first share).' \
             > dist/opacusr-${VER}-linux-wayland-x86_64/WAYLAND.txt
           tar -czf opacusr-${VER}-linux-wayland-x86_64.tar.gz -C dist opacusr-${VER}-linux-wayland-x86_64
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: linux-artifacts
           path: |
@@ -151,7 +151,7 @@ jobs:
           New-Item -ItemType Directory -Force dist\opacusr-$($env:GITHUB_REF_NAME.Substring(1))-windows-x86_64 | Out-Null
           Copy-Item target\release\opacusr.exe, target\release\opacusr-agent.exe, target\release\opacusr-server.exe, README.md, README.ru.md, LICENSE dist\opacusr-$($env:GITHUB_REF_NAME.Substring(1))-windows-x86_64\
           Compress-Archive -Path dist\opacusr-* opacusr-$($env:GITHUB_REF_NAME.Substring(1))-windows-x86_64.zip
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: windows-artifacts
           path: |
@@ -214,7 +214,7 @@ jobs:
              dist/opacusr-${VER}-macos-aarch64/
           cp README.md README.ru.md LICENSE dist/opacusr-${VER}-macos-aarch64/
           tar -czf opacusr-${VER}-macos-aarch64.tar.gz -C dist opacusr-${VER}-macos-aarch64
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: macos-artifacts
           path: opacusr-*-macos-aarch64.tar.gz
