@@ -26,6 +26,7 @@
 | --- | --- |
 | Трансляция экрана — H.264 (Cisco OpenH264, настройки под экран) с фолбэком на JPEG; настройка качества / масштаба / fps | ✅ |
 | **Адаптивное качество** — тир-контроллер по RTT/FPS: быстрое снижение, осторожное повышение, ручные настройки в приоритете | ✅ |
+| **LAN-обнаружение (mDNS)** — хосты анонсируют `_opacusr._tcp.local.`; на вкладке подключения появляется список — ни URL сервера, ни ID вводить не нужно | ✅ |
 | **Мульти-монитор** — список мониторов и переключение на лету (X11 RandR, GDI, DXGI) | ✅ |
 | **Синхронизация буфера обмена** — в обе стороны с защитой от эха | ✅ |
 | **View-only режим + ACL** — полный доступ / только просмотр / отказ — на сессию и на зрителя | ✅ |
@@ -53,6 +54,7 @@
 cargo run --release -p opacusr-server
 # signaling : ws://0.0.0.0:8080/signal
 # health    : http://0.0.0.0:8080/health
+# metrics   : http://0.0.0.0:8080/metrics (формат Prometheus)
 # tcp relay : 0.0.0.0:8081
 
 # или через Docker (сервер + coturn STUN/TURN)
@@ -72,7 +74,7 @@ opacusr-agent id                # показать ID этого хоста
 opacusr-agent config            # путь к конфигу и сводка
 ```
 
-Настройки лежат в `~/.config/opacusr/agent.toml` (Linux), `%APPDATA%\opacusr\agent.toml` (Windows), `~/Library/Application Support/opacusr/agent.toml` (macOS). Ключевые поля: `server_url`, `name`, `password` / `password_in_keychain`, `fps`, `jpeg_quality`, `scale_percent`, `auto_accept_files`, `download_dir`, `lan_port`, `ice_urls`, `codec` (`auto` | `h264` | `jpeg`), `clipboard_sync`, `adaptive_quality`, `audio`, `audio_device`, `capture` (`auto` | `gdi` | `dxgi`, Windows), `default_permission` (`full` | `view-only` | `deny`), `acl_rules` (переопределения по зрителям), блокировка подбора пароля: `auth_max_attempts` / `auth_window_secs` / `auth_lockout_secs` (по умолчанию 5 / 300 / 60; `0` — отключить), `turn_api` (получение временных TURN-кредов с `GET /turn` сервера; включено по умолчанию).
+Настройки лежат в `~/.config/opacusr/agent.toml` (Linux), `%APPDATA%\opacusr\agent.toml` (Windows), `~/Library/Application Support/opacusr/agent.toml` (macOS). Ключевые поля: `server_url`, `name`, `password` / `password_in_keychain`, `fps`, `jpeg_quality`, `scale_percent`, `auto_accept_files`, `download_dir`, `lan_port`, `ice_urls`, `codec` (`auto` | `h264` | `jpeg`), `clipboard_sync`, `adaptive_quality`, `audio`, `audio_device`, `capture` (`auto` | `gdi` | `dxgi`, Windows), `default_permission` (`full` | `view-only` | `deny`), `acl_rules` (переопределения по зрителям), блокировка подбора пароля: `auth_max_attempts` / `auth_window_secs` / `auth_lockout_secs` (по умолчанию 5 / 300 / 60; `0` — отключить), `turn_api` (получение временных TURN-кредов с `GET /turn` сервера; включено по умолчанию), `mdns_advertise` (анонсирование signaling-эндпоинта по mDNS, чтобы зрители в этой сети находили хост без ввода URL; включено по умолчанию, `--no-mdns` отключает).
 
 ### 3. Сторона зрителя (кто управляет)
 

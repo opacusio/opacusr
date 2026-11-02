@@ -131,6 +131,11 @@ pub struct AgentConfig {
     /// passes; view-only sessions never lock; Ctrl+Alt+Del stays available
     /// on Windows. Best-effort per platform (docs/platforms.md); fail-open.
     pub lock_input: bool,
+    /// Advertise the signaling endpoint over mDNS (`_opacusr._tcp.local.`)
+    /// so viewers on this network can discover the host without typing a
+    /// server URL (Phase 3, docs/serverless.md). Best-effort; turn off
+    /// with `--no-mdns`.
+    pub mdns_advertise: bool,
     /// Optional RFC 6238 secret for the second factor (base32, no
     /// padding). When set, viewers must present a valid TOTP code in
     /// addition to the unattended password. Generate via the Host tab
@@ -182,6 +187,7 @@ impl Default for AgentConfig {
             signal_listen: false,
             signal_listen_port: 8080,
             lock_input: false,
+            mdns_advertise: true,
             totp_secret: None,
             record: false,
             record_dir: dirs::home_dir()

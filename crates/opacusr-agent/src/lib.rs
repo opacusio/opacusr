@@ -5,6 +5,7 @@ pub mod adaptive;
 #[cfg(feature = "audio")]
 pub mod audio;
 pub mod config;
+pub mod discovery;
 pub mod keychain;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub mod pty;

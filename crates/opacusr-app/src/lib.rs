@@ -3,6 +3,7 @@
 //! the host agent with unattended password / consent dialogs.
 
 pub mod app;
+pub mod discovery;
 pub mod host_panel;
 pub mod update_banner;
 pub mod view;

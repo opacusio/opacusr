@@ -196,6 +196,9 @@ pub struct App {
 
     /// Saved contacts + connection history (`addressbook.toml`).
     pub book: AddressBook,
+    /// mDNS browser for LAN discovery (Phase 3); refreshed on a
+    /// background thread for the whole app lifetime.
+    pub discovery: crate::discovery::Discovery,
     // Address-book form state.
     new_label: String,
     new_target: String,
@@ -239,6 +242,7 @@ impl App {
             host_password_input: String::new(),
             totp_input: String::new(),
             book: AddressBook::load(),
+            discovery: crate::discovery::Discovery::start(),
             new_label: String::new(),
             new_target: String::new(),
             new_endpoint: String::new(),
@@ -984,7 +988,11 @@ impl App {
                 }
             });
 
-            ui.add_space(24.0);
+            ui.add_space(12.0);
+            ui.separator();
+            self.discovered_ui(ui);
+
+            ui.add_space(16.0);
             ui.separator();
             self.book_ui(ui);
 
@@ -998,6 +1006,44 @@ impl App {
                  over WebRTC/DTLS, with a TCP relay fallback when direct P2P is blocked.",
             );
         });
+    }
+
+    // ------------------------------------------------------------------
+    // LAN discovery (mDNS)
+    // ------------------------------------------------------------------
+
+    /// Discovered hosts on this network: one Use button per host. The
+    /// button always fills the signaling URL; a direct-LAN `ip:port`
+    /// target is filled only when the ID field is empty (the user asked
+    /// for a specific host ID otherwise).
+    fn discovered_ui(&mut self, ui: &mut egui::Ui) {
+        let hosts = self.discovery.snapshot();
+        if hosts.is_empty() {
+            return;
+        }
+        ui.label(egui::RichText::new("Discovered on this network").strong());
+        for host in hosts {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(&host.label).strong());
+                ui.label(egui::RichText::new(&host.signal_url).weak().small());
+                if ui
+                    .button("Use")
+                    .on_hover_text(
+                        "Fill the server URL from this host's advertisement; \
+                         when the ID field is empty, also fill a direct LAN target",
+                    )
+                    .clicked()
+                {
+                    self.server_url = host.signal_url.clone();
+                    if self.peer_id_input.trim().is_empty() {
+                        if let Some(target) = &host.lan_target {
+                            self.peer_id_input = target.clone();
+                        }
+                    }
+                    self.status_message = format!("Using discovered host {}.", host.label);
+                }
+            });
+        }
     }
 
     // ------------------------------------------------------------------

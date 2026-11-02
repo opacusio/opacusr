@@ -37,6 +37,7 @@ rand = { workspace = true }
 sha2 = { workspace = true }
 mp4 = { workspace = true }
 rpassword = "7"
+mdns-sd = { workspace = true }
 
 # OS keychain for the unattended password. Windows/macOS use their native
 # stores; Linux uses the Secret Service (GNOME Keyring/KWallet) with a

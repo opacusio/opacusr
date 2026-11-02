@@ -129,6 +129,15 @@ impl AgentService {
             }
         }
 
+        // LAN discovery (Phase 3): announce the signaling endpoint over
+        // mDNS while running. Best-effort — no multicast, no problem.
+        // `lan` stays None until `allow_lan` reaches the config struct.
+        let _mdns_guard = if self.cfg.mdns_advertise {
+            crate::discovery::advertise(&self.cfg.name, self.cfg.signal_listen_port, None)
+        } else {
+            None
+        };
+
         let consent: Arc<ConsentFn> = Arc::new(consent);
         let mut set = tokio::task::JoinSet::new();
         for url in endpoints {

@@ -1,0 +1,23 @@
+# Weekly dependency updates: internal crates (minor+patch grouped so a
+# breaking major lands as a reviewable singleton) and the GitHub Actions
+# used by ci.yml / release.yml.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      cargo-minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions-minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"

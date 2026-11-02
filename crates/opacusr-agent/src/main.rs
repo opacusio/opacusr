@@ -38,6 +38,9 @@ enum Cmd {
         /// Windows capture backend: auto | gdi | dxgi (overrides config).
         #[arg(long)]
         capture: Option<String>,
+        /// Disable mDNS LAN discovery (overrides config `mdns_advertise`).
+        #[arg(long)]
+        no_mdns: bool,
         /// Lock this machine's keyboard/mouse while a viewer has full
         /// control (overrides config; view-only sessions never lock).
         #[arg(long)]
@@ -87,6 +90,7 @@ async fn main() -> anyhow::Result<()> {
             allow_lan,
             signal_listen,
             capture,
+            no_mdns,
             lock_input,
             record,
             tunnel,
@@ -98,6 +102,7 @@ async fn main() -> anyhow::Result<()> {
                 allow_lan,
                 signal_listen,
                 capture,
+                no_mdns,
                 lock_input,
                 record,
                 tunnel,
@@ -130,6 +135,7 @@ async fn run(
     allow_lan: bool,
     signal_listen: bool,
     capture: Option<String>,
+    no_mdns: bool,
     lock_input: bool,
     record: bool,
     tunnel: Option<String>,
@@ -140,6 +146,9 @@ async fn run(
     }
     if signal_listen {
         cfg.signal_listen = true;
+    }
+    if no_mdns {
+        cfg.mdns_advertise = false;
     }
     if lock_input {
         cfg.lock_input = true;
@@ -391,6 +400,10 @@ fn config_info() -> anyhow::Result<()> {
         "embedded:    {} (port {}, relay +1)",
         if cfg.signal_listen { "on" } else { "off" },
         cfg.signal_listen_port
+    );
+    println!(
+        "mdns:        {}",
+        if cfg.mdns_advertise { "on" } else { "off" }
     );
     println!("name:        {}", cfg.name);
     println!("fps:         {}", cfg.fps);

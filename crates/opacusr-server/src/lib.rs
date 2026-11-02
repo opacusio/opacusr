@@ -36,6 +36,10 @@ use tokio::sync::mpsc;
 use opacusr_proto::signal::*;
 use opacusr_proto::{PeerId, Platform};
 
+pub mod metrics;
+
+pub use metrics::{CountingReader, Metrics};
+
 pub const HEARTBEAT_SECS: u16 = 15;
 /// Peers silent for 3× the heartbeat interval are pruned.
 pub const PEER_TTL: Duration = Duration::from_secs(3 * HEARTBEAT_SECS as u64);
@@ -154,12 +158,19 @@ struct RelaySlot {
 }
 
 /// Ticket bookkeeping for the TCP relay fallback.
-#[derive(Default)]
 pub struct RelayHub {
     slots: std::sync::Mutex<HashMap<[u8; 16], RelaySlot>>,
+    metrics: Arc<Metrics>,
 }
 
 impl RelayHub {
+    pub fn new(metrics: Arc<Metrics>) -> Self {
+        Self {
+            slots: std::sync::Mutex::new(HashMap::new()),
+            metrics,
+        }
+    }
+
     /// Allocate a fresh ticket for `owner`.
     ///
     /// Returns `None` when the per-peer or server-wide cap on
@@ -182,6 +193,9 @@ impl RelayHub {
                     viewer: None,
                     host: None,
                 });
+                self.metrics
+                    .tickets
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 return Some(ticket);
             }
         }
@@ -228,17 +242,39 @@ impl RelayHub {
                 // one peer closing must not discard in-flight data for the
                 // other (copy_bidirectional shuts both sides down early).
                 // Payloads are app-encrypted E2E — the server stays
-                // ignorant of the content.
+                // ignorant of the content. Each direction counts its bytes
+                // into the shared relay counter.
+                let metrics = self.metrics.clone();
+                metrics
+                    .paired
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                metrics
+                    .pipes
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let bytes_v = metrics.relay_bytes.clone();
+                let bytes_h = metrics.relay_bytes.clone();
                 let (mut a_rd, mut a_wr) = tokio::io::split(a);
                 let (mut b_rd, mut b_wr) = tokio::io::split(b);
-                tokio::spawn(async move {
-                    let _ = tokio::io::copy(&mut a_rd, &mut b_wr).await;
+                let v2h = tokio::spawn(async move {
+                    let mut reader = CountingReader::new(&mut a_rd, bytes_v);
+                    let _ = tokio::io::copy(&mut reader, &mut b_wr).await;
                     // Viewer gone: politely half-close toward the host.
                     let _ = tokio::io::AsyncWriteExt::shutdown(&mut b_wr).await;
                 });
-                tokio::spawn(async move {
-                    let _ = tokio::io::copy(&mut b_rd, &mut a_wr).await;
+                let h2v = tokio::spawn(async move {
+                    let mut reader = CountingReader::new(&mut b_rd, bytes_h);
+                    let _ = tokio::io::copy(&mut reader, &mut a_wr).await;
                     let _ = tokio::io::AsyncWriteExt::shutdown(&mut a_wr).await;
+                });
+                // The pipes gauge counts *pairs*, not directions: one
+                // task joins both copies and closes the gauge only when
+                // both directions are done.
+                tokio::spawn(async move {
+                    let _ = v2h.await;
+                    let _ = h2v.await;
+                    metrics
+                        .pipes
+                        .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
                 });
             }
         }
@@ -403,6 +439,8 @@ pub struct AppState {
     pub limits: Limits,
     pub limiter: ConnLimiter,
     pub turn: Option<TurnConfig>,
+    /// Prometheus counters/gauges, served on `GET /metrics`.
+    pub metrics: Arc<Metrics>,
 }
 
 impl AppState {
@@ -415,14 +453,16 @@ impl AppState {
     /// Fully configured constructor (used by the binary).
     pub fn with_options(relay_port: u16, limits: Limits, turn: Option<TurnConfig>) -> Self {
         let limiter = ConnLimiter::new(limits.rate_max, limits.rate_window);
+        let metrics = Arc::new(Metrics::new());
         Self {
             registry: Registry::default(),
-            relay: RelayHub::default(),
+            relay: RelayHub::new(metrics.clone()),
             relay_port,
             version: env!("CARGO_PKG_VERSION").to_string(),
             limits,
             limiter,
             turn,
+            metrics,
         }
     }
 
@@ -442,14 +482,28 @@ impl AppState {
     }
 }
 
-/// HTTP router: `/signal` WebSocket, `/turn` credentials, `/health`.
+/// HTTP router: `/signal` WebSocket, `/turn` credentials, `/health`,
+/// `/metrics` (Prometheus text format).
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/signal", get(signal_route))
         .route("/turn", get(turn_route))
         .route("/health", get(health))
+        .route("/metrics", get(metrics_route))
         .fallback(unreachable)
         .with_state(state)
+}
+
+/// Prometheus text exposition of the server counters.
+async fn metrics_route(State(state): State<Arc<AppState>>) -> Response {
+    (
+        [(
+            header::CONTENT_TYPE,
+            "text/plain; version=0.0.4; charset=utf-8",
+        )],
+        state.metrics.render(&state.version),
+    )
+        .into_response()
 }
 
 async fn health(State(state): State<Arc<AppState>>) -> String {
@@ -493,6 +547,10 @@ async fn signal_route(
 ) -> Response {
     if let Some(ip) = ip {
         if !state.limiter.allow(ip) {
+            state
+                .metrics
+                .rate_limited
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             tracing::warn!(target: "opacusr", "rate limit: signaling connect from {ip}");
             return (
                 StatusCode::TOO_MANY_REQUESTS,
@@ -555,6 +613,10 @@ async fn turn_route(
 ) -> Response {
     if let Some(ip) = ip {
         if !state.limiter.allow(ip) {
+            state
+                .metrics
+                .rate_limited
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             tracing::warn!(target: "opacusr", "rate limit: /turn from {ip}");
             return (StatusCode::TOO_MANY_REQUESTS, "too many requests").into_response();
         }
@@ -566,6 +628,10 @@ async fn turn_route(
         )
             .into_response();
     };
+    state
+        .metrics
+        .turn_mints
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let ttl = turn.ttl_secs;
     let expiry = now() + ttl;
     let username = expiry.to_string();
@@ -631,6 +697,10 @@ pub async fn serve(
 }
 
 async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
+    state
+        .metrics
+        .upgrades
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let mut socket = socket;
     // First message must be a Register.
     let reg = match recv_signal(&mut socket).await {
@@ -665,6 +735,14 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     };
     let (my_id, mut inbound) = {
         let (id, inbound) = state.registry.register(my_info.clone());
+        state
+            .metrics
+            .registrations
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        state
+            .metrics
+            .peers
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         tracing::info!(target: "opacusr", "peer {id} registered ({}{}, agent={})",
             reg.platform.as_str(),
             if reg.unattended { ", unattended" } else { "" },
@@ -718,6 +796,10 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     }
 
     state.registry.unregister(my_id);
+    state
+        .metrics
+        .peers
+        .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
     out_task.abort();
     tracing::info!(target: "opacusr", "peer {my_id} disconnected");
     // Peers discover the disappearance via SessionFailed / PeerSend errors.

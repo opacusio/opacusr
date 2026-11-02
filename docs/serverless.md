@@ -122,9 +122,13 @@ tunneled host. Still, for UDP throughput the options are:
    port +1, same env knobs as the standalone server), and the agent
    registers on the local endpoint like on any other. The tunnel cookbook
    below makes it reachable from outside for free.
-3. **mDNS discovery** — planned: `_opacusr._tcp.local.` via `mdns-sd`; the
-   viewer's connect box accepts `hostname.local` and offers a picker of
-   discovered agents; removes the need to know IPs on LAN.
+3. **mDNS discovery** — **shipped**: agents advertise
+   `_opacusr._tcp.local.` (TXT `path`/`proto`, optional `lan`) while
+   running (`mdns_advertise`, `--no-mdns` to disable; best-effort — no
+   multicast, no problem); the viewer's connect tab lists discovered
+   hosts with a Use button that fills the signaling URL, and a direct
+   LAN `ip:port` target when the host advertises one and the ID field
+   is empty. Foreign protocol versions are filtered out of the list.
 4. **Manual signaling codes** — planned: offer/answer paste flow as the L4
    last-resort path; also unblocks debugging when tunnels/registries are
    broken.

@@ -26,6 +26,7 @@ Commercial remote-desktop tools route your sessions through the vendor's cloud. 
 | --- | --- |
 | Screen streaming — H.264 (Cisco OpenH264, screen-content tuned) with JPEG fallback; adjustable quality / scale / fps | ✅ |
 | **Adaptive quality** — RTT/FPS-driven tiers, fast-degrade / slow-upgrade hysteresis, manual override wins | ✅ |
+| **LAN discovery (mDNS)** — hosts announce `_opacusr._tcp.local.`; the viewer lists them on the connect tab — no server URL or ID to type on a LAN | ✅ |
 | **Multi-monitor** — enumerate + switch monitors mid-session (X11 RandR, GDI, DXGI) | ✅ |
 | **Clipboard sync** — both directions with echo suppression | ✅ |
 | **View-only mode + ACL** — full / view-only / deny per session and per viewer | ✅ |
@@ -53,6 +54,7 @@ Commercial remote-desktop tools route your sessions through the vendor's cloud. 
 cargo run --release -p opacusr-server
 # signaling : ws://0.0.0.0:8080/signal
 # health    : http://0.0.0.0:8080/health
+# metrics   : http://0.0.0.0:8080/metrics (Prometheus text format)
 # tcp relay : 0.0.0.0:8081
 
 # or with Docker (server + coturn STUN/TURN)
@@ -72,7 +74,7 @@ opacusr-agent id                # print this host's registered ID
 opacusr-agent config            # print config location & summary
 ```
 
-Settings live in `~/.config/opacusr/agent.toml` (Linux), `%APPDATA%\opacusr\agent.toml` (Windows), `~/Library/Application Support/opacusr/agent.toml` (macOS). Notable keys: `server_url`, `name`, `password` / `password_in_keychain`, `fps`, `jpeg_quality`, `scale_percent`, `auto_accept_files`, `download_dir`, `lan_port`, `ice_urls`, `codec` (`auto` | `h264` | `jpeg`), `clipboard_sync`, `adaptive_quality`, `audio`, `audio_device`, `capture` (`auto` | `gdi` | `dxgi`, Windows), `default_permission` (`full` | `view-only` | `deny`), `acl_rules` (per-viewer overrides), `lock_input` (TeamViewer-style: swallow this machine's physical keyboard/mouse while a viewer has full control; Windows LL hooks / Linux evdev grabs, injected remote input still passes, view-only sessions never lock), auth lockout: `auth_max_attempts` / `auth_window_secs` / `auth_lockout_secs` (defaults 5 / 300 / 60; `0` disables), `turn_api` (fetch time-limited TURN credentials from the server's `GET /turn`; default on).
+Settings live in `~/.config/opacusr/agent.toml` (Linux), `%APPDATA%\opacusr\agent.toml` (Windows), `~/Library/Application Support/opacusr/agent.toml` (macOS). Notable keys: `server_url`, `name`, `password` / `password_in_keychain`, `fps`, `jpeg_quality`, `scale_percent`, `auto_accept_files`, `download_dir`, `lan_port`, `ice_urls`, `codec` (`auto` | `h264` | `jpeg`), `clipboard_sync`, `adaptive_quality`, `audio`, `audio_device`, `capture` (`auto` | `gdi` | `dxgi`, Windows), `default_permission` (`full` | `view-only` | `deny`), `acl_rules` (per-viewer overrides), `lock_input` (TeamViewer-style: swallow this machine's physical keyboard/mouse while a viewer has full control; Windows LL hooks / Linux evdev grabs, injected remote input still passes, view-only sessions never lock), auth lockout: `auth_max_attempts` / `auth_window_secs` / `auth_lockout_secs` (defaults 5 / 300 / 60; `0` disables), `turn_api` (fetch time-limited TURN credentials from the server's `GET /turn`; default on), `mdns_advertise` (announce the signaling endpoint over mDNS so viewers on this network can discover the host; default on, `--no-mdns` to disable).
 
 ### 3. Viewer side (the controller)
 

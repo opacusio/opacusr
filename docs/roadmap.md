@@ -34,14 +34,14 @@ Design in [serverless.md](serverless.md); goal: a working connection with **0 �
 - **Path ladder** (viewer `connect = "auto"`): LAN direct → P2P/STUN → TURN → TCP relay, with the active mode shown in the UI.
 - ~~**Phase 1**: `signaling_urls` list on the agent (fan-out registration), viewer auto-connect ladder~~ **done** — supervised per-endpoint reconnect loops; the viewer tries endpoints in order with per-endpoint TURN minting.
 - ~~**Phase 2**: embedded signaling listener in the agent + tunnel cookbook (cloudflared / Tailscale Funnel)~~ **done** — `signal_listen = true` serves registry + relay + `/turn` in the agent; cookbook in [serverless.md](serverless.md) §7.
-- **Phase 3**: mDNS discovery (`hostname.local`) for LAN addresses.
+- ~~**Phase 3**: mDNS discovery (`hostname.local`) for LAN addresses~~ **done** — agents advertise `_opacusr._tcp.local.` (best-effort, `mdns_advertise` / `--no-mdns`); the connect tab lists discovered hosts and fills the URL (and the LAN target) on Use. See [serverless.md](serverless.md) §5.
 - **Phase 4**: manual offer/answer "meeting codes" as the fully serverless fallback.
 
 ## M3 — Scale & operations
 
 - **Server v2**: multi-node signaling with a shared registry (Redis/Postgres), horizontal relay scaling, connection routing by region.
 - **TLS everywhere by default**: built-in `wss://` with ACME, or documented single-command reverse-proxy setup (Caddy).
-- **Metrics & admin UI**: Prometheus endpoint on the server, session/relay dashboards.
+- **Metrics & admin UI**: ~~Prometheus endpoint on the server~~ **done** (`GET /metrics`, text exposition 0.0.4: upgrades, registrations, peers, relay tickets/pairs/pipes/bytes, TURN mints, rate limits, build info); session/relay dashboards remain.
 - **Meeting-style features**: multi-viewer observation of one host (viewer count policies), ~~session recording (opt-in, host-side)~~ (done, v0.6.0 WIP).
 - **Auto-update** channel for desktop clients (check-on-start + in-app "update available" notice; signed artifacts already produced by the release pipeline).
 

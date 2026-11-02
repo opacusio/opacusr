@@ -6,6 +6,30 @@ SemVer-ish (breaking protocol changes bump the minor until 1.0).
 
 ## [Unreleased]
 
+### Added
+
+- **LAN discovery over mDNS (zero-infra Phase 3)** — hosts announce
+  themselves as `_opacusr._tcp.local.` while the agent runs (TXT records:
+  the signaling path, the protocol version, and — when direct LAN is
+  accepted — the `ip:port` target). The viewer's connect tab lists the
+  hosts found on this network with a Use button that fills the server
+  URL, and a direct-LAN target when the ID field is empty. Best-effort
+  end to end: no multicast on the network simply means an empty list;
+  hosts running a different protocol version are filtered out. New
+  config key `mdns_advertise` (default on) and CLI flag `--no-mdns`;
+  `opacusr-agent config` reports the state.
+- **Prometheus `/metrics` on the server** — the signaling server (and
+  the agent's embedded one) now exposes counters and gauges in the text
+  exposition format on `GET /metrics`: WebSocket upgrades, successful
+  registrations, currently registered peers, relay tickets / completed
+  pairs / active pipes / relayed bytes (both directions of every relay
+  pipe counted at the read half), TURN credentials minted, per-IP rate
+  limiting hits, and a `build_info` line with the version. Hand-rolled
+  on purpose — no metrics dependency for the self-hosted binary.
+- **Dependabot** — weekly cargo and github-actions updates, minor+patch
+  grouped per ecosystem so breaking majors arrive as reviewable
+  singletons.
+
 ## [0.8.0] — 2026-11-02
 
 _Version note: the protocol bumped once more (7 → 8); peers with
