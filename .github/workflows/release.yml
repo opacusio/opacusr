@@ -45,7 +45,7 @@ jobs:
           ./configure --prefix=/usr/local --disable-shared --enable-static --with-pic --disable-doc --disable-extra-programs
           make -j3
           sudo make install
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -115,7 +115,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -179,7 +179,7 @@ jobs:
           ./configure --prefix=/usr/local --disable-shared --enable-static --disable-doc --disable-extra-programs
           make -j3
           sudo make install
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
