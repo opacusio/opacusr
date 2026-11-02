@@ -278,6 +278,16 @@ pub struct ClipboardText {
     pub text: String,
 }
 
+/// Either side → other: sync an image clipboard snapshot (PNG-encoded
+/// RGBA; the receiver decodes and places it on the system clipboard).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClipboardImage {
+    pub width: u32,
+    pub height: u32,
+    /// PNG bytes; senders cap at 6 MiB (transport frame limit is 8 MiB).
+    pub png: Vec<u8>,
+}
+
 /// Either side → other: one chat bubble.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
@@ -488,6 +498,7 @@ pub enum Message {
 
     // --- clipboard ---
     ClipboardText(ClipboardText),
+    ClipboardImage(ClipboardImage),
 
     // --- chat ---
     ChatMessage(ChatMessage),

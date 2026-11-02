@@ -35,7 +35,7 @@ pub use signal::*;
 /// v6 (0.6.0): new host→viewer messages `CursorShape`/`CursorPos` — the
 /// host streams the remote pointer (bitmap + hotspot + position) so
 /// viewers always see it, even where capture APIs drop the cursor.
-pub const PROTO_VERSION: u32 = 6;
+pub const PROTO_VERSION: u32 = 7;
 
 /// Application name used in handshakes and logs.
 pub const APP_NAME: &str = "OpacusR";
@@ -231,5 +231,25 @@ mod tests {
         }
         assert_eq!(pos.channel(), Channel::Control);
         assert_eq!(shape.channel(), Channel::Control);
+    }
+
+    #[test]
+    fn clipboard_image_message_round_trips_and_routes_to_control() {
+        use crate::framing::{decode_message, encode_message};
+        use crate::message::ClipboardImage;
+
+        let img = Message::ClipboardImage(ClipboardImage {
+            width: 4,
+            height: 3,
+            png: vec![7u8; 32],
+        });
+        let back = decode_message(&encode_message(&img).unwrap()).unwrap();
+        match back {
+            Message::ClipboardImage(c) => {
+                assert_eq!((c.width, c.height, c.png.len()), (4, 3, 32));
+            }
+            other => panic!("expected ClipboardImage, got {other:?}"),
+        }
+        assert_eq!(img.channel(), Channel::Control);
     }
 }

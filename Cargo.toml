@@ -57,7 +57,7 @@ sha1 = "0.10"
 axum = { version = "0.8", features = ["ws", "json"] }
 tokio-tungstenite = "0.24"
 
-image = { version = "0.25", default-features = false, features = ["jpeg"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 mp4 = "0.14"
 x11rb = { version = "0.13", features = ["randr", "xfixes"] }
 enigo = "0.6"

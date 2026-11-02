@@ -11,6 +11,8 @@ homepage.workspace = true
 opacusr-proto = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+# PNG encode/decode for image clipboard sync (headless-safe helpers).
+image = { workspace = true }
 
 # evdev grabs for the physical input lock (Linux).
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]

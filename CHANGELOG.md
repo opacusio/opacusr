@@ -8,6 +8,17 @@ SemVer-ish (breaking protocol changes bump the minor until 1.0).
 
 ### Added
 
+- **Image clipboard sync** — screenshots copy-paste across the session:
+  both sides poll the clipboard for text first and fall back to images
+  (screenshot copies usually carry no text), encode them as PNG on the
+  sender and place them back on the receiver's system clipboard. Echo
+  suppression now works on content hashes, so repeated polls of the
+  same image cost one hash instead of one PNG encode. Guardrails: 6 MiB
+  per image (transport frames cap at 8 MiB), a 64 MiB decoded-RGBA cap
+  as a decompression-bomb guard, and a malformed payload is dropped
+  with a log line while the session keeps running (covered by an e2e
+  test). `PROTO_VERSION` bumps to 7 — old peers are rejected at
+  handshake, as with every protocol bump.
 - **Wayland-native capture ships for real** — the experimental
   xdg-desktop-portal ScreenCast + PipeWire backend is now compiled and
   lint-checked (`-D warnings`) on every CI run, so it can no longer rot

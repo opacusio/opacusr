@@ -17,7 +17,7 @@ use tokio::sync::mpsc;
 
 use opacusr_capture::{resize_nearest, CursorSource, ScreenCapture};
 use opacusr_codec::make_pair;
-use opacusr_input::clipboard::ClipboardHandle;
+use opacusr_input::clipboard::{hash_clip, ClipContent, ClipboardHandle};
 use opacusr_input::InputInjector;
 use opacusr_proto::message::{self, ByeReason, CodecId, SessionAccept};
 use opacusr_proto::{Message, Platform};
@@ -206,6 +206,10 @@ impl SessionHost {
 /// Clipboard size cap for viewer → host transfers.
 const CLIPBOARD_MAX_BYTES: usize = opacusr_input::clipboard::CLIPBOARD_MAX_BYTES;
 
+/// PNG cap for image clipboard transfers (transport frame limit is 8 MiB).
+const CLIPBOARD_IMAGE_MAX_PNG_BYTES: usize =
+    opacusr_input::clipboard::CLIPBOARD_IMAGE_MAX_PNG_BYTES;
+
 #[allow(clippy::too_many_arguments)]
 async fn run_session(
     cfg: &SessionConfig,
@@ -312,14 +316,15 @@ async fn run_session(
     let mut cursor_serial: Option<u64> = None;
     let mut last_cursor: Option<(i32, i32, bool)> = None;
 
-    // Clipboard sync state (echo suppression).
+    // Clipboard sync state (echo suppression). Markers are content hashes
+    // so text and images share one mechanism.
     let mut clipboard = if cfg.clipboard_sync {
         ClipboardHandle::spawn()
     } else {
         None
     };
-    let mut clip_sent: Option<String> = None;
-    let mut clip_applied: Option<String> = None;
+    let mut clip_sent: Option<u64> = None;
+    let mut clip_applied: Option<u64> = None;
 
     // Audio stream (started/stopped via AudioControl from the viewer).
     #[cfg(feature = "audio")]
@@ -421,20 +426,43 @@ async fn run_session(
             }
             _ = clip_ticker.tick() => {
                 // Host → viewer clipboard push with echo suppression: skip
-                // text we sent ourselves earlier or applied from the viewer.
+                // content we sent ourselves earlier or applied from the viewer.
                 if let Some(clip) = &mut clipboard {
                     clip.request_get();
-                    while let Some(text) = clip.poll() {
-                        if text.len() > CLIPBOARD_MAX_BYTES { continue; }
-                        if Some(&text) == clip_sent.as_ref()
-                            || Some(&text) == clip_applied.as_ref()
-                        {
+                    while let Some(content) = clip.poll() {
+                        let hash = hash_clip(&content);
+                        if Some(hash) == clip_sent || Some(hash) == clip_applied {
                             continue;
                         }
-                        clip_sent = Some(text.clone());
-                        session.send_msg(&Message::ClipboardText(
-                            message::ClipboardText { text },
-                        )).await?;
+                        let msg = match content {
+                            ClipContent::Text(text) => {
+                                if text.len() > CLIPBOARD_MAX_BYTES {
+                                    continue;
+                                }
+                                Message::ClipboardText(message::ClipboardText { text })
+                            }
+                            ClipContent::Image { width, height, rgba } => {
+                                // Encoding happens only for *new* content —
+                                // suppressed copies cost one hash, not one PNG.
+                                let Some(png) = opacusr_input::clipboard::encode_png(
+                                    width, height, &rgba,
+                                ) else {
+                                    continue;
+                                };
+                                if png.len() > CLIPBOARD_IMAGE_MAX_PNG_BYTES {
+                                    tracing::debug!(target: "opacusr",
+                                        "clipboard image too large after encode, dropped");
+                                    continue;
+                                }
+                                Message::ClipboardImage(message::ClipboardImage {
+                                    width,
+                                    height,
+                                    png,
+                                })
+                            }
+                        };
+                        clip_sent = Some(hash);
+                        session.send_msg(&msg).await?;
                     }
                 }
             }
@@ -498,9 +526,34 @@ async fn run_session(
                             tracing::debug!(target: "opacusr", "clipboard text too large, dropped");
                             continue;
                         }
+                        let content = ClipContent::Text(c.text.clone());
                         set_clipboard(&c.text);
-                        clip_applied = Some(c.text.clone());
-                        clip_sent = Some(c.text);
+                        let hash = hash_clip(&content);
+                        clip_applied = Some(hash);
+                        clip_sent = Some(hash);
+                    }
+                    Message::ClipboardImage(c) => {
+                        if c.png.len() > CLIPBOARD_IMAGE_MAX_PNG_BYTES {
+                            tracing::debug!(target: "opacusr", "clipboard image too large, dropped");
+                            continue;
+                        }
+                        match opacusr_input::clipboard::decode_png(&c.png) {
+                            Some((width, height, rgba)) => {
+                                let content = ClipContent::Image {
+                                    width,
+                                    height,
+                                    rgba: rgba.clone(),
+                                };
+                                set_clipboard_image(width, height, &rgba);
+                                let hash = hash_clip(&content);
+                                clip_applied = Some(hash);
+                                clip_sent = Some(hash);
+                            }
+                            None => {
+                                tracing::debug!(target: "opacusr",
+                                    "malformed clipboard image, dropped");
+                            }
+                        }
                     }
                     Message::QualitySet(q) => {
                         // A manual setting wins for the rest of the session.
@@ -792,4 +845,23 @@ fn set_clipboard(text: &str) {
             Err(e) => tracing::debug!(target: "opacusr", "clipboard set failed: {e}"),
         }
     }
+}
+
+/// Place a decoded RGBA image on the host clipboard (best effort).
+fn set_clipboard_image(width: u32, height: u32, rgba: &[u8]) {
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        match arboard::Clipboard::new().and_then(|mut c| {
+            c.set_image(arboard::ImageData {
+                width: width as usize,
+                height: height as usize,
+                bytes: std::borrow::Cow::Borrowed(rgba),
+            })
+        }) {
+            Ok(_) => {}
+            Err(e) => tracing::debug!(target: "opacusr", "clipboard image set failed: {e}"),
+        }
+    }
+    #[allow(unused_variables)]
+    let _ = (width, height, rgba);
 }

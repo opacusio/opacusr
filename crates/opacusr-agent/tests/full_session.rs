@@ -14,6 +14,7 @@ use opacusr_capture::TestCursor;
 use opacusr_client::session::{ClientEvent, Command, SessionClient, SessionSettings};
 use opacusr_input::{InputError, InputInjector, RecordingInjector};
 use opacusr_proto::message::{MouseButtonId, OpKey};
+use opacusr_transport::auth::viewer_handshake;
 use opacusr_transport::lockout::{AuthGate, AuthGateConfig};
 use opacusr_transport::secure::SecureSession;
 use opacusr_transport::tcp::TcpTransport;
@@ -501,6 +502,104 @@ async fn totp_second_factor_is_enforced() {
     drop(runner);
 
     host_task.await.unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// Image clipboard sync (proto v7)
+// ---------------------------------------------------------------------------
+
+/// A malformed image clipboard payload must be dropped without killing
+/// the session: the host stays alive and keeps processing other messages
+/// (a chat round-trip serves as the liveness probe). Runs headless —
+/// the host-side clipboard helpers are best-effort no-ops without a
+/// display, which is exactly the robustness property under test.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn clipboard_image_garbage_is_dropped_gracefully() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+
+    let (ev_tx, mut ev_rx) = mpsc::unbounded_channel();
+    let host_task = tokio::spawn(async move {
+        let (sock, _) = listener.accept().await.unwrap();
+        let cfg = SessionConfig {
+            password: Some(PASSWORD.into()),
+            display_name: "e2e-host".into(),
+            fps: 60,
+            jpeg_quality: 80,
+            scale_percent: 100,
+            download_dir: std::env::temp_dir(),
+            auto_accept_files: true,
+            codec: opacusr_agent::session::CodecChoice::Auto,
+            view_only: false,
+            clipboard_sync: true,
+            adaptive_quality: false,
+            audio: false,
+            audio_device: String::new(),
+            lock_input: false,
+            totp_secret: None,
+            record: false,
+            record_dir: std::env::temp_dir(),
+            tunnel: TunnelPolicy::Off,
+            auth_gate: None,
+        };
+        let (_cmd_tx, cmd_rx) = mpsc::unbounded_channel();
+        let session = SecureSession::new(Box::new(TcpTransport::from_stream(sock)), None);
+        SessionHost {
+            cfg,
+            events: ev_tx,
+            commands: cmd_rx,
+        }
+        .run(
+            session,
+            Box::new(TestSource::new(320, 200)),
+            Box::new(opacusr_input::RecordingInjector::new()),
+            Box::new(TestCursor::new((320, 200))),
+        )
+        .await;
+    });
+
+    // Raw viewer: handshake, then push a deliberately broken image
+    // payload followed by a chat message.
+    let mut session =
+        SecureSession::new(Box::new(TcpTransport::connect(&addr).await.unwrap()), None);
+    viewer_handshake(&mut session, PASSWORD, "e2e-viewer", None)
+        .await
+        .expect("handshake");
+    session
+        .send_msg(&opacusr_proto::Message::ClipboardImage(
+            opacusr_proto::message::ClipboardImage {
+                width: 4,
+                height: 4,
+                png: vec![0xde, 0xad, 0xbe, 0xef], // not a PNG
+            },
+        ))
+        .await
+        .unwrap();
+    session
+        .send_msg(&opacusr_proto::Message::ChatMessage(
+            opacusr_proto::message::ChatMessage {
+                id: 1,
+                text: "still alive".into(),
+                ts_ms: 0,
+            },
+        ))
+        .await
+        .unwrap();
+
+    // The host must still be processing messages after the bad payload:
+    // drain events (Started, …) until the chat probe comes back.
+    let deadline = Duration::from_secs(15);
+    let mut probe = false;
+    while let Some(ev) = tokio::time::timeout(deadline, ev_rx.recv()).await.unwrap() {
+        if matches!(&ev, HostEvent::Chat(t) if t == "still alive") {
+            probe = true;
+            break;
+        }
+    }
+    assert!(probe, "host never delivered the chat probe after the bad image");
+
+    drop(session);
+    let _ = host_task.await;
 }
 
 // ---------------------------------------------------------------------------
