@@ -18,10 +18,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Install X11 dev packages
+      - name: Install X11 + PipeWire dev packages
         run: |
           sudo apt-get update
-          sudo apt-get install -y libx11-dev libxi-dev libxtst-dev libasound2-dev libgtk-3-dev
+          sudo apt-get install -y libx11-dev libxi-dev libxtst-dev libasound2-dev libgtk-3-dev libpipewire-0.3-dev libspa-0.2-dev
       - name: Build and install Opus (static)
         # audiopus_sys probes pkg-config first and only falls back to the
         # vendored autotools build when no system Opus is found. That vendored
@@ -68,11 +68,40 @@ jobs:
              dist/opacusr-${GITHUB_REF_NAME#v}-linux-x86_64/
           cp README.md README.ru.md LICENSE dist/opacusr-${GITHUB_REF_NAME#v}-linux-x86_64/
           tar -czf opacusr-${GITHUB_REF_NAME#v}-linux-x86_64.tar.gz -C dist opacusr-${GITHUB_REF_NAME#v}-linux-x86_64
+      - name: Build Wayland/PipeWire variant
+        # Second build with the xdg-desktop-portal ScreenCast + PipeWire
+        # backend enabled, for native-Wayland hosts. These binaries link
+        # libpipewire-0.3.so.0 dynamically — present on every desktop
+        # distro, absent on headless servers; the default (X11) artifacts
+        # above stay fully self-contained, so Wayland support ships
+        # separately instead of burdening them.
+        run: cargo build --release -p opacusr-app -p opacusr-agent -p opacusr-server --features opacusr-capture/pipewire
+      - name: Smoke test Wayland variant
+        run: ./target/release/opacusr-agent --version
+      - name: Package Wayland tar.gz
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          mkdir -p dist/opacusr-${VER}-linux-wayland-x86_64
+          cp target/release/opacusr target/release/opacusr-agent target/release/opacusr-server \
+             dist/opacusr-${VER}-linux-wayland-x86_64/
+          cp README.md README.ru.md LICENSE dist/opacusr-${VER}-linux-wayland-x86_64/
+          printf '%s\n' \
+            'This build includes the PipeWire (xdg-desktop-portal ScreenCast)' \
+            'capture backend for native Wayland sessions.' \
+            '' \
+            'Runtime requirement: libpipewire-0.3.so.0 (package libpipewire-0.3-0' \
+            'on Debian/Ubuntu; preinstalled on any desktop distro).' \
+            'On X11 sessions the regular build works the same way; this variant' \
+            'additionally covers Wayland via the portal (a consent dialog pops' \
+            'up on first share).' \
+            > dist/opacusr-${VER}-linux-wayland-x86_64/WAYLAND.txt
+          tar -czf opacusr-${VER}-linux-wayland-x86_64.tar.gz -C dist opacusr-${VER}-linux-wayland-x86_64
       - uses: actions/upload-artifact@v4
         with:
           name: linux-artifacts
           path: |
             opacusr-*-linux-x86_64.tar.gz
+            opacusr-*-linux-wayland-x86_64.tar.gz
             *.deb
 
   windows:

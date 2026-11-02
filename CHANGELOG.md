@@ -8,6 +8,15 @@ SemVer-ish (breaking protocol changes bump the minor until 1.0).
 
 ### Added
 
+- **Wayland-native capture ships for real** — the experimental
+  xdg-desktop-portal ScreenCast + PipeWire backend is now compiled and
+  lint-checked (`-D warnings`) on every CI run, so it can no longer rot
+  silently, and releases gain a dedicated
+  `opacusr-<ver>-linux-wayland-x86_64.tar.gz` artifact with it (runtime
+  requirement: `libpipewire-0.3`, preinstalled on desktop distros; the
+  default artifacts stay self-contained X11 builds). Hosts on a native
+  Wayland session get a portal consent dialog on the first share and
+  then full-frame capture; X11 hosts are unaffected.
 - **Remote cursor overlay** — viewers now see the host's pointer:
   screen capture APIs drop the cursor, so the host polls it separately
   (Win32 `GetCursorInfo` + `GetIconInfo`/`GetDIBits` on Windows, XFixes
