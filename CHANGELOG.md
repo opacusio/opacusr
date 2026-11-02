@@ -6,6 +6,13 @@ SemVer-ish (breaking protocol changes bump the minor until 1.0).
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-11-02
+
+_Version note: 0.6.0 was skipped — everything in this section landed
+straight after 0.5.0. The protocol bumped twice (6 → 7); peers with
+different protocol versions are rejected at the handshake, so update
+the agent and the viewer together._
+
 ### Added
 
 - **Image clipboard sync** — screenshots copy-paste across the session:
