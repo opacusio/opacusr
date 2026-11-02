@@ -39,7 +39,7 @@ pub use signal::*;
 /// v7 (0.7.0): new message `ClipboardImage` — image clipboard sync via
 /// PNG-encoded RGBA payloads.
 ///
-/// v8: new host→viewer message `QualityTier` (the adaptive-quality
+/// v8 (0.8.0): new host→viewer message `QualityTier` (the adaptive-quality
 /// controller's live state for the viewer UI) and the chunked clipboard
 /// pair `ClipboardBegin`/`ClipboardChunk` for payloads that exceed the
 /// single-message caps (large text and large PNGs).

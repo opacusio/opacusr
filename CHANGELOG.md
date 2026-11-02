@@ -6,6 +6,54 @@ SemVer-ish (breaking protocol changes bump the minor until 1.0).
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-11-02
+
+_Version note: the protocol bumped once more (7 → 8); peers with
+different protocol versions are rejected at the handshake, so update
+the agent and the viewer together._
+
+### Added
+
+- **Wayland cursor via the portal** — native Wayland hosts no longer
+  degrade to a cursorless stream (the gap 0.7.0 left open): the
+  ScreenCast session is now negotiated with `CursorMode::Metadata`, and
+  the PipeWire worker parses every buffer's `spa_meta_cursor` — hotspot
+  position plus the inline sprite bitmap — into a shared cursor state
+  that the existing poller streams to viewers exactly like the
+  X11/Win32 paths. Semantics follow PipeWire's `spa/buffer/meta.h`:
+  a buffer without new cursor data leaves the state untouched, a
+  position-only update moves the overlay without re-sending the sprite,
+  and an empty sprite hides it. Sprite conversion supports the six
+  usual DIB formats (BGRA/BGRx/RGBA/RGBx/ARGB/ABGR); the serial the
+  viewer dedupes on is our own counter, bumped when the converted RGBA
+  actually changes, so compositors that rescale bitmaps per frame don't
+  flood the stream. The byte-level parser (`cursor_meta.rs`) reads the
+  documented C layout directly — no bindgen structs, testable without a
+  PipeWire build — and ships ten unit tests over synthetic metadata
+  fixtures.
+- **Chunked clipboard** — payloads above the single-message caps no
+  longer get dropped at the 8 MiB frame limit: text over 512 KiB and
+  PNG images over 6 MiB are split into 256 KiB `ClipboardChunk` pieces
+  announced by a `ClipboardBegin` header (transfer id, payload kind,
+  dimensions, total length, chunk size). The receiver reassembles with
+  strict validation — chunk order and size, a 64 MiB reassembly cap, a
+  UTF-8 check for text, and a fresh transfer silently replacing a stale
+  one — so a clipboard several tens of MiB large syncs where it
+  previously produced a warning and nothing else. Works in both
+  directions, including the viewer's manual send-clipboard action.
+- **Quality tier in the viewer UI** — the viewer no longer guesses why
+  the stream looks softer: the host reports the adaptive-quality
+  controller's live state in a new `QualityTier` message (tier 0..3,
+  fps, JPEG quality, scale percent, adaptive on/off) right after the
+  session is accepted, on every link-driven tier change, and when the
+  user pins a manual quality. The session toolbar shows a colored badge
+  (`⚡ best` … `tier 3`) with the live parameters on hover, and the
+  stats panel gains a "Quality tier" row (adaptive / manual).
+
+`PROTO_VERSION` bumps to 8 (`QualityTier`, `ClipboardBegin`,
+`ClipboardChunk` are new messages); old peers are rejected at the
+handshake, as with every protocol bump.
+
 ## [0.7.0] — 2026-11-02
 
 _Version note: 0.6.0 was skipped — everything in this section landed
