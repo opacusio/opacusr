@@ -302,11 +302,12 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
+    // $HOME is guaranteed on unix runners; Windows CI has no $HOME
+    // (plist_path() is only meaningful on macOS anyway).
     fn plist_paths_live_under_home() {
-        // Uses $HOME of the test process; only sanity-checks the shape.
         let p = plist_path().expect("plist path");
-        assert!(p
-            .to_string_lossy()
-            .ends_with("Library/LaunchAgents/io.opacusr.agent.plist"));
+        // Component-based comparison: works regardless of separators.
+        assert!(p.ends_with("Library/LaunchAgents/io.opacusr.agent.plist"));
     }
 }
