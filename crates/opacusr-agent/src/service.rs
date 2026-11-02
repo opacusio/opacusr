@@ -537,6 +537,7 @@ impl AgentService {
             audio: self.cfg.audio,
             audio_device: self.cfg.audio_device.clone(),
             lock_input: self.cfg.lock_input,
+            privacy_mode: self.cfg.privacy_mode,
             totp_secret: self.cfg.totp_secret.clone(),
             record: self.cfg.record,
             record_dir: self.cfg.record_dir.clone(),

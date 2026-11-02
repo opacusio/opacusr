@@ -8,6 +8,23 @@ SemVer-ish (breaking protocol changes bump the minor until 1.0).
 
 ### Added
 
+- **Privacy mode v1 (display blanking)** — new opt-in `privacy_mode`
+  key in `agent.toml` (plus `opacusr-agent run --privacy`): while a
+  session is active the host's physical displays are put to sleep, so a
+  bystander sees a dark monitor instead of the shared desktop while the
+  remote viewer keeps working. Capture keeps running — the viewer still
+  sees the desktop — and it composes with `lock_input` (which stops
+  someone from waking the machine by touching it). Platforms: Windows
+  `SC_MONITORPOWER` broadcast (wake on drop), Linux/X11 `xset dpms
+  force off` (`force on` on drop), macOS `pmset displaysleepnow`
+  (`caffeinate -u` wake). Fail-open like the input lock: when the
+  platform cannot blank (Wayland, headless, no `xset`) the session
+  continues unblanked with a notice; two concurrent sessions share one
+  blank guard (wake happens only when the last session ends). The
+  `opacusr-input::privacy` module is unit-tested on the command
+  shaping; known v1 limitation documented: on some GPU/driver stacks
+  DXGI duplication may stop producing frames while the display sleeps
+  — the viewer then sees the last frame.
 - **macOS launchd agent** — `opacusr-agent service install` now works
   on macOS: it writes a per-user LaunchAgent
   (`~/Library/LaunchAgents/io.opacusr.agent.plist`, `RunAtLoad` +

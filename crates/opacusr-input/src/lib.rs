@@ -48,6 +48,10 @@ pub mod clipboard;
 /// grabs). Engaged by full-control sessions when `lock_input` is set.
 pub mod lock;
 
+/// Privacy mode v1: put the host's physical displays to sleep while a
+/// session is active (`privacy_mode`); capture keeps running.
+pub mod privacy;
+
 /// No-op injector (mobile viewer-side builds, tests).
 #[derive(Debug, Default)]
 pub struct NullInjector;

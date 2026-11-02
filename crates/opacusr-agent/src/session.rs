@@ -60,6 +60,13 @@ pub struct SessionConfig {
     /// full control (TeamViewer-style; view-only sessions never lock,
     /// fail-open when the platform cannot take the lock).
     pub lock_input: bool,
+    /// Privacy mode v1: put the host's physical displays to sleep while
+    /// a session is active (Windows `SC_MONITORPOWER`, X11 `xset dpms
+    /// force off`, macOS `pmset displaysleepnow`). Capture keeps running
+    /// — the viewer still sees the desktop — but a bystander sees a dark
+    /// monitor. Fail-open: when the platform cannot blank (Wayland,
+    /// headless) the session continues unblanked with a notice.
+    pub privacy_mode: bool,
     /// Optional RFC 6238 secret (base32). When set, viewers must present
     /// a valid TOTP code in addition to the password.
     pub totp_secret: Option<String>,
@@ -155,6 +162,25 @@ impl SessionHost {
                 }
                 Err(e) => {
                     let _ = events.send(HostEvent::Notice(format!("input lock unavailable: {e}")));
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        // Privacy mode: blank the physical displays while the session is
+        // active (capture keeps running). Same fail-open contract as the
+        // input lock; the guard wakes the displays on every exit path.
+        let _display_blank = if cfg.privacy_mode {
+            match opacusr_input::privacy::DisplayBlank::enable() {
+                Ok(blank) => {
+                    let _ = events.send(HostEvent::Notice("privacy mode: displays blanked".into()));
+                    Some(blank)
+                }
+                Err(e) => {
+                    let _ =
+                        events.send(HostEvent::Notice(format!("privacy mode unavailable: {e}")));
                     None
                 }
             }

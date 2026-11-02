@@ -46,6 +46,10 @@ enum Cmd {
         /// control (overrides config; view-only sessions never lock).
         #[arg(long)]
         lock_input: bool,
+        /// Privacy mode: blank the physical displays while a session is
+        /// active (overrides config `privacy_mode`; capture keeps running).
+        #[arg(long)]
+        privacy: bool,
         /// Record every accepted session to an MP4 video file
         /// (overrides config; H.264 codec only).
         #[arg(long)]
@@ -132,6 +136,7 @@ async fn main() -> anyhow::Result<()> {
             capture,
             no_mdns,
             lock_input,
+            privacy,
             record,
             tunnel,
             proxy,
@@ -145,6 +150,7 @@ async fn main() -> anyhow::Result<()> {
                 capture,
                 no_mdns,
                 lock_input,
+                privacy,
                 record,
                 tunnel,
                 proxy,
@@ -166,7 +172,8 @@ async fn main() -> anyhow::Result<()> {
                     // console session: run the plain agent (config-only).
                     eprintln!("OpacusR agent (service session instance)");
                     run(
-                        None, None, false, false, false, None, false, false, false, None, None,
+                        None, None, false, false, false, None, false, false, false, false, None,
+                        None,
                     )
                     .await
                 } else {
@@ -198,6 +205,7 @@ async fn run(
     capture: Option<String>,
     no_mdns: bool,
     lock_input: bool,
+    privacy: bool,
     record: bool,
     tunnel: Option<String>,
     proxy: Option<String>,
@@ -214,6 +222,9 @@ async fn run(
     }
     if lock_input {
         cfg.lock_input = true;
+    }
+    if privacy {
+        cfg.privacy_mode = true;
     }
     if record {
         cfg.record = true;
@@ -263,6 +274,11 @@ async fn run(
     if cfg.lock_input {
         eprintln!(
             "Input lock: the host keyboard/mouse will be locked while a viewer has full control."
+        );
+    }
+    if cfg.privacy_mode {
+        eprintln!(
+            "Privacy mode: displays will be blanked while a session is active (capture keeps running)."
         );
     }
     if cfg.record {
@@ -518,6 +534,10 @@ fn config_info() -> anyhow::Result<()> {
         "lan:         {} (port {})",
         if cfg.allow_lan { "on" } else { "off" },
         cfg.lan_port
+    );
+    println!(
+        "privacy:     {}",
+        if cfg.privacy_mode { "on" } else { "off" }
     );
     println!(
         "proxy:       {}",

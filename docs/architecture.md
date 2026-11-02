@@ -50,6 +50,13 @@ The Windows service (`opacusr-agent service install`, SCM name `OpacusRAgent`) i
 
 macOS needs no such topology: `service install` registers a per-user **launchd LaunchAgent** (`io.opacusr.agent`, `RunAtLoad` + `KeepAlive`, logs in `~/Library/Logs/opacusr-agent.log`). The agent process already lives in the interactive GUI session, so the same code paths serve capture/input; the only platform-specific step is the one-time TCC grant (Screen Recording, Accessibility) for the binary.
 
+### 2.2 Session host policies: input lock & privacy mode
+
+Two opt-in per-session guards live in `opacusr-input` and are engaged by `SessionHost::run_session` on every accepted session (RAII — released on every exit path, fail-open with a `Notice` when the platform refuses):
+
+* **`lock_input`** (`opacusr-input::lock::HostInputLock`) — swallows the host's *physical* keyboard/mouse while the viewer has full control (Windows low-level hooks dropping non-injected events; Linux `EVIOCGRAB` on the input devices; view-only sessions never lock).
+* **`privacy_mode`** (`opacusr-input::privacy::DisplayBlank`) — puts the physical displays to sleep for the duration of the session while capture keeps running: Windows `SC_MONITORPOWER` broadcast, Linux/X11 `xset dpms force off`, macOS `pmset displaysleepnow`; dropping the last guard wakes the display again (`SC_MONITORPOWER -1` / `xset dpms force on` / `caffeinate -u`). Concurrent sessions share one refcounted guard.
+
 ## 3. Session data flow (viewer side)
 
 `opacusr-client/src/session.rs` (`SessionClient`) mirrors the host: a command channel (`Command`) in, an event channel (`ClientEvent`) out, one `run` loop consuming both plus transport inbound. The GUI (`opacusr-app/src/view.rs`) renders frames as they arrive, scales remote pixels to the widget, converts local widget input to `MouseMove/MouseButton/MouseWheel/KeyEvent` messages and forwards chat/files/terminal traffic. `Ping/Pong` round-trips are timed to display RTT.

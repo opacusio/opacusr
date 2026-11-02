@@ -143,6 +143,12 @@ pub struct AgentConfig {
     /// passes; view-only sessions never lock; Ctrl+Alt+Del stays available
     /// on Windows. Best-effort per platform (docs/platforms.md); fail-open.
     pub lock_input: bool,
+    /// Privacy mode v1: blank the physical displays while a session is
+    /// active (`privacy_mode`; Windows SC_MONITORPOWER / X11 `xset dpms
+    /// force off` / macOS `pmset displaysleepnow`). Capture keeps
+    /// running — viewers still see the desktop; a bystander sees a dark
+    /// monitor. Best-effort per platform; fail-open with a notice.
+    pub privacy_mode: bool,
     /// Advertise the signaling endpoint over mDNS (`_opacusr._tcp.local.`)
     /// so viewers on this network can discover the host without typing a
     /// server URL (Phase 3, docs/serverless.md). Best-effort; turn off
@@ -201,6 +207,7 @@ impl Default for AgentConfig {
             signal_listen: false,
             signal_listen_port: 8080,
             lock_input: false,
+            privacy_mode: false,
             mdns_advertise: true,
             totp_secret: None,
             record: false,
@@ -444,6 +451,18 @@ mod tests {
         let back: AgentConfig = toml::from_str(&text).unwrap();
         assert!(back.allow_lan);
         assert_eq!(back.lan_port, 54001);
+    }
+
+    #[test]
+    fn privacy_mode_defaults_off_and_round_trips() {
+        assert!(!AgentConfig::default().privacy_mode);
+        let cfg = AgentConfig {
+            privacy_mode: true,
+            ..Default::default()
+        };
+        let text = toml::to_string_pretty(&cfg).unwrap();
+        let back: AgentConfig = toml::from_str(&text).unwrap();
+        assert!(back.privacy_mode);
     }
 
     #[test]
