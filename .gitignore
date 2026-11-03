@@ -16,5 +16,7 @@ Thumbs.db
 # Build artifacts of packaging
 /dist/
 *.zip
+# ...except published release bundles in the download/ folder
+!download/*.zip
 # local one-off helper scripts
 *.ps1
