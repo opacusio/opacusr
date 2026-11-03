@@ -1,0 +1,15 @@
+# windows-gnu cross builds (sandbox): link libgcc/libstdc++ statically so the
+# exes do not depend on libstdc++-6.dll / libgcc_s_seh-1.dll / libwinpthread-1.dll
+# (not shipped in the zip; plain Windows has none of them). System DLLs
+# (msvcrt.dll, ws2_32.dll, ...) stay dynamic — they are present on every Windows.
+#
+# openh264-sys2 emits `cargo:rustc-link-lib=stdc++` (dynamic), which lands after
+# rustc's `-Wl,-Bdynamic` group and would resolve to libstdc++.dll.a (import lib
+# -> DLL dependency). Shadowing it with a static copy named libstdc++.dll.a in a
+# -L dir searched first forces the static archive regardless of arg order.
+# The dir only exists in the cross-compile sandbox; elsewhere -L is a no-op.
+[target.x86_64-pc-windows-gnu]
+rustflags = [
+    "-C", "link-arg=-static",
+    "-C", "link-arg=-L/home/z/my-project/mingw-root/usr/x86_64-w64-mingw32/static-prefer",
+]

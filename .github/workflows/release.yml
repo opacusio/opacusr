@@ -124,6 +124,10 @@ jobs:
           key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
       - name: Build
         run: cargo build --release -p opacusr-app -p opacusr-agent -p opacusr-server
+        env:
+          # Static CRT: the exes must not require the VC++ redistributable
+          # (vcruntime140.dll) on clean Windows installs.
+          RUSTFLAGS: -C target-feature=+crt-static
       - name: Test
         run: cargo test --workspace
       - name: Smoke test

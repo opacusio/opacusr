@@ -83,6 +83,23 @@ SemVer-ish (breaking protocol changes bump the minor until 1.0).
   remains in the lockfile is pulled only transitively by `webrtc →
   dtls` and no longer touches the wire.
 
+### Fixed
+
+- **windows-gnu builds are self-contained** — the cross-built exes
+  linked `libstdc++-6.dll` dynamically (pulled in by OpenH264's C++
+  runtime) and failed to start on machines without MinGW ("the code
+  execution cannot proceed because libstdc++-6.dll is missing"). The
+  windows-gnu target now links `libgcc`/`libstdc++` statically
+  (`.cargo/config.toml`), so only system Windows DLLs are imported.
+  Additionally, the windows-gnu artifact now carries the full set
+  incl. the GUI `opacusr.exe`: Opus is cross-built as a static
+  library (prebuilt via `OPUS_LIB_DIR`/`OPUS_STATIC`, see
+  `scripts/build_opus_mingw.sh` in the maintainer sandbox) instead of
+  the broken in-crate autogen path, so the agent builds with audio and
+  the GUI builds at all under mingw. Future CI tag builds (MSVC) link
+  the CRT statically (`+crt-static`), removing the
+  VC++ redist requirement there too.
+
 ## [0.10.0] — 2026-11-02
 
 ### Added

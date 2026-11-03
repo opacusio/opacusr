@@ -190,8 +190,13 @@ Optional builds:
 
 ```bash
 cargo build --release --features opacusr-capture/pipewire   # Wayland via the portal (needs libpipewire-0.3-dev, libspa-0.2-dev)
-cargo build --release --no-default-features                 # no audio (e.g. windows-gnu cross builds)
+cargo build --release --no-default-features                 # no audio (quick builds on hosts without ALSA headers)
 ```
+
+For the `x86_64-pc-windows-gnu` cross build, `.cargo/config.toml` links
+`libgcc`/`libstdc++` statically (no MinGW runtime DLLs needed on the target).
+Audio there requires a prebuilt static Opus: set `OPUS_LIB_DIR=<dir>` and
+`OPUS_STATIC=1` (audiopus_sys then skips its autogen path).
 
 ## Architecture in one minute
 
