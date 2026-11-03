@@ -13,8 +13,10 @@ fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("OpacusR")
-            .with_inner_size([1100.0, 760.0])
-            .with_min_inner_size([720.0, 520.0])
+            // TeamViewer keeps its main window compact; sessions still
+            // run fullscreen when needed (F11).
+            .with_inner_size([960.0, 640.0])
+            .with_min_inner_size([760.0, 560.0])
             .with_icon(icon()),
         ..Default::default()
     };

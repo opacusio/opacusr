@@ -7,16 +7,14 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use opacusr_agent::config::AgentConfig;
 use opacusr_agent::service::{AgentEvent, AgentService, SessionDecision};
 use opacusr_agent::session::HostCommand;
-use opacusr_client::addressbook::{
-    fmt_duration, fmt_ts, now_secs, AddressBook, HistoryEntry, Outcome,
-};
+use opacusr_client::addressbook::{now_secs, AddressBook, HistoryEntry, Outcome};
 use opacusr_client::session::{
     ClientEvent, Command, SessionClient, SessionSettings, TransportChoice,
 };
 use opacusr_proto::message::CodecId;
 use opacusr_proto::PeerId;
 
-use crate::{host_panel, spawn_runtime, theme, view};
+use crate::{contacts, home, host_panel, settings, spawn_runtime, theme, view};
 
 /// One cached remote-cursor shape (bitmap + geometry for the overlay).
 pub struct RemoteCursor {
@@ -198,17 +196,36 @@ pub struct App {
     /// mDNS browser for LAN discovery (Phase 3); refreshed on a
     /// background thread for the whole app lifetime.
     pub discovery: crate::discovery::Discovery,
-    // Address-book form state.
-    new_label: String,
-    new_target: String,
-    new_endpoint: String,
-    show_history: bool,
+    // Address-book form state (shared with the contacts window).
+    pub(crate) new_label: String,
+    pub(crate) new_target: String,
+    pub(crate) new_endpoint: String,
+    /// «История подключений» window open (AnyDesk-style log).
+    pub(crate) show_history: bool,
+    /// «Контакты» window open (AnyDesk-style device panel).
+    pub(crate) show_contacts: bool,
+    /// Settings window open (TeamViewer-style «Options»). All settings
+    /// live here — the home screen shows none.
+    pub(crate) show_settings: bool,
+    /// Selected section of the settings window.
+    pub(crate) settings_nav: settings::SettingsTab,
+    /// Contact-search scratch field (contacts window).
+    pub(crate) contacts_search: String,
+    /// Whether the «add contact» form starts expanded.
+    pub(crate) add_contact_open: bool,
     /// Contact id currently being renamed (inline editor in the list).
-    renaming_id: Option<String>,
+    pub(crate) renaming_id: Option<String>,
     /// Scratch buffer for the inline rename editor.
-    rename_label: String,
+    pub(crate) rename_label: String,
     /// Whether the inline rename editor already grabbed keyboard focus.
-    rename_focused: bool,
+    pub(crate) rename_focused: bool,
+    /// Unattended password shown in the host card (TeamViewer-style);
+    /// cached so the keychain is not queried every frame.
+    pub(crate) unattended_display: Option<String>,
+    /// Host-card password reveal toggle.
+    pub(crate) reveal_password: bool,
+    /// Host-card inline password-change editor open.
+    pub(crate) password_editing: bool,
     /// History ts of the current connection attempt.
     cur_hist_ts: Option<u64>,
     /// Unix ts when the current attempt actually connected (for duration).
@@ -229,7 +246,7 @@ impl App {
         } else {
             config.name.clone()
         };
-        Self {
+        let mut app = Self {
             ctx,
             rt: spawn_runtime(),
             server_url: config.server_url.clone(),
@@ -254,19 +271,40 @@ impl App {
             new_target: String::new(),
             new_endpoint: String::new(),
             show_history: false,
+            show_contacts: false,
+            show_settings: false,
+            settings_nav: settings::SettingsTab::General,
+            contacts_search: String::new(),
+            add_contact_open: false,
             renaming_id: None,
             rename_label: String::new(),
             rename_focused: false,
+            unattended_display: None,
+            reveal_password: false,
+            password_editing: false,
             cur_hist_ts: None,
             cur_connected_at: None,
-        }
+        };
+        app.refresh_unattended_display();
+        app
+    }
+
+    /// Reload the cached unattended password for the host card display.
+    /// Keychain first (its entry wins), config file as the fallback.
+    pub(crate) fn refresh_unattended_display(&mut self) {
+        self.unattended_display = if self.config.password_in_keychain {
+            opacusr_agent::keychain::load_password()
+                .unwrap_or_else(|_| self.config.password.clone())
+        } else {
+            self.config.password.clone()
+        };
     }
 
     // ------------------------------------------------------------------
     // Viewer
     // ------------------------------------------------------------------
 
-    fn connect_clicked(&mut self, label: Option<String>) {
+    pub(crate) fn connect_clicked(&mut self, label: Option<String>) {
         let input = self.peer_id_input.replace([' ', '-'], "");
         let password = self.password_input.clone();
         if password.is_empty() {
@@ -909,7 +947,8 @@ impl eframe::App for App {
             }
         }
 
-        // ---- top bar ----
+        // ---- top bar (TeamViewer-style toolbar: logo left, window
+        // opener icons right; no settings on the home screen itself) ----
         egui::TopBottomPanel::top("opacusr_top").show(ctx, |ui| {
             ui.add_space(6.0);
             ui.horizontal(|ui| {
@@ -920,20 +959,46 @@ impl eframe::App for App {
                         .color(theme::ACCENT),
                 );
                 ui.label(theme::bold("OpacusR").strong().size(18.0));
-                ui.label(
-                    egui::RichText::new("защищённый доступ к рабочему столу")
-                        .weak()
-                        .small(),
-                );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if self.session.is_some() && ui.button("⏹ Отключиться").clicked() {
                         self.disconnect_clicked();
                     }
-                    ui.label(egui::RichText::new(&self.status_message).weak().small());
+                    if self.session.is_none() {
+                        if ui
+                            .button("👥 Контакты")
+                            .on_hover_text("Контакты и устройства в сети (AnyDesk-стиль)")
+                            .clicked()
+                        {
+                            self.show_contacts = !self.show_contacts;
+                        }
+                        if ui
+                            .button("🕘 История")
+                            .on_hover_text("История подключений")
+                            .clicked()
+                        {
+                            self.show_history = !self.show_history;
+                        }
+                        if ui
+                            .button("⚙ Настройки")
+                            .on_hover_text("Все настройки — как в TeamViewer, в отдельном окне")
+                            .clicked()
+                        {
+                            self.show_settings = !self.show_settings;
+                        }
+                    }
                 });
             });
             ui.add_space(4.0);
         });
+
+        // Floating windows: settings (TeamViewer «Options»), contacts and
+        // history (AnyDesk panels). Home-screen only — a viewer session
+        // replaces the whole central area and hides the tool windows.
+        if self.session.is_none() {
+            settings::settings_window(ctx, self);
+            contacts::contacts_window(ctx, self);
+            contacts::history_window(ctx, self);
+        }
 
         // Incoming-session consent popup: visible on the home screen and
         // while watching a remote desktop (a host-side request must not
@@ -950,418 +1015,11 @@ impl eframe::App for App {
 }
 
 impl App {
-    /// Single merged home screen (the approved Rev-3 mockup): the
-    /// connect card on top, then this-computer (host), LAN discovery,
-    /// contacts and history — no tabs.
+    /// The TeamViewer-like home screen: just the two cards (allow
+    /// control / control a remote computer). Everything else — settings,
+    /// contacts, history — lives in its own window opened from the top
+    /// toolbar.
     fn home_ui(&mut self, ctx: &Context) {
-        egui::CentralPanel::default().show(ctx, |ui| {
-            egui::ScrollArea::vertical()
-                .auto_shrink(false)
-                .show(ui, |ui| {
-                    ui.add_space(10.0);
-                    ui.horizontal(|ui| {
-                        let w = ui.available_width();
-                        ui.add_space(((w - 880.0) / 2.0).max(0.0));
-                        ui.vertical(|ui| {
-                            ui.set_max_width(880.0_f32.min(w));
-                            self.connect_card(ui);
-                            ui.add_space(12.0);
-                            host_panel::host_card(ui, self);
-                            ui.add_space(12.0);
-                            self.discovered_card(ui);
-                            ui.add_space(12.0);
-                            self.book_card(ui);
-                            ui.add_space(10.0);
-                        });
-                    });
-                });
-        });
-    }
-
-    /// «Подключение»: remote ID + password, violet CTA, everything
-    /// secondary hidden behind «Доп. настройки» (Rev-3 mockup).
-    fn connect_card(&mut self, ui: &mut egui::Ui) {
-        theme::card(ui, |ui| {
-            theme::section(ui, "Подключение к удалённому компьютеру");
-            ui.add_space(10.0);
-            ui.horizontal(|ui| {
-                let btn_w = 180.0;
-                let field_w = (ui.available_width() - btn_w - 10.0).max(240.0);
-                ui.add_sized(
-                    [field_w, 30.0],
-                    egui::TextEdit::singleline(&mut self.peer_id_input)
-                        .font(egui::TextStyle::Monospace)
-                        .hint_text("9-значный ID (123 456 789) или ip:port для прямого LAN"),
-                );
-                if theme::accent_button(ui, "▶  Подключиться").clicked() {
-                    self.connect_clicked(None);
-                }
-            });
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                let w = ui.available_width();
-                ui.add_sized(
-                    [(w - 12.0) * 0.55, 26.0],
-                    egui::TextEdit::singleline(&mut self.password_input)
-                        .password(true)
-                        .hint_text("Пароль компьютера — задаётся в карточке «Этот компьютер»"),
-                );
-                ui.add_sized(
-                    [(w - 12.0) * 0.45, 26.0],
-                    egui::TextEdit::singleline(&mut self.totp_input)
-                        .hint_text("2FA-код — 6 цифр, если хост его требует"),
-                );
-            });
-            ui.add_space(4.0);
-            egui::CollapsingHeader::new(egui::RichText::new("Доп. настройки").color(theme::MUTED))
-                .default_open(false)
-                .show(ui, |ui| {
-                    egui::Grid::new("adv_grid")
-                        .num_columns(2)
-                        .spacing([12.0, 8.0])
-                        .show(ui, |ui| {
-                            ui.label("Сигнальный сервер");
-                            ui.vertical(|ui| {
-                                ui.add_sized(
-                                    [560.0, 24.0],
-                                    egui::TextEdit::singleline(&mut self.server_url)
-                                        .hint_text("wss://… — необязат., по умолчанию публичный"),
-                                );
-                                crate::hint(
-                                    ui,
-                                    "сервер знакомит участников; сам поток идёт напрямую (P2P)",
-                                );
-                            });
-                            ui.end_row();
-
-                            ui.label("Прокси");
-                            ui.vertical(|ui| {
-                                ui.add_sized(
-                                    [560.0, 24.0],
-                                    egui::TextEdit::singleline(&mut self.config.proxy).hint_text(
-                                        "socks5://user:pass@host:port или http://host:port — пусто = напрямую",
-                                    ),
-                                );
-                                crate::hint(
-                                    ui,
-                                    "маршрутизирует сигналинг и ретранслятор; ICE/UDP идёт напрямую",
-                                );
-                            });
-                            ui.end_row();
-
-                            ui.label("Транспорт");
-                            ui.horizontal(|ui| {
-                                ui.selectable_value(
-                                    &mut self.transport_choice,
-                                    TransportChoice::Auto,
-                                    "Авто (WebRTC → ретранслятор)",
-                                );
-                                ui.selectable_value(
-                                    &mut self.transport_choice,
-                                    TransportChoice::WebRtcOnly,
-                                    "WebRTC",
-                                );
-                                ui.selectable_value(
-                                    &mut self.transport_choice,
-                                    TransportChoice::RelayOnly,
-                                    "TCP-ретранслятор",
-                                );
-                            });
-                            ui.end_row();
-
-                            ui.label("Качество");
-                            ui.horizontal(|ui| {
-                                ui.add(egui::Slider::new(&mut self.fps, 1.0..=60.0).text("fps"));
-                                ui.add(
-                                    egui::Slider::new(&mut self.quality, 20.0..=95.0).text("jpeg"),
-                                );
-                                ui.add(
-                                    egui::Slider::new(&mut self.scale, 25.0..=100.0)
-                                        .text("масштаб %"),
-                                );
-                            });
-                            ui.end_row();
-
-                            ui.label("Имя в сети");
-                            ui.vertical(|ui| {
-                                ui.add_sized(
-                                    [280.0, 24.0],
-                                    egui::TextEdit::singleline(&mut self.display_name)
-                                        .hint_text(theme::machine_name()),
-                                );
-                                crate::hint(ui, "подставляется имя этого компьютера");
-                            });
-                            ui.end_row();
-                        });
-                });
-            ui.add_space(2.0);
-            crate::hint(
-                ui,
-                "Трафик шифруется сквозно (Argon2id + ChaCha20-Poly1305) поверх \
-                 WebRTC/DTLS; при заблокированном P2P — TCP-ретранслятор.",
-            );
-        });
-    }
-
-    // ------------------------------------------------------------------
-    // LAN discovery (mDNS)
-    // ------------------------------------------------------------------
-
-    /// «Найдено в этой сети» (mDNS): one «Использовать» button per host.
-    /// The button always fills the signaling URL; a direct-LAN `ip:port`
-    /// target is filled only when the ID field is empty (the user asked
-    /// for a specific host ID otherwise). Always visible — the mockup
-    /// keeps the "зачем" note even when nothing is discovered yet.
-    fn discovered_card(&mut self, ui: &mut egui::Ui) {
-        theme::card(ui, |ui| {
-            theme::section(ui, "Найдено в этой сети");
-            ui.add_space(6.0);
-            let hosts = self.discovery.snapshot();
-            if hosts.is_empty() {
-                ui.label(
-                    egui::RichText::new(
-                        "Пока никого — запущенные агенты в локальной сети появятся здесь автоматически.",
-                    )
-                    .weak()
-                    .small(),
-                );
-            }
-            for host in hosts {
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(&host.label).strong());
-                    ui.label(theme::mono(host.signal_url.clone()).weak().small());
-                    if ui
-                        .button("Использовать")
-                        .on_hover_text(
-                            "Подставить адрес из объявления этого хоста; \
-                             при пустом поле ID — также прямой LAN-адрес",
-                        )
-                        .clicked()
-                    {
-                        self.server_url = host.signal_url.clone();
-                        if self.peer_id_input.trim().is_empty() {
-                            if let Some(target) = &host.lan_target {
-                                self.peer_id_input = target.clone();
-                            }
-                        }
-                        self.status_message =
-                            format!("Используется найденный хост {}.", host.label);
-                    }
-                });
-            }
-            ui.add_space(4.0);
-            crate::hint(
-                ui,
-                "Зачем: «Использовать» подставляет адрес — соединение идёт напрямую по LAN, \
-                 без сигнального сервера. Анонсирует себя агент при включённом allow_lan (mDNS).",
-            );
-        });
-    }
-
-    // ------------------------------------------------------------------
-    // Address book + connection history
-    // ------------------------------------------------------------------
-
-    fn book_card(&mut self, ui: &mut egui::Ui) {
-        theme::card(ui, |ui| {
-            theme::section(ui, "Контакты и история");
-            ui.add_space(6.0);
-            self.book_list(ui);
-        });
-    }
-
-    fn book_list(&mut self, ui: &mut egui::Ui) {
-        egui::Grid::new("book_add_grid")
-            .num_columns(2)
-            .spacing([12.0, 6.0])
-            .show(ui, |ui| {
-                ui.label("Название");
-                ui.add_sized(
-                    [690.0, 24.0],
-                    egui::TextEdit::singleline(&mut self.new_label).hint_text("Мой ноутбук"),
-                );
-                ui.end_row();
-
-                ui.label("Адрес");
-                ui.add_sized(
-                    [690.0, 24.0],
-                    egui::TextEdit::singleline(&mut self.new_target)
-                        .hint_text("9-значный ID или ip:port"),
-                );
-                ui.end_row();
-
-                ui.label("Свой сервер");
-                ui.add_sized(
-                    [690.0, 24.0],
-                    egui::TextEdit::singleline(&mut self.new_endpoint).hint_text(
-                        "необязат. — сигнальный URL, который пробуется первым (wss://…/signal)",
-                    ),
-                );
-                ui.end_row();
-            });
-        if ui.button("💾 Сохранить контакт").clicked() {
-            let target = self.new_target.replace([' ', '-'], "");
-            if target.is_empty() {
-                self.status_message = "Контакту нужен адрес: 9-значный ID или ip:port".into();
-            } else {
-                let label = {
-                    let l = self.new_label.trim();
-                    if l.is_empty() {
-                        target.clone()
-                    } else {
-                        l.to_string()
-                    }
-                };
-                let endpoint = {
-                    let e = self.new_endpoint.trim();
-                    if e.is_empty() {
-                        None
-                    } else {
-                        Some(e.to_string())
-                    }
-                };
-                self.book.upsert(label, target, endpoint);
-                self.new_label.clear();
-                self.new_target.clear();
-                self.new_endpoint.clear();
-                self.status_message = "Contact saved.".into();
-                let _ = self.book.save();
-            }
-        }
-
-        ui.add_space(8.0);
-        if self.book.contacts().is_empty() {
-            crate::hint(ui, "Сохранённых контактов пока нет.");
-        } else {
-            let ids: Vec<String> = self
-                .book
-                .sorted_contacts()
-                .into_iter()
-                .map(|c| c.id)
-                .collect();
-            egui::ScrollArea::vertical()
-                .max_height(170.0)
-                .show(ui, |ui| {
-                    for id in ids {
-                        let Some(c) = self.book.contacts().iter().find(|c| c.id == id).cloned()
-                        else {
-                            continue;
-                        };
-                        ui.horizontal(|ui| {
-                            if ui
-                                .button(if c.favorite { "★" } else { "☆" })
-                                .on_hover_text("Favorite")
-                                .clicked()
-                            {
-                                self.book.set_favorite(&c.id, !c.favorite);
-                                let _ = self.book.save();
-                            }
-                            let renaming = self.renaming_id.as_deref() == Some(c.id.as_str());
-                            if renaming {
-                                // Inline rename editor: ✔/Enter applies, ✖ cancels.
-                                let resp = ui.add_sized(
-                                    [180.0, 22.0],
-                                    egui::TextEdit::singleline(&mut self.rename_label),
-                                );
-                                // Grab keyboard focus once, right after the
-                                // editor opens — then leave it alone so that
-                                // `lost_focus` can fire (Enter-to-apply).
-                                if !self.rename_focused {
-                                    resp.request_focus();
-                                    self.rename_focused = true;
-                                }
-                                let confirmed = (resp.lost_focus()
-                                    && ui.input(|i| i.key_pressed(egui::Key::Enter)))
-                                    || ui.button("✔").on_hover_text("Save name").clicked();
-                                if ui.button("✖").on_hover_text("Cancel").clicked() {
-                                    self.renaming_id = None;
-                                }
-                                if confirmed {
-                                    let name = self.rename_label.trim().to_string();
-                                    if self.book.rename(&c.id, &name) {
-                                        self.status_message = "Contact renamed.".into();
-                                        let _ = self.book.save();
-                                    } else {
-                                        self.status_message = "Name cannot be empty.".into();
-                                    }
-                                    self.renaming_id = None;
-                                }
-                            } else {
-                                ui.label(egui::RichText::new(&c.label).strong());
-                                ui.label(egui::RichText::new(&c.target).weak());
-                                if let Some(ep) = &c.endpoint {
-                                    ui.label(egui::RichText::new(ep).small().weak());
-                                }
-                                if ui.button("✎").on_hover_text("Rename").clicked() {
-                                    self.renaming_id = Some(c.id.clone());
-                                    self.rename_label = c.label.clone();
-                                    self.rename_focused = false;
-                                }
-                            }
-                            if ui.button("▶").on_hover_text("Connect").clicked() {
-                                if let Some(ep) = c.endpoint.clone() {
-                                    self.server_url = ep;
-                                }
-                                self.peer_id_input = c.target.clone();
-                                let label = c.label.clone();
-                                self.connect_clicked(Some(label));
-                            }
-                            if !renaming && ui.button("✕").on_hover_text("Remove").clicked() {
-                                self.book.remove(&c.id);
-                                let _ = self.book.save();
-                            }
-                        });
-                    }
-                });
-        }
-
-        ui.add_space(12.0);
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("История").strong());
-            if ui
-                .button(if self.show_history {
-                    "скрыть"
-                } else {
-                    "показать"
-                })
-                .clicked()
-            {
-                self.show_history = !self.show_history;
-            }
-            if self.show_history && ui.button("очистить").clicked() {
-                self.book.clear_history();
-                let _ = self.book.save();
-            }
-        });
-        if self.show_history {
-            if self.book.history().is_empty() {
-                crate::hint(ui, "Истории подключений пока нет.");
-            } else {
-                egui::ScrollArea::vertical()
-                    .max_height(140.0)
-                    .show(ui, |ui| {
-                        for h in self.book.history() {
-                            ui.horizontal(|ui| {
-                                ui.label(
-                                    egui::RichText::new(fmt_ts(h.ts)).weak().small().monospace(),
-                                );
-                                if let Some(label) = &h.label {
-                                    ui.label(egui::RichText::new(label).small());
-                                }
-                                ui.label(egui::RichText::new(&h.target).small());
-                                let dot = match h.outcome {
-                                    Outcome::Connected => theme::dot("● подключено", theme::TEAL),
-                                    Outcome::Failed => theme::dot("● не удалось", theme::DANGER),
-                                    Outcome::Unknown => egui::RichText::new("● —").weak(),
-                                };
-                                ui.label(dot.small());
-                                if let Some(d) = h.duration_secs {
-                                    ui.label(egui::RichText::new(fmt_duration(d)).weak().small());
-                                }
-                            });
-                        }
-                    });
-            }
-        }
+        home::home_ui(ctx, self);
     }
 }
