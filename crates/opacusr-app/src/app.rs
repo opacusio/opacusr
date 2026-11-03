@@ -16,14 +16,7 @@ use opacusr_client::session::{
 use opacusr_proto::message::CodecId;
 use opacusr_proto::PeerId;
 
-use crate::{host_panel, spawn_runtime, view};
-
-/// Which tab is active on the home screen.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Tab {
-    Connect,
-    Host,
-}
+use crate::{host_panel, spawn_runtime, theme, view};
 
 /// One cached remote-cursor shape (bitmap + geometry for the overlay).
 pub struct RemoteCursor {
@@ -186,7 +179,6 @@ pub struct App {
     pub quality: f32,
     pub scale: f32,
 
-    tab: Tab,
     session: Option<SessionHandle>,
     pub(crate) host: Option<HostHandle>,
     host_shutdown: Option<tokio::sync::watch::Sender<bool>>,
@@ -227,7 +219,16 @@ impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let ctx = cc.egui_ctx.clone();
         let config = AgentConfig::load();
-        let display_name = config.name.clone();
+        // «Имя в сети»: the machine name by default (Rev-3 mockup),
+        // editable; a user-customized config name wins.
+        let env_user = std::env::var("USERNAME")
+            .or_else(|_| std::env::var("USER"))
+            .unwrap_or_default();
+        let display_name = if config.name.trim().is_empty() || config.name == env_user {
+            theme::machine_name()
+        } else {
+            config.name.clone()
+        };
         Self {
             ctx,
             rt: spawn_runtime(),
@@ -239,13 +240,12 @@ impl App {
             fps: config.fps as f32,
             quality: config.jpeg_quality as f32,
             scale: config.scale_percent as f32,
-            tab: Tab::Connect,
             session: None,
             host: None,
             host_shutdown: None,
             host_consent_rx: None,
             config,
-            status_message: "Ready.".into(),
+            status_message: "Готово.".into(),
             host_password_input: String::new(),
             totp_input: String::new(),
             book: AddressBook::load(),
@@ -270,7 +270,7 @@ impl App {
         let input = self.peer_id_input.replace([' ', '-'], "");
         let password = self.password_input.clone();
         if password.is_empty() {
-            self.status_message = "Enter the host password".into();
+            self.status_message = "Введите пароль компьютера".into();
             return;
         }
 
@@ -356,7 +356,7 @@ impl App {
             let host_id: PeerId = match input.parse() {
                 Ok(v) if opacusr_proto::is_valid_peer_id(v) => v,
                 _ => {
-                    self.status_message = "Enter a valid 9-digit host ID or ip:port".into();
+                    self.status_message = "Введите корректный 9-значный ID или ip:port".into();
                     return;
                 }
             };
@@ -464,7 +464,7 @@ impl App {
         }
         self.finish_attempt();
         self.session = None;
-        self.status_message = "Disconnected.".into();
+        self.status_message = "Отключено.".into();
     }
 
     /// Finalize the history entry of the current attempt, if any.
@@ -526,11 +526,10 @@ impl App {
         self.host_consent_rx = Some(consent_rx);
         self.host_shutdown = Some(shutdown_tx);
         self.status_message = if unattended {
-            "Agent started (unattended mode).".into()
+            "Агент запущен (режим без присмотра).".into()
         } else {
-            "Agent started (attended: confirm each session).".into()
+            "Агент запущен (каждое подключение подтверждается вручную).".into()
         };
-        self.tab = Tab::Host;
     }
 
     pub(crate) fn host_stop_clicked(&mut self) {
@@ -914,140 +913,192 @@ impl eframe::App for App {
         egui::TopBottomPanel::top("opacusr_top").show(ctx, |ui| {
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                ui.heading("🟣 OpacusR");
-                ui.separator();
-                if self.session.is_none() {
-                    ui.selectable_value(&mut self.tab, Tab::Connect, "Connect");
-                    ui.selectable_value(&mut self.tab, Tab::Host, "Host");
-                }
-                if self.session.is_some() && ui.button("⏹ Disconnect").clicked() {
-                    self.disconnect_clicked();
-                }
+                ui.label(
+                    egui::RichText::new("●")
+                        .strong()
+                        .size(18.0)
+                        .color(theme::ACCENT),
+                );
+                ui.label(theme::bold("OpacusR").strong().size(18.0));
+                ui.label(
+                    egui::RichText::new("защищённый доступ к рабочему столу")
+                        .weak()
+                        .small(),
+                );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if self.session.is_some() && ui.button("⏹ Отключиться").clicked() {
+                        self.disconnect_clicked();
+                    }
                     ui.label(egui::RichText::new(&self.status_message).weak().small());
                 });
             });
             ui.add_space(4.0);
         });
 
+        // Incoming-session consent popup: visible on the home screen and
+        // while watching a remote desktop (a host-side request must not
+        // get lost behind a viewer session).
+        host_panel::consent_window(ctx, self);
+
         if let Some(session) = self.session.as_mut() {
             view::session_ui(ctx, session, &mut self.config);
             return;
         }
 
-        match self.tab {
-            Tab::Connect => self.connect_tab(ctx),
-            Tab::Host => host_panel::host_ui(ctx, self),
-        }
+        self.home_ui(ctx);
     }
 }
 
 impl App {
-    fn connect_tab(&mut self, ctx: &Context) {
+    /// Single merged home screen (the approved Rev-3 mockup): the
+    /// connect card on top, then this-computer (host), LAN discovery,
+    /// contacts and history — no tabs.
+    fn home_ui(&mut self, ctx: &Context) {
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.add_space(16.0);
-            ui.horizontal(|ui| {
-                ui.add_space(80.0);
-                egui::Grid::new("connect_grid")
-                    .num_columns(2)
-                    .spacing([12.0, 10.0])
-                    .show(ui, |ui| {
-                        ui.label(egui::RichText::new("Signaling server").strong());
-                        ui.add_sized([430.0, 26.0], egui::TextEdit::singleline(&mut self.server_url));
-                        ui.end_row();
-
-                        ui.label(egui::RichText::new("Host ID").strong());
-                        ui.horizontal(|ui| {
-                            ui.add_sized(
-                                [200.0, 26.0],
-                                egui::TextEdit::singleline(&mut self.peer_id_input)
-                                    .hint_text("123 456 789 or ip:port"),
-                            );
-                            crate::hint(ui, "9-digit ID, or ip:port for LAN");
+            egui::ScrollArea::vertical()
+                .auto_shrink(false)
+                .show(ui, |ui| {
+                    ui.add_space(10.0);
+                    ui.horizontal(|ui| {
+                        let w = ui.available_width();
+                        ui.add_space(((w - 880.0) / 2.0).max(0.0));
+                        ui.vertical(|ui| {
+                            ui.set_max_width(880.0_f32.min(w));
+                            self.connect_card(ui);
+                            ui.add_space(12.0);
+                            host_panel::host_card(ui, self);
+                            ui.add_space(12.0);
+                            self.discovered_card(ui);
+                            ui.add_space(12.0);
+                            self.book_card(ui);
+                            ui.add_space(10.0);
                         });
-                        ui.end_row();
-
-                        ui.label(egui::RichText::new("Password").strong());
-                        ui.add_sized(
-                            [430.0, 26.0],
-                            egui::TextEdit::singleline(&mut self.password_input).password(true),
-                        );
-                        ui.end_row();
-
-                        ui.label(egui::RichText::new("2FA code").strong());
-                        ui.add_sized(
-                            [430.0, 26.0],
-                            egui::TextEdit::singleline(&mut self.totp_input)
-                                .hint_text("6 digits — only if the host requires it"),
-                        );
-                        ui.end_row();
-
-                        ui.label(egui::RichText::new("Your name").strong());
-                        ui.add_sized([430.0, 26.0], egui::TextEdit::singleline(&mut self.display_name));
-                        ui.end_row();
-
-                        ui.label(egui::RichText::new("Proxy").strong());
-                        ui.horizontal(|ui| {
-                            ui.add_sized(
-                                [430.0, 26.0],
-                                egui::TextEdit::singleline(&mut self.config.proxy).hint_text(
-                                    "socks5://user:pass@host:port or http://host:port — empty = direct",
-                                ),
-                            );
-                            crate::hint(ui, "routes signaling + relay; ICE/UDP stays direct");
-                        });
-                        ui.end_row();
-
-                        ui.label(egui::RichText::new("Transport").strong());
-                        ui.horizontal(|ui| {
-                            ui.selectable_value(
-                                &mut self.transport_choice,
-                                TransportChoice::Auto,
-                                "Auto (WebRTC → relay)",
-                            );
-                            ui.selectable_value(&mut self.transport_choice, TransportChoice::WebRtcOnly, "WebRTC");
-                            ui.selectable_value(&mut self.transport_choice, TransportChoice::RelayOnly, "TCP relay");
-                        });
-                        ui.end_row();
-
-                        ui.label(egui::RichText::new("Quality").strong());
-                        ui.horizontal(|ui| {
-                            ui.add(egui::Slider::new(&mut self.fps, 1.0..=60.0).text("fps"));
-                            ui.add(egui::Slider::new(&mut self.quality, 20.0..=95.0).text("jpeg"));
-                            ui.add(egui::Slider::new(&mut self.scale, 25.0..=100.0).text("scale %"));
-                        });
-                        ui.end_row();
                     });
-            });
+                });
+        });
+    }
 
-            ui.add_space(18.0);
+    /// «Подключение»: remote ID + password, violet CTA, everything
+    /// secondary hidden behind «Доп. настройки» (Rev-3 mockup).
+    fn connect_card(&mut self, ui: &mut egui::Ui) {
+        theme::card(ui, |ui| {
+            theme::section(ui, "Подключение к удалённому компьютеру");
+            ui.add_space(10.0);
             ui.horizontal(|ui| {
-                ui.add_space(80.0);
-                let connect = ui.add(
-                    egui::Button::new(egui::RichText::new("▶  Connect").size(18.0))
-                        .min_size([160.0, 40.0].into()),
+                let btn_w = 180.0;
+                let field_w = (ui.available_width() - btn_w - 10.0).max(240.0);
+                ui.add_sized(
+                    [field_w, 30.0],
+                    egui::TextEdit::singleline(&mut self.peer_id_input)
+                        .font(egui::TextStyle::Monospace)
+                        .hint_text("9-значный ID (123 456 789) или ip:port для прямого LAN"),
                 );
-                if connect.clicked() {
+                if theme::accent_button(ui, "▶  Подключиться").clicked() {
                     self.connect_clicked(None);
                 }
             });
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                let w = ui.available_width();
+                ui.add_sized(
+                    [(w - 12.0) * 0.55, 26.0],
+                    egui::TextEdit::singleline(&mut self.password_input)
+                        .password(true)
+                        .hint_text("Пароль компьютера — задаётся в карточке «Этот компьютер»"),
+                );
+                ui.add_sized(
+                    [(w - 12.0) * 0.45, 26.0],
+                    egui::TextEdit::singleline(&mut self.totp_input)
+                        .hint_text("2FA-код — 6 цифр, если хост его требует"),
+                );
+            });
+            ui.add_space(4.0);
+            egui::CollapsingHeader::new(egui::RichText::new("Доп. настройки").color(theme::MUTED))
+                .default_open(false)
+                .show(ui, |ui| {
+                    egui::Grid::new("adv_grid")
+                        .num_columns(2)
+                        .spacing([12.0, 8.0])
+                        .show(ui, |ui| {
+                            ui.label("Сигнальный сервер");
+                            ui.vertical(|ui| {
+                                ui.add_sized(
+                                    [560.0, 24.0],
+                                    egui::TextEdit::singleline(&mut self.server_url)
+                                        .hint_text("wss://… — необязат., по умолчанию публичный"),
+                                );
+                                crate::hint(
+                                    ui,
+                                    "сервер знакомит участников; сам поток идёт напрямую (P2P)",
+                                );
+                            });
+                            ui.end_row();
 
-            ui.add_space(12.0);
-            ui.separator();
-            self.discovered_ui(ui);
+                            ui.label("Прокси");
+                            ui.vertical(|ui| {
+                                ui.add_sized(
+                                    [560.0, 24.0],
+                                    egui::TextEdit::singleline(&mut self.config.proxy).hint_text(
+                                        "socks5://user:pass@host:port или http://host:port — пусто = напрямую",
+                                    ),
+                                );
+                                crate::hint(
+                                    ui,
+                                    "маршрутизирует сигналинг и ретранслятор; ICE/UDP идёт напрямую",
+                                );
+                            });
+                            ui.end_row();
 
-            ui.add_space(16.0);
-            ui.separator();
-            self.book_ui(ui);
+                            ui.label("Транспорт");
+                            ui.horizontal(|ui| {
+                                ui.selectable_value(
+                                    &mut self.transport_choice,
+                                    TransportChoice::Auto,
+                                    "Авто (WebRTC → ретранслятор)",
+                                );
+                                ui.selectable_value(
+                                    &mut self.transport_choice,
+                                    TransportChoice::WebRtcOnly,
+                                    "WebRTC",
+                                );
+                                ui.selectable_value(
+                                    &mut self.transport_choice,
+                                    TransportChoice::RelayOnly,
+                                    "TCP-ретранслятор",
+                                );
+                            });
+                            ui.end_row();
 
-            ui.add_space(16.0);
-            ui.separator();
-            ui.label(egui::RichText::new("How it works").strong());
+                            ui.label("Качество");
+                            ui.horizontal(|ui| {
+                                ui.add(egui::Slider::new(&mut self.fps, 1.0..=60.0).text("fps"));
+                                ui.add(
+                                    egui::Slider::new(&mut self.quality, 20.0..=95.0).text("jpeg"),
+                                );
+                                ui.add(
+                                    egui::Slider::new(&mut self.scale, 25.0..=100.0)
+                                        .text("масштаб %"),
+                                );
+                            });
+                            ui.end_row();
+
+                            ui.label("Имя в сети");
+                            ui.vertical(|ui| {
+                                ui.add_sized(
+                                    [280.0, 24.0],
+                                    egui::TextEdit::singleline(&mut self.display_name)
+                                        .hint_text(theme::machine_name()),
+                                );
+                                crate::hint(ui, "подставляется имя этого компьютера");
+                            });
+                            ui.end_row();
+                        });
+                });
+            ui.add_space(2.0);
             crate::hint(
                 ui,
-                "Run `opacusr-agent run` (or the Host tab) on the remote machine — it shows a 9-digit ID.\n\
-                 Type that ID + the host password here. Traffic is E2E-encrypted (Argon2id + ChaCha20-Poly1305)\n\
-                 over WebRTC/DTLS, with a TCP relay fallback when direct P2P is blocked.",
+                "Трафик шифруется сквозно (Argon2id + ChaCha20-Poly1305) поверх \
+                 WebRTC/DTLS; при заблокированном P2P — TCP-ретранслятор.",
             );
         });
     }
@@ -1056,77 +1107,102 @@ impl App {
     // LAN discovery (mDNS)
     // ------------------------------------------------------------------
 
-    /// Discovered hosts on this network: one Use button per host. The
-    /// button always fills the signaling URL; a direct-LAN `ip:port`
+    /// «Найдено в этой сети» (mDNS): one «Использовать» button per host.
+    /// The button always fills the signaling URL; a direct-LAN `ip:port`
     /// target is filled only when the ID field is empty (the user asked
-    /// for a specific host ID otherwise).
-    fn discovered_ui(&mut self, ui: &mut egui::Ui) {
-        let hosts = self.discovery.snapshot();
-        if hosts.is_empty() {
-            return;
-        }
-        ui.label(egui::RichText::new("Discovered on this network").strong());
-        for host in hosts {
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(&host.label).strong());
-                ui.label(egui::RichText::new(&host.signal_url).weak().small());
-                if ui
-                    .button("Use")
-                    .on_hover_text(
-                        "Fill the server URL from this host's advertisement; \
-                         when the ID field is empty, also fill a direct LAN target",
+    /// for a specific host ID otherwise). Always visible — the mockup
+    /// keeps the "зачем" note even when nothing is discovered yet.
+    fn discovered_card(&mut self, ui: &mut egui::Ui) {
+        theme::card(ui, |ui| {
+            theme::section(ui, "Найдено в этой сети");
+            ui.add_space(6.0);
+            let hosts = self.discovery.snapshot();
+            if hosts.is_empty() {
+                ui.label(
+                    egui::RichText::new(
+                        "Пока никого — запущенные агенты в локальной сети появятся здесь автоматически.",
                     )
-                    .clicked()
-                {
-                    self.server_url = host.signal_url.clone();
-                    if self.peer_id_input.trim().is_empty() {
-                        if let Some(target) = &host.lan_target {
-                            self.peer_id_input = target.clone();
+                    .weak()
+                    .small(),
+                );
+            }
+            for host in hosts {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(&host.label).strong());
+                    ui.label(theme::mono(host.signal_url.clone()).weak().small());
+                    if ui
+                        .button("Использовать")
+                        .on_hover_text(
+                            "Подставить адрес из объявления этого хоста; \
+                             при пустом поле ID — также прямой LAN-адрес",
+                        )
+                        .clicked()
+                    {
+                        self.server_url = host.signal_url.clone();
+                        if self.peer_id_input.trim().is_empty() {
+                            if let Some(target) = &host.lan_target {
+                                self.peer_id_input = target.clone();
+                            }
                         }
+                        self.status_message =
+                            format!("Используется найденный хост {}.", host.label);
                     }
-                    self.status_message = format!("Using discovered host {}.", host.label);
-                }
-            });
-        }
+                });
+            }
+            ui.add_space(4.0);
+            crate::hint(
+                ui,
+                "Зачем: «Использовать» подставляет адрес — соединение идёт напрямую по LAN, \
+                 без сигнального сервера. Анонсирует себя агент при включённом allow_lan (mDNS).",
+            );
+        });
     }
 
     // ------------------------------------------------------------------
     // Address book + connection history
     // ------------------------------------------------------------------
 
-    fn book_ui(&mut self, ui: &mut egui::Ui) {
-        ui.label(egui::RichText::new("Address book").strong());
+    fn book_card(&mut self, ui: &mut egui::Ui) {
+        theme::card(ui, |ui| {
+            theme::section(ui, "Контакты и история");
+            ui.add_space(6.0);
+            self.book_list(ui);
+        });
+    }
+
+    fn book_list(&mut self, ui: &mut egui::Ui) {
         egui::Grid::new("book_add_grid")
             .num_columns(2)
             .spacing([12.0, 6.0])
             .show(ui, |ui| {
-                ui.label("Label");
+                ui.label("Название");
                 ui.add_sized(
-                    [430.0, 24.0],
-                    egui::TextEdit::singleline(&mut self.new_label).hint_text("My laptop"),
+                    [690.0, 24.0],
+                    egui::TextEdit::singleline(&mut self.new_label).hint_text("Мой ноутбук"),
                 );
                 ui.end_row();
 
-                ui.label("Target");
+                ui.label("Адрес");
                 ui.add_sized(
-                    [430.0, 24.0],
+                    [690.0, 24.0],
                     egui::TextEdit::singleline(&mut self.new_target)
-                        .hint_text("9-digit ID or ip:port"),
+                        .hint_text("9-значный ID или ip:port"),
                 );
                 ui.end_row();
 
-                ui.label("Endpoint");
+                ui.label("Свой сервер");
                 ui.add_sized(
-                    [430.0, 24.0],
-                    egui::TextEdit::singleline(&mut self.new_endpoint)
-                        .hint_text("optional — signaling URL tried first (wss://…/signal)"),
+                    [690.0, 24.0],
+                    egui::TextEdit::singleline(&mut self.new_endpoint).hint_text(
+                        "необязат. — сигнальный URL, который пробуется первым (wss://…/signal)",
+                    ),
                 );
                 ui.end_row();
             });
-        if ui.button("💾 Save contact").clicked() {
+        if ui.button("💾 Сохранить контакт").clicked() {
             let target = self.new_target.replace([' ', '-'], "");
             if target.is_empty() {
-                self.status_message = "Contact needs a target: 9-digit ID or ip:port".into();
+                self.status_message = "Контакту нужен адрес: 9-значный ID или ip:port".into();
             } else {
                 let label = {
                     let l = self.new_label.trim();
@@ -1155,7 +1231,7 @@ impl App {
 
         ui.add_space(8.0);
         if self.book.contacts().is_empty() {
-            crate::hint(ui, "No saved contacts yet.");
+            crate::hint(ui, "Сохранённых контактов пока нет.");
         } else {
             let ids: Vec<String> = self
                 .book
@@ -1241,21 +1317,25 @@ impl App {
 
         ui.add_space(12.0);
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("History").strong());
+            ui.label(egui::RichText::new("История").strong());
             if ui
-                .button(if self.show_history { "hide" } else { "show" })
+                .button(if self.show_history {
+                    "скрыть"
+                } else {
+                    "показать"
+                })
                 .clicked()
             {
                 self.show_history = !self.show_history;
             }
-            if self.show_history && ui.button("clear").clicked() {
+            if self.show_history && ui.button("очистить").clicked() {
                 self.book.clear_history();
                 let _ = self.book.save();
             }
         });
         if self.show_history {
             if self.book.history().is_empty() {
-                crate::hint(ui, "No connection history yet.");
+                crate::hint(ui, "Истории подключений пока нет.");
             } else {
                 egui::ScrollArea::vertical()
                     .max_height(140.0)
@@ -1270,11 +1350,9 @@ impl App {
                                 }
                                 ui.label(egui::RichText::new(&h.target).small());
                                 let dot = match h.outcome {
-                                    Outcome::Connected => egui::RichText::new("● connected")
-                                        .color(egui::Color32::from_rgb(80, 200, 120)),
-                                    Outcome::Failed => egui::RichText::new("● failed")
-                                        .color(egui::Color32::from_rgb(230, 90, 90)),
-                                    Outcome::Unknown => egui::RichText::new("● unknown").weak(),
+                                    Outcome::Connected => theme::dot("● подключено", theme::TEAL),
+                                    Outcome::Failed => theme::dot("● не удалось", theme::DANGER),
+                                    Outcome::Unknown => egui::RichText::new("● —").weak(),
                                 };
                                 ui.label(dot.small());
                                 if let Some(d) = h.duration_secs {

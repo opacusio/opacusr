@@ -8,6 +8,22 @@ SemVer-ish (breaking protocol changes bump the minor until 1.0).
 
 ### Added
 
+- **Rev-3 UI design in the desktop app** — the approved mockup theme is
+  now the real `opacusr` look: dark navy background with rounded cards,
+  violet accent buttons, teal status, Carlito typeface (embedded, SIL
+  OFL 1.1) with a real bold face for section labels and CTAs. The
+  Connect/Host tabs are merged into a single home screen: the connect
+  card on top (remote ID + password, everything secondary — signaling
+  server, proxy, transport, quality, network name — behind a
+  collapsible «Доп. настройки»), the «Этот компьютер» host card (big
+  ID, unattended password, 2FA, host policies and the activity log in
+  collapsibles), an always-visible «Найдено в этой сети» card with the
+  LAN-discovery explainer, and the contacts/history card. The network
+  name now defaults to the computer's hostname instead of the login
+  name. The incoming-session approval stays a centered popup and is now
+  visible during viewer sessions too. UI strings are Russian (the
+  approved mockup language); no wire/protocol changes.
+
 - **Printing v1 (current frame → local printer)** — the viewer toolbar
   gains a 🖨 button: it encodes the last decoded remote frame to a
   lossless PNG (kept in the platform temp dir as

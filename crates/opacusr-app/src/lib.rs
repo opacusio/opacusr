@@ -6,6 +6,7 @@ pub mod app;
 pub mod discovery;
 pub mod host_panel;
 pub mod print;
+pub mod theme;
 pub mod update_banner;
 pub mod view;
 
@@ -13,11 +14,11 @@ pub use app::App;
 
 use egui::Context;
 
-/// Load CJK-capable fallback fonts so Russian/Chinese text renders even on
-/// minimal systems (best effort — system fonts are usually fine).
-pub fn install_fonts(_cc: &eframe::CreationContext<'_>) {
-    // egui bundles a decent default set (DejaVu-ish) covering Cyrillic;
-    // CJK font injection is a roadmap item (see docs/platforms.md).
+/// Apply the Rev-3 design system (Carlito fonts + dark violet theme)
+/// and CJK-capable fallback fonts so Russian/Chinese text renders even
+/// on minimal systems (best effort — system fonts are usually fine).
+pub fn install_fonts(cc: &eframe::CreationContext<'_>) {
+    theme::install(&cc.egui_ctx);
 }
 
 /// Poll a tokio unbounded receiver without blocking the UI thread.
