@@ -1,5 +1,10 @@
 //! OpacusR desktop/mobile GUI entry point (eframe/egui).
 
+// TeamViewer-style product build: no console window next to the GUI.
+// Debug builds keep the console so `RUST_LOG=debug cargo run` still
+// shows tracing output.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 use opacusr_app::App;
 
 fn main() -> eframe::Result<()> {

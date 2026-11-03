@@ -10,6 +10,8 @@ pub mod host_panel;
 pub mod print;
 pub mod settings;
 pub mod theme;
+#[cfg(any(windows, target_os = "macos"))]
+pub mod tray;
 pub mod update_banner;
 pub mod view;
 

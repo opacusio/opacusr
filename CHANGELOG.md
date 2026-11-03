@@ -8,6 +8,29 @@ SemVer-ish (breaking protocol changes bump the minor until 1.0).
 
 ### Added
 
+- **TeamViewer-style home screen** — the window is now the compact
+  TeamViewer pair: «Разрешить управление этим компьютером» (big
+  click-to-copy ID, access password with reveal/change/remove, agent
+  start/stop, session status) and «Управлять удалённым компьютером»
+  (partner ID, password, violet Connect CTA, on-demand 2FA field). No
+  settings remain on the home screen; all options moved into a hidden
+  settings window (gear in the toolbar) with a TeamViewer-Options left
+  nav: Общие / Подключение / Безопасность / Хост / О программе — changes
+  still apply instantly.
+- **AnyDesk-style contacts and history windows** — «Контакты» is a
+  separate device panel: search on top, Избранные / Все контакты /
+  Найденные в этой сети sections, round colored avatars, hover actions
+  (connect, rename, star, remove) and an add-contact form; «История
+  подключений» shows timestamped attempts with outcome dots and
+  durations. Connection attempts are recorded automatically.
+- **System tray (Windows, macOS)** — TeamViewer-style background
+  operation: a tray icon with a menu (Показать / Скрыть в трей /
+  Запустить агента / Остановить агента / Выход), left click opens the
+  window, and closing the window hides the app to the tray — the agent
+  keeps serving. An incoming-session request pops the window back up.
+  Linux keeps window-only behavior (tray-icon's Linux backends need GTK
+  system packages that are not part of the CI image).
+
 - **Rev-3 UI design in the desktop app** — the approved mockup theme is
   now the real `opacusr` look: dark navy background with rounded cards,
   violet accent buttons, teal status, Carlito typeface (embedded, SIL
@@ -85,6 +108,13 @@ SemVer-ish (breaking protocol changes bump the minor until 1.0).
 
 ### Fixed
 
+- **Empty console window next to the GUI on Windows** — the GUI binary
+  kept the console subsystem, so double-clicking `opacusr.exe` opened an
+  extra empty black console alongside the app (it looked like a dead
+  "server window"). Release builds are now `windows_subsystem =
+  "windows"` (no console; debug builds keep it for logs).
+- Chat lines in the viewer were prefixed with the mangled string
+  `ost]` instead of `[host]`.
 - **windows-gnu builds are self-contained** — the cross-built exes
   linked `libstdc++-6.dll` dynamically (pulled in by OpenH264's C++
   runtime) and failed to start on machines without MinGW ("the code

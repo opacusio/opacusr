@@ -230,6 +230,19 @@ pub struct App {
     cur_hist_ts: Option<u64>,
     /// Unix ts when the current attempt actually connected (for duration).
     cur_connected_at: Option<u64>,
+    /// System tray (Windows/macOS): icon + menu, TeamViewer-style
+    /// background operation. `None` where the tray is unavailable.
+    #[cfg(any(windows, target_os = "macos"))]
+    pub(crate) tray: Option<crate::tray::Tray>,
+    /// Actions picked in the tray menu (queued by the event handlers).
+    #[cfg(any(windows, target_os = "macos"))]
+    tray_action_rx: Option<std::sync::mpsc::Receiver<crate::tray::TrayAction>>,
+    /// The main window is currently hidden (app lives in the tray).
+    #[cfg(any(windows, target_os = "macos"))]
+    window_hidden: bool,
+    /// Tray «Выход» pressed — the next close request must really exit.
+    #[cfg(any(windows, target_os = "macos"))]
+    quit_requested: bool,
 }
 
 impl App {
@@ -284,9 +297,101 @@ impl App {
             password_editing: false,
             cur_hist_ts: None,
             cur_connected_at: None,
+            #[cfg(any(windows, target_os = "macos"))]
+            tray: None,
+            #[cfg(any(windows, target_os = "macos"))]
+            tray_action_rx: None,
+            #[cfg(any(windows, target_os = "macos"))]
+            window_hidden: false,
+            #[cfg(any(windows, target_os = "macos"))]
+            quit_requested: false,
         };
         app.refresh_unattended_display();
+
+        // TeamViewer-style tray: the icon outlives the window; closing
+        // the window keeps the app (and its agent) in the tray.
+        #[cfg(any(windows, target_os = "macos"))]
+        {
+            let (tx, rx) = std::sync::mpsc::channel::<crate::tray::TrayAction>();
+            let wake_ctx = cc.egui_ctx.clone();
+            let wake: std::sync::Arc<dyn Fn() + Send + Sync + 'static> =
+                std::sync::Arc::new(move || wake_ctx.request_repaint());
+            app.tray = crate::tray::Tray::create(tx, wake);
+            app.tray_action_rx = Some(rx);
+        }
+
         app
+    }
+
+    /// Tray actions + the TeamViewer close behavior: the window's X
+    /// hides to tray (the agent keeps serving), «Выход» in the tray
+    /// menu exits for real.
+    #[cfg(any(windows, target_os = "macos"))]
+    fn process_tray(&mut self, ctx: &Context) {
+        use crate::tray::TrayAction;
+        use egui::ViewportCommand;
+
+        if !self.quit_requested && ctx.input(|i| i.viewport().close_requested()) {
+            ctx.send_viewport_cmd(ViewportCommand::CancelClose);
+            ctx.send_viewport_cmd(ViewportCommand::Visible(false));
+            self.window_hidden = true;
+            self.status_message = "Свернуто в трей — OpacusR продолжает работать.".into();
+        }
+
+        let mut picked: Vec<TrayAction> = Vec::new();
+        if let Some(rx) = &self.tray_action_rx {
+            while let Ok(a) = rx.try_recv() {
+                picked.push(a);
+            }
+        }
+        for a in picked {
+            match a {
+                TrayAction::Show => {
+                    ctx.send_viewport_cmd(ViewportCommand::Visible(true));
+                    ctx.send_viewport_cmd(ViewportCommand::Focus);
+                    self.window_hidden = false;
+                }
+                TrayAction::Hide => {
+                    ctx.send_viewport_cmd(ViewportCommand::Visible(false));
+                    self.window_hidden = true;
+                }
+                TrayAction::StartAgent => {
+                    if self.host.is_none() {
+                        self.host_start_clicked();
+                    }
+                }
+                TrayAction::StopAgent => {
+                    if self.host.is_some() {
+                        self.host_stop_clicked();
+                    }
+                }
+                TrayAction::Quit => {
+                    self.quit_requested = true;
+                    self.host_stop_clicked();
+                    // Not canceled — eframe will exit after this frame.
+                    ctx.send_viewport_cmd(ViewportCommand::Close);
+                }
+            }
+        }
+
+        // Keep serving while hidden: slow heartbeat so agent events and
+        // consent requests keep being processed without a visible
+        // window.
+        if self.window_hidden {
+            ctx.request_repaint_after(std::time::Duration::from_secs(1));
+        }
+    }
+
+    /// Pop the window back up when a host-side consent request arrives
+    /// (the user must see and answer it even if the app lives in the
+    /// tray).
+    #[cfg(any(windows, target_os = "macos"))]
+    fn auto_show_for_consent(&mut self, ctx: &Context) {
+        if self.window_hidden && self.host.as_ref().is_some_and(|h| h.consent.is_some()) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            self.window_hidden = false;
+        }
     }
 
     /// Reload the cached unattended password for the host card display.
@@ -630,6 +735,11 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
         crate::update_banner::ensure_started(ctx);
         crate::update_banner::paint(ctx);
+
+        // Tray + close-to-tray (TeamViewer model). Runs first so a
+        // queued «Выход» short-circuits the frame.
+        #[cfg(any(windows, target_os = "macos"))]
+        self.process_tray(ctx);
         // Keep repainting while a session streams.
         if self.session.is_some() {
             ctx.request_repaint_after(std::time::Duration::from_millis(16));
@@ -1004,6 +1114,11 @@ impl eframe::App for App {
         // while watching a remote desktop (a host-side request must not
         // get lost behind a viewer session).
         host_panel::consent_window(ctx, self);
+
+        // A hidden (tray-mode) window must pop up for the user to
+        // answer an incoming-session request.
+        #[cfg(any(windows, target_os = "macos"))]
+        self.auto_show_for_consent(ctx);
 
         if let Some(session) = self.session.as_mut() {
             view::session_ui(ctx, session, &mut self.config);
