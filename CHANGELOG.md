@@ -6,6 +6,14 @@ SemVer-ish (breaking protocol changes bump the minor until 1.0).
 
 ## [Unreleased]
 
+## [0.11.0] — 2026-11-04
+
+_Version note: the wire protocol bumped to v9 (bincode 2.x codec) —
+peers with different protocol versions are rejected at the handshake
+and on the LAN mDNS record, so update the agent and the viewer
+together. `opacusr-agent update` / the viewer's "Update now" button
+deliver 0.11.0 binaries as one unit._
+
 ### Added
 
 - **TeamViewer-style home screen** — the window is now the compact
