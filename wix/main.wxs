@@ -115,8 +115,8 @@
                 <File Id='OpacusRServerExe' Source='target\release\opacusr-server.exe' KeyPath='yes'/>
             </Component>
             <!-- TeamViewer-style autostart: HKLM Run starts the GUI
-                 (hidden to the tray via --tray) at every user login;
-                 the GUI then starts the host agent itself
+                 (hidden to the tray via the tray flag) at every user
+                 login; the GUI then starts the host agent itself
                  (start_agent_automatically). A real Windows SERVICE is
                  deliberately not installed: screen capture and input
                  injection must run in the user session (Session 0 has
