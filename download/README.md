@@ -1,39 +1,51 @@
 # download/
 
-Prebuilt OpacusR binaries. The linux and windows-gnu artifacts are
-built in the maintainer's sandbox from the exact commit in the
-filename; the macOS and Windows MSVC artifacts are the CI builds from
-the `v0.10.0` tag (Apple's SDK cannot be used on a Linux builder).
+Prebuilt OpacusR binaries. **v0.11.0 is the current release** — every
+platform ships the TeamViewer-style compact UI, the AnyDesk-style
+contacts/history windows, the system tray (close-to-tray) and the same
+violet/teal palette. The wire protocol is v9 (bincode 2.x): update the
+agent and the viewer together.
+
+The official, checksummed release set (Windows MSVC zip + MSI, Linux
+tar.gz + Wayland variant + debs, macOS tar.gz, SHA256SUMS) lives in
+GitHub Releases: <https://github.com/opacusio/opacusr/releases/tag/v0.11.0>.
+
+## Local copies
 
 | file | origin | what's inside |
 | --- | --- | --- |
-| `opacusr-0.10.0-6ab03df-linux-x86_64.tar.gz` | sandbox build of `6ab03df` | `opacusr` (GUI, Rev-3 design + tray), `opacusr-agent`, `opacusr-server` + READMEs + LICENSE |
-| `opacusr-0.10.0-6ab03df-windows-x86_64-gnu.zip` | sandbox mingw-w64 cross-build of `6ab03df` | full set: `opacusr.exe` (GUI, TeamViewer-style, tray, no console window), `opacusr-agent.exe` (with audio), `opacusr-server.exe` + `README-WINDOWS.txt` + READMEs + LICENSE |
-| `opacusr-0.10.0-windows-x86_64.zip` | CI MSVC build (tag v0.10.0) | full Windows set incl. the GUI `opacusr.exe` (pre-Rev-3 UI) |
-| `opacusr-0.10.0-macos-aarch64.tar.gz` | CI build (tag v0.10.0) | full macOS set (Apple silicon, pre-Rev-3 UI) |
+| `opacusr-0.11.0-windows-x86_64.zip` | CI MSVC build, tag `v0.11.0` (sha256-verified) | full Windows set: `opacusr.exe` (GUI, tray, no console), `opacusr-agent.exe` (audio), `opacusr-server.exe`, `README-WINDOWS.txt`, READMEs, LICENSE |
+| `opacusr-0.11.0-x64.msi` | CI MSVC build, tag `v0.11.0` | Windows installer |
+| `opacusr-0.11.0-macos-aarch64.tar.gz` | CI build, tag `v0.11.0`, ad-hoc signed | full macOS set (Apple silicon) |
+| `opacusr-0.11.0-linux-x86_64.tar.gz` | CI build, tag `v0.11.0` | `opacusr`, `opacusr-agent`, `opacusr-server` + READMEs + LICENSE |
+| `opacusr-0.11.0-linux-wayland-x86_64.tar.gz` | CI build, tag `v0.11.0` | same + PipeWire/portal backend for native Wayland |
+| `opacusr-agent_0.11.0-1_amd64.deb`, `opacusr-app_0.11.0-1_amd64.deb` | CI build, tag `v0.11.0` | Debian/Ubuntu packages |
+| `SHA256SUMS` | release job | checksums of everything above |
+| `opacusr-0.11.0-258d20e-windows-x86_64-gnu.zip` | sandbox mingw-w64 cross-build of `258d20e` | the gnu variant (not in the official release): same three exes, libgcc/libstdc++ static, Opus static — only system DLLs |
 
-Each artifact has a `.sha256` sidecar with its checksum.
+All `0.11.0` files were re-verified against the release `SHA256SUMS`
+after download. The older `opacusr-0.10.0-*` files below are kept for
+reference only.
 
 ## Notes
 
-- The windows-gnu zip is **self-contained**: libgcc/libstdc++ are
-  linked statically and Opus is compiled as a static library — no
-  MinGW runtime DLLs are needed, only system Windows 10/11 components.
-  This fixes the `libstdc++-6.dll is missing` startup error reported
-  for earlier zips. `3af81e6` = that fix on top of the Rev-3 UI code
-  (`446b452`); the zip also gained the GUI app (see README-WINDOWS.txt
-  inside for what each exe is for).
-- The macOS / MSVC zip still predate the Rev-3 UI (built from the
-  v0.10.0 tag). A tag-driven CI rebuild (v0.10.1) refreshes them with
-  the new UI + a static CRT (no VC redist needed) — on request.
-- Platform installers (Windows MSI, macOS, wayland variant, debs)
-  live in GitHub Releases: <https://github.com/opacusio/opacusr/releases>.
+- The MSVC zip / MSI are built with `+crt-static` — no VC++
+  redistributable needed on clean Windows installs.
+- The windows-gnu zip is self-contained the same way (static
+  libgcc/libstdc++/Opus): only system Windows 10/11 components. This
+  fixes the `libstdc++-6.dll is missing` startup error reported for
+  earlier zips. See `README-WINDOWS.txt` inside for what each exe is
+  for.
+- Release GUI builds are GUI-subsystem binaries: double-clicking
+  `opacusr.exe` opens the window directly, no empty console appears
+  next to it; closing the window hides it to the tray (agent keeps
+  serving, exit via the tray menu).
 
 ## Quick start (linux)
 
 ```bash
-tar -xzf opacusr-0.10.0-446b452-linux-x86_64.tar.gz
-cd opacusr-0.10.0-446b452-linux-x86_64
+tar -xzf opacusr-0.11.0-linux-x86_64.tar.gz
+cd opacusr-0.11.0-linux-x86_64
 ./opacusr            # GUI client
 ./opacusr-agent run  # host service
 ./opacusr-server     # self-hosted signal/relay server
