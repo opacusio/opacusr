@@ -22,6 +22,12 @@ fn main() -> eframe::Result<()> {
             // run fullscreen when needed (F11).
             .with_inner_size([960.0, 640.0])
             .with_min_inner_size([760.0, 560.0])
+            // Created hidden: the first egui frame paints the dark
+            // Rev-3 theme BEFORE the window is shown, so Windows can
+            // never flash its stock white background (the «белый фон»
+            // startup flash). update() reveals the window once the
+            // dark frame + DWM chrome are in place.
+            .with_visible(false)
             .with_icon(icon()),
         ..Default::default()
     };

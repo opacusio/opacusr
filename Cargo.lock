@@ -4152,6 +4152,7 @@ dependencies = [
  "opacusr-crypto",
  "opacusr-proto",
  "opacusr-transport",
+ "raw-window-handle",
  "rfd",
  "serde",
  "tokio",
@@ -4159,6 +4160,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "tray-icon",
+ "windows-sys 0.52.0",
  "winresource",
 ]
 

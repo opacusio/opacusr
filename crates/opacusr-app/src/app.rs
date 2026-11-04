@@ -247,6 +247,9 @@ pub struct App {
     /// frame; the app keeps running in the tray.
     #[cfg(any(windows, target_os = "macos"))]
     start_hidden: bool,
+    /// The window was revealed after the first dark frame (the reveal
+    /// happens exactly once; see `update`).
+    revealed: bool,
 }
 
 impl App {
@@ -311,6 +314,7 @@ impl App {
             quit_requested: false,
             #[cfg(any(windows, target_os = "macos"))]
             start_hidden: std::env::args().any(|a| a == "--tray"),
+            revealed: false,
         };
         app.refresh_unattended_display();
 
@@ -744,18 +748,31 @@ async fn forward_events(
 }
 
 impl eframe::App for App {
-    fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
+    fn update(&mut self, ctx: &Context, frame: &mut eframe::Frame) {
         // Re-assert the dark Rev-3 visuals every frame: egui's system
         // theme sync would otherwise repaint the UI light on Windows
         // with a light OS theme.
         crate::theme::install_visuals_each_frame(ctx);
-        // `--tray` (MSI autostart): hide the window on the first frame;
-        // the tray keeps the app (and the agent) running.
+        // First frame bookkeeping: the window was created hidden
+        // (`with_visible(false)` in main.rs) so nothing white can flash
+        // before egui paints. Apply the native dark chrome (DWM title
+        // bar on Windows), then reveal the window already dark.
+        // `--tray` (MSI autostart) keeps it hidden: the tray icon takes
+        // over (Windows/macOS — Linux has no tray module).
+        apply_native_chrome(frame);
         #[cfg(any(windows, target_os = "macos"))]
         if self.start_hidden {
             self.start_hidden = false;
-            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
             self.window_hidden = true;
+        }
+        #[cfg(any(windows, target_os = "macos"))]
+        let stay_in_tray = self.window_hidden;
+        #[cfg(not(any(windows, target_os = "macos")))]
+        let stay_in_tray = false;
+        if !self.revealed && !stay_in_tray {
+            self.revealed = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
         }
         crate::update_banner::ensure_started(ctx);
         crate::update_banner::paint(ctx);
@@ -1170,3 +1187,59 @@ impl App {
         home::home_ui(ctx, self);
     }
 }
+
+/// Dark native window chrome. egui paints only the client area — on
+/// Windows the title bar, border and caption text come from DWM and
+/// stay light on a stock light-theme system, which read as «белый
+/// фон» around the dark UI. Best-effort: the color attributes need
+/// Windows 11 (older builds ignore them), the immersive-dark-mode
+/// flag covers Windows 10 1809+, and errors are intentionally
+/// dropped — a light title bar is better than a crash.
+#[cfg(windows)]
+fn apply_native_chrome(frame: &eframe::Frame) {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    let Ok(handle) = frame.window_handle() else {
+        return;
+    };
+    let RawWindowHandle::Win32(win) = handle.as_raw() else {
+        return;
+    };
+    let hwnd: windows_sys::Win32::Foundation::HWND = win.hwnd.get();
+    let colorref = |c: egui::Color32| c.r() as u32 | ((c.g() as u32) << 8) | ((c.b() as u32) << 16);
+    let caption = colorref(crate::theme::BG);
+    let border = colorref(crate::theme::CARD_STROKE);
+    let text = colorref(crate::theme::TEXT);
+    let dark: i32 = 1;
+    unsafe {
+        use windows_sys::Win32::Graphics::Dwm::{
+            DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_CAPTION_COLOR, DWMWA_TEXT_COLOR,
+        };
+        // DWMWA_USE_IMMERSIVE_DARK_MODE (20) is not exported by
+        // windows-sys 0.52 — the value is a stable documented constant.
+        DwmSetWindowAttribute(hwnd, 20u32, &dark as *const _ as *const std::ffi::c_void, 4);
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_CAPTION_COLOR as u32,
+            &caption as *const _ as *const std::ffi::c_void,
+            4,
+        );
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_BORDER_COLOR as u32,
+            &border as *const _ as *const std::ffi::c_void,
+            4,
+        );
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_TEXT_COLOR as u32,
+            &text as *const _ as *const std::ffi::c_void,
+            4,
+        );
+    }
+}
+
+/// No native chrome to darken off Windows (macOS colors its title bar
+/// from the content background automatically).
+#[cfg(not(windows))]
+fn apply_native_chrome(_frame: &eframe::Frame) {}
