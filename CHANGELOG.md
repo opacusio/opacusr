@@ -4,7 +4,7 @@ All notable changes to OpacusR are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is
 SemVer-ish (breaking protocol changes bump the minor until 1.0).
 
-## [Unreleased]
+## [0.11.1] — 2026-11-04
 
 ### Changed
 
@@ -20,6 +20,14 @@ SemVer-ish (breaking protocol changes bump the minor until 1.0).
   the UI light on machines with a light OS theme, wiping the Rev-3
   palette. The app theme is now pinned to dark and re-asserted every
   frame.
+- **White native chrome + startup flash** — Windows drew a light title
+  bar and border around the dark client area, and the stock white
+  background flashed between window creation and the first painted
+  frame. The window is now created hidden, the first frame paints the
+  dark UI, `apply_native_chrome()` switches the DWM caption/border/text
+  to the palette (immersive dark mode on Windows 10, caption color on
+  Windows 11; best-effort), and only then the window is revealed —
+  already dark.
 - **The ID is always visible** — the home card now shows the last
   signaling-assigned ID (persisted in `agent.toml` as `last_peer_id`)
   while the agent is offline, dimmed, instead of an empty «Агент не
