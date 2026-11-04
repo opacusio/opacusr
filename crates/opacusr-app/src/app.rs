@@ -243,6 +243,10 @@ pub struct App {
     /// Tray «Выход» pressed — the next close request must really exit.
     #[cfg(any(windows, target_os = "macos"))]
     quit_requested: bool,
+    /// `--tray` CLI flag (MSI autostart): hide the window on the first
+    /// frame; the app keeps running in the tray.
+    #[cfg(any(windows, target_os = "macos"))]
+    start_hidden: bool,
 }
 
 impl App {
@@ -305,6 +309,8 @@ impl App {
             window_hidden: false,
             #[cfg(any(windows, target_os = "macos"))]
             quit_requested: false,
+            #[cfg(any(windows, target_os = "macos"))]
+            start_hidden: std::env::args().any(|a| a == "--tray"),
         };
         app.refresh_unattended_display();
 
@@ -318,6 +324,12 @@ impl App {
                 std::sync::Arc::new(move || wake_ctx.request_repaint());
             app.tray = crate::tray::Tray::create(tx, wake);
             app.tray_action_rx = Some(rx);
+        }
+
+        // TeamViewer model: the agent starts with the app unless the
+        // user turned the autostart off (Настройки → Хост).
+        if app.config.start_agent_automatically {
+            app.host_start_clicked();
         }
 
         app
@@ -733,6 +745,18 @@ async fn forward_events(
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
+        // Re-assert the dark Rev-3 visuals every frame: egui's system
+        // theme sync would otherwise repaint the UI light on Windows
+        // with a light OS theme.
+        crate::theme::install_visuals_each_frame(ctx);
+        // `--tray` (MSI autostart): hide the window on the first frame;
+        // the tray keeps the app (and the agent) running.
+        #[cfg(any(windows, target_os = "macos"))]
+        if self.start_hidden {
+            self.start_hidden = false;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            self.window_hidden = true;
+        }
         crate::update_banner::ensure_started(ctx);
         crate::update_banner::paint(ctx);
 
@@ -763,7 +787,15 @@ impl eframe::App for App {
         for ev in host_evs {
             if let Some(h) = &mut self.host {
                 match ev {
-                    AgentEvent::Registered { id, .. } => h.my_id = Some(id),
+                    AgentEvent::Registered { id, .. } => {
+                        h.my_id = Some(id);
+                        // Persist the server-assigned ID so the home
+                        // card can keep showing it while offline.
+                        if self.config.last_peer_id != Some(id) {
+                            self.config.last_peer_id = Some(id);
+                            let _ = self.config.save();
+                        }
+                    }
                     AgentEvent::SessionEnded { reason } => {
                         h.commands = None;
                         h.session_active = false;

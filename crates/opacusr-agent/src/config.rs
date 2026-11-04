@@ -170,6 +170,14 @@ pub struct AgentConfig {
     /// interface — safe default) | `any` (arbitrary targets). View-only
     /// sessions never get tunnels regardless of this setting.
     pub tunnel: String,
+    /// Last ID the signaling server assigned to this machine. Persisted
+    /// so the GUI can display it (dimmed) while the agent is offline —
+    /// the ID itself is minted server-side at registration.
+    pub last_peer_id: Option<u64>,
+    /// TeamViewer model: start the host agent as soon as the GUI opens
+    /// (so the machine is reachable without a manual «Запустить»).
+    /// On Windows the MSI additionally autostarts the GUI at user login.
+    pub start_agent_automatically: bool,
 }
 
 impl Default for AgentConfig {
@@ -215,6 +223,8 @@ impl Default for AgentConfig {
                 .unwrap_or_else(|| PathBuf::from("."))
                 .join("OpacusR-Recordings"),
             tunnel: "loopback".into(),
+            last_peer_id: None,
+            start_agent_automatically: true,
         }
     }
 }

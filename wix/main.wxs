@@ -49,12 +49,37 @@
         <Feature Id='ProductFeature' Title='OpacusR' Level='1'>
             <ComponentGroupRef Id='ProductComponents'/>
             <ComponentRef Id='StartMenuShortcut'/>
+            <ComponentRef Id='AutoStartRun'/>
         </Feature>
 
         <UI>
             <UIRef Id='WixUI_Minimal'/>
         </UI>
         <WixVariable Id='WixUILicenseRtf' Value='assets\license.rtf'/>
+
+        <!-- TeamViewer model, part 1: the MSI registers AND STARTS the
+             host-agent Windows service (opacusr-agent.exe service
+             install; auto-start on boot). The deferred Property-based
+             custom actions run as SYSTEM (Impersonate=no). Return=ignore:
+             a missing admin context must not fail the whole install. -->
+        <CustomAction Id='SetAgentServiceInstall'
+            Property='AGENT_SERVICE_INSTALL'
+            Value='&quot;[BinDir]opacusr-agent.exe&quot; service install'/>
+        <CustomAction Id='AgentServiceInstall'
+            Property='AGENT_SERVICE_INSTALL'
+            Execute='deferred' Impersonate='no' Return='ignore'/>
+        <CustomAction Id='SetAgentServiceUninstall'
+            Property='AGENT_SERVICE_UNINSTALL'
+            Value='&quot;[BinDir]opacusr-agent.exe&quot; service uninstall'/>
+        <CustomAction Id='AgentServiceUninstall'
+            Property='AGENT_SERVICE_UNINSTALL'
+            Execute='deferred' Impersonate='no' Return='ignore'/>
+        <InstallExecuteSequence>
+            <Custom Action='SetAgentServiceInstall' After='InstallFiles'>NOT Installed</Custom>
+            <Custom Action='AgentServiceInstall' After='SetAgentServiceInstall'>NOT Installed</Custom>
+            <Custom Action='SetAgentServiceUninstall' Before='RemoveFiles'>REMOVE~="ALL"</Custom>
+            <Custom Action='AgentServiceUninstall' After='SetAgentServiceUninstall'>REMOVE~="ALL"</Custom>
+        </InstallExecuteSequence>
 
         <Directory Id='TARGETDIR' Name='SourceDir'>
             <Directory Id='ProgramFiles64Folder'>
@@ -88,6 +113,23 @@
             </Component>
             <Component Id='ServerExecutable' Guid='*' Win64='yes'>
                 <File Id='OpacusRServerExe' Source='target\release\opacusr-server.exe' KeyPath='yes'/>
+            </Component>
+            <!-- TeamViewer-style autostart: HKLM Run starts the GUI
+                 (hidden to the tray via --tray) at every user login;
+                 the GUI then starts the host agent itself
+                 (start_agent_automatically). A real Windows SERVICE is
+                 deliberately not installed: screen capture and input
+                 injection must run in the user session (Session 0 has
+                 no desktop), so the login autostart is the correct
+                 mechanism here. -->
+            <Component Id='AutoStartRun' Guid='7f1c2d64-9b3e-4c8a-a5f1-2e6b8d4a9c31' Win64='yes'>
+                <RegistryValue
+                    Root='HKLM'
+                    Key='Software\Microsoft\Windows\CurrentVersion\Run'
+                    Name='OpacusR'
+                    Type='string'
+                    Value='&quot;[BinDir]opacusr.exe&quot; --tray'
+                    KeyPath='yes'/>
             </Component>
         </ComponentGroup>
     </Product>

@@ -6,6 +6,32 @@ SemVer-ish (breaking protocol changes bump the minor until 1.0).
 
 ## [Unreleased]
 
+### Changed
+
+- **One-card home screen** — the two side-by-side cards merged into a
+  single TeamViewer-style card: «Разрешить управление…» on top (ID on
+  the left, access password on the right, one status row with the
+  start/stop control), «Управлять удалённым компьютером» beneath the
+  separator.
+
+### Fixed
+
+- **White background on Windows** — egui's system-theme sync repainted
+  the UI light on machines with a light OS theme, wiping the Rev-3
+  palette. The app theme is now pinned to dark and re-asserted every
+  frame.
+- **The ID is always visible** — the home card now shows the last
+  signaling-assigned ID (persisted in `agent.toml` as `last_peer_id`)
+  while the agent is offline, dimmed, instead of an empty «Агент не
+  запущен» stub.
+- **Services do not start automatically** — the MSI now registers AND
+  starts the `OpacusRAgent` service during install (deferred
+  custom actions) and removes it on uninstall; `opacusr-agent service
+  install` also starts the service immediately instead of waiting for
+  a reboot. The MSI adds a per-machine HKLM Run autostart entry that
+  launches the GUI hidden to the tray (`--tray`). The «Автозапуск»
+  checkbox (Настройки → Хост) makes the GUI start the agent itself.
+
 ## [0.11.0] — 2026-11-04
 
 _Version note: the wire protocol bumped to v9 (bincode 2.x codec) —

@@ -51,6 +51,22 @@ static CARLITO_BOLD: &[u8] = include_bytes!("../assets/fonts/Carlito-Bold.ttf");
 /// palette + rounded widgets. Called once at startup.
 pub fn install(ctx: &Context) {
     install_fonts(ctx);
+    // Pin the egui theme to Dark BEFORE installing our visuals: with
+    // the default `ThemePreference::System` egui re-applies the OS
+    // theme (light on stock Windows) on every theme sync and wipes the
+    // custom style — that was the «white background» regression.
+    ctx.options_mut(|o| {
+        o.theme_preference = egui::ThemePreference::Dark;
+        // With ThemePreference::Dark egui reads/writes `dark_style`;
+        // our set_style below lands there.
+    });
+    install_visuals(ctx);
+}
+
+/// Re-apply the dark visuals. Cheap; called every frame from the app
+/// update so nothing (system theme sync, egui internals) can leave the
+/// UI on a light background.
+pub fn install_visuals_each_frame(ctx: &Context) {
     install_visuals(ctx);
 }
 

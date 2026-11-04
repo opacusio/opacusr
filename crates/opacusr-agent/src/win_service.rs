@@ -460,7 +460,8 @@ mod imp {
         let svc = manager
             .create_service(
                 &info,
-                ServiceAccess::QUERY_STATUS | ServiceAccess::CHANGE_CONFIG,
+                ServiceAccess::QUERY_STATUS | ServiceAccess::CHANGE_CONFIG
+                    | ServiceAccess::START,
             )
             .context(format!(
                 "create service '{SERVICE_NAME}' (is it already installed? use `service uninstall` first)"
@@ -469,6 +470,21 @@ mod imp {
             "OpacusR remote-desktop host agent: supervises a per-session agent instance in the active console session.",
         )
         .ok(); // cosmetic; the service works without a description
+
+        // Start immediately: `service install` must leave the machine
+        // reachable, not «after the next reboot» (TeamViewer behavior).
+        match svc.start(&[] as &[std::ffi::OsString]) {
+            Ok(()) => {
+                println!("Service '{SERVICE_NAME}' installed and started (auto-start on boot).")
+            }
+            Err(e) => {
+                println!("Service '{SERVICE_NAME}' installed (auto-start on boot).");
+                eprintln!(
+                    "note: the service was not started now ({e}); it will start on the next \
+                     boot or `sc start {SERVICE_NAME}`"
+                );
+            }
+        }
 
         let cfg = crate::config::AgentConfig::load();
         if !cfg.is_unattended() {
@@ -479,11 +495,11 @@ mod imp {
             );
         }
         println!("Service '{SERVICE_NAME}' installed (auto-start).");
-        println!("Start now:  sc start {SERVICE_NAME}");
         println!("Or reboot; the agent starts for every console logon.");
         Ok(())
     }
 
+    #[allow(clippy::too_many_lines)]
     pub fn uninstall() -> anyhow::Result<()> {
         let manager = manager(ServiceManagerAccess::CONNECT)
             .context("connect to the service control manager (run as Administrator)")?;

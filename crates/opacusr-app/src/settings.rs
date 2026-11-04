@@ -433,6 +433,25 @@ fn host_tab(ui: &mut Ui, app: &mut App) {
                 "передавать звук подключённым зрителям",
             );
             ui.end_row();
+
+            ui.label("Автозапуск");
+            ui.vertical(|ui| {
+                if ui
+                    .checkbox(
+                        &mut app.config.start_agent_automatically,
+                        "запускать агента вместе с OpacusR (машину видно сразу)",
+                    )
+                    .changed()
+                {
+                    let _ = app.config.save();
+                }
+                crate::hint(
+                    ui,
+                    "агент работает, пока открыт OpacusR; окно можно закрыть — он продолжит \
+                     работать в трее",
+                );
+            });
+            ui.end_row();
         });
 
     ui.add_space(10.0);
