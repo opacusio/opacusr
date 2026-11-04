@@ -58,28 +58,10 @@
         <WixVariable Id='WixUILicenseRtf' Value='assets\license.rtf'/>
 
         <!-- TeamViewer model, part 1: the MSI registers AND STARTS the
-             host-agent Windows service (opacusr-agent.exe service
-             install; auto-start on boot). The deferred Property-based
-             custom actions run as SYSTEM (Impersonate=no). Return=ignore:
-             a missing admin context must not fail the whole install. -->
-        <CustomAction Id='SetAgentServiceInstall'
-            Property='AGENT_SERVICE_INSTALL'
-            Value='&quot;[BinDir]opacusr-agent.exe&quot; service install'/>
-        <CustomAction Id='AgentServiceInstall'
-            Property='AGENT_SERVICE_INSTALL'
-            Execute='deferred' Impersonate='no' Return='ignore'/>
-        <CustomAction Id='SetAgentServiceUninstall'
-            Property='AGENT_SERVICE_UNINSTALL'
-            Value='&quot;[BinDir]opacusr-agent.exe&quot; service uninstall'/>
-        <CustomAction Id='AgentServiceUninstall'
-            Property='AGENT_SERVICE_UNINSTALL'
-            Execute='deferred' Impersonate='no' Return='ignore'/>
-        <InstallExecuteSequence>
-            <Custom Action='SetAgentServiceInstall' After='InstallFiles'>NOT Installed</Custom>
-            <Custom Action='AgentServiceInstall' After='SetAgentServiceInstall'>NOT Installed</Custom>
-            <Custom Action='SetAgentServiceUninstall' Before='RemoveFiles'>REMOVE~="ALL"</Custom>
-            <Custom Action='AgentServiceUninstall' After='SetAgentServiceUninstall'>REMOVE~="ALL"</Custom>
-        </InstallExecuteSequence>
+             host-agent Windows service (auto-start on boot) via the
+             native ServiceInstall / ServiceControl elements below; the
+             same registration the agent CLI performs with
+             "opacusr-agent.exe service install". -->
 
         <Directory Id='TARGETDIR' Name='SourceDir'>
             <Directory Id='ProgramFiles64Folder'>
@@ -110,6 +92,27 @@
             </Component>
             <Component Id='AgentExecutable' Guid='*' Win64='yes'>
                 <File Id='OpacusRAgentExe' Source='target\release\opacusr-agent.exe' KeyPath='yes'/>
+                <!-- The service binary is this component's key file;
+                     "service run" is the same launch line the agent's
+                     own CLI registration uses (win_service::install).
+                     Start='install' leaves the machine reachable right
+                     after setup, not after the next reboot. -->
+                <ServiceInstall
+                    Id='OpacusRAgentServiceInstall'
+                    Name='OpacusRAgent'
+                    DisplayName='OpacusR Agent'
+                    Description='OpacusR remote-desktop host agent: supervises a per-session agent instance in the active console session.'
+                    Type='ownProcess'
+                    Start='auto'
+                    ErrorControl='normal'
+                    Arguments='service run'/>
+                <ServiceControl
+                    Id='OpacusRAgentServiceControl'
+                    Name='OpacusRAgent'
+                    Start='install'
+                    Stop='both'
+                    Remove='uninstall'
+                    Wait='yes'/>
             </Component>
             <Component Id='ServerExecutable' Guid='*' Win64='yes'>
                 <File Id='OpacusRServerExe' Source='target\release\opacusr-server.exe' KeyPath='yes'/>

@@ -33,10 +33,11 @@ SemVer-ish (breaking protocol changes bump the minor until 1.0).
   while the agent is offline, dimmed, instead of an empty «Агент не
   запущен» stub.
 - **Services do not start automatically** — the MSI now registers AND
-  starts the `OpacusRAgent` service during install (deferred
-  custom actions) and removes it on uninstall; `opacusr-agent service
-  install` also starts the service immediately instead of waiting for
-  a reboot. The MSI adds a per-machine HKLM Run autostart entry that
+  starts the `OpacusRAgent` service during install (native WiX
+  `ServiceInstall`/`ServiceControl`, binary + `service run` — the same
+  line the agent's CLI registration uses) and stops+removes it on
+  uninstall; `opacusr-agent service install` also starts the service
+  immediately instead of waiting for a reboot. The MSI adds a per-machine HKLM Run autostart entry that
   launches the GUI hidden to the tray (`--tray`). The «Автозапуск»
   checkbox (Настройки → Хост) makes the GUI start the agent itself.
 
