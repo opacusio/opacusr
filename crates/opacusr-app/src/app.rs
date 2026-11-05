@@ -250,6 +250,12 @@ pub struct App {
     /// The window was revealed after the first dark frame (the reveal
     /// happens exactly once; see `update`).
     revealed: bool,
+    /// Cached Windows-service state for the settings row («Служба
+    /// Windows») — SCM queries are cheap but not per-frame cheap.
+    #[cfg(windows)]
+    svc_state: Option<crate::service_ctl::SvcState>,
+    #[cfg(windows)]
+    svc_state_at: Option<std::time::Instant>,
 }
 
 impl App {
@@ -315,8 +321,22 @@ impl App {
             #[cfg(any(windows, target_os = "macos"))]
             start_hidden: std::env::args().any(|a| a == "--tray"),
             revealed: false,
+            #[cfg(windows)]
+            svc_state: None,
+            #[cfg(windows)]
+            svc_state_at: None,
         };
         app.refresh_unattended_display();
+
+        // Single-instance (Windows): a second launch of opacusr.exe must
+        // reveal THIS window instead of starting a duplicate agent/tray.
+        #[cfg(windows)]
+        {
+            let wake_ctx = cc.egui_ctx.clone();
+            crate::single_instance::set_show_callback(std::sync::Arc::new(move || {
+                wake_ctx.request_repaint();
+            }));
+        }
 
         // TeamViewer-style tray: the icon outlives the window; closing
         // the window keeps the app (and its agent) in the tray.
@@ -339,19 +359,31 @@ impl App {
         app
     }
 
-    /// Tray actions + the TeamViewer close behavior: the window's X
-    /// hides to tray (the agent keeps serving), «Выход» in the tray
-    /// menu exits for real.
+    /// Tray actions + the close behavior. The window's X is a REAL exit
+    /// by default (the user asked for it: an app that «hangs in the
+    /// tray» after close is a support bug, not a feature). Hide-to-tray
+    /// on close only when the user turned it on (Настройки → Хост) and
+    /// a tray icon actually exists; tray «Выход» exits for real — with
+    /// a watchdog that cannot be swallowed by a hidden-window edge
+    /// case.
     #[cfg(any(windows, target_os = "macos"))]
     fn process_tray(&mut self, ctx: &Context) {
         use crate::tray::TrayAction;
         use egui::ViewportCommand;
 
         if !self.quit_requested && ctx.input(|i| i.viewport().close_requested()) {
-            ctx.send_viewport_cmd(ViewportCommand::CancelClose);
-            ctx.send_viewport_cmd(ViewportCommand::Visible(false));
-            self.window_hidden = true;
-            self.status_message = "Свернуто в трей — OpacusR продолжает работать.".into();
+            if self.tray.is_some() && self.config.close_to_tray {
+                ctx.send_viewport_cmd(ViewportCommand::CancelClose);
+                ctx.send_viewport_cmd(ViewportCommand::Visible(false));
+                self.window_hidden = true;
+                self.status_message = "Свернуто в трей — OpacusR продолжает работать.".into();
+            } else {
+                // No tray to return to, or the user disabled close-to-tray:
+                // honor the close (agent stops with the process; an
+                // installed OS service keeps the machine reachable).
+                self.quit_requested = true;
+                self.host_stop_clicked();
+            }
         }
 
         let mut picked: Vec<TrayAction> = Vec::new();
@@ -386,6 +418,14 @@ impl App {
                     self.host_stop_clicked();
                     // Not canceled — eframe will exit after this frame.
                     ctx.send_viewport_cmd(ViewportCommand::Close);
+                    // Watchdog: the command above normally ends the run
+                    // loop within one frame. If anything ever swallows
+                    // it (hidden window, winit edge case), force-exit so
+                    // «Выход» can never leave a zombie in the tray.
+                    std::thread::spawn(|| {
+                        std::thread::sleep(std::time::Duration::from_secs(2));
+                        std::process::exit(0);
+                    });
                 }
             }
         }
@@ -700,6 +740,27 @@ impl App {
         self.status_message = "Agent stopped.".into();
     }
 
+    /// Cached SCM state for the settings row (refreshed at most every
+    /// two seconds while the settings window is open).
+    #[cfg(windows)]
+    pub(crate) fn svc_state_cached(&mut self) -> crate::service_ctl::SvcState {
+        let fresh = self
+            .svc_state_at
+            .is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(2));
+        if !fresh {
+            self.svc_state = Some(crate::service_ctl::query_state());
+            self.svc_state_at = Some(std::time::Instant::now());
+        }
+        self.svc_state
+            .unwrap_or(crate::service_ctl::SvcState::NotInstalled)
+    }
+
+    /// Drop the cached service state (after an install attempt).
+    #[cfg(windows)]
+    pub(crate) fn svc_state_refresh(&mut self) {
+        self.svc_state_at = None;
+    }
+
     pub(crate) fn save_host_password(&mut self) {
         let p = self.host_password_input.trim().to_string();
         if p.len() < 4 {
@@ -760,10 +821,24 @@ impl eframe::App for App {
         // `--tray` (MSI autostart) keeps it hidden: the tray icon takes
         // over (Windows/macOS — Linux has no tray module).
         apply_native_chrome(frame);
+        // A second launch (single-instance guard) asked us to show up.
+        #[cfg(windows)]
+        if crate::single_instance::take_show_request() {
+            self.start_hidden = false;
+            self.window_hidden = false;
+            self.revealed = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        }
         #[cfg(any(windows, target_os = "macos"))]
         if self.start_hidden {
             self.start_hidden = false;
-            self.window_hidden = true;
+            // `--tray` (MSI autostart) hides the window ONLY when a tray
+            // icon exists to bring it back; without one an invisible app
+            // could never be exited at all.
+            if self.tray.is_some() {
+                self.window_hidden = true;
+            }
         }
         #[cfg(any(windows, target_os = "macos"))]
         let stay_in_tray = self.window_hidden;

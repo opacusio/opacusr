@@ -15,6 +15,15 @@ fn main() -> eframe::Result<()> {
         )
         .init();
 
+    // Windows: one GUI instance at a time. A second opacusr.exe launch
+    // signals the running one to show and focus its window, then exits
+    // silently — no duplicate tray icons, no duplicate agents.
+    #[cfg(windows)]
+    if !opacusr_app::single_instance::acquire() {
+        opacusr_app::single_instance::signal_show();
+        return Ok(());
+    }
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("OpacusR")

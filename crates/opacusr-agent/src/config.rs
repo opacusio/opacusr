@@ -178,6 +178,12 @@ pub struct AgentConfig {
     /// (so the machine is reachable without a manual «Запустить»).
     /// On Windows the MSI additionally autostarts the GUI at user login.
     pub start_agent_automatically: bool,
+    /// What the window's X does when a tray icon is available. `false`
+    /// (default): closing the window quits the whole app (the in-process
+    /// agent stops too; an installed OS service keeps the machine
+    /// reachable). `true`: the window hides to the tray and the app keeps
+    /// serving in the background until tray «Выход».
+    pub close_to_tray: bool,
 }
 
 impl Default for AgentConfig {
@@ -225,6 +231,7 @@ impl Default for AgentConfig {
             tunnel: "loopback".into(),
             last_peer_id: None,
             start_agent_automatically: true,
+            close_to_tray: false,
         }
     }
 }

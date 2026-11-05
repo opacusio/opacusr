@@ -447,11 +447,41 @@ fn host_tab(ui: &mut Ui, app: &mut App) {
                 }
                 crate::hint(
                     ui,
-                    "агент работает, пока открыт OpacusR; окно можно закрыть — он продолжит \
-                     работать в трее",
+                    "агент работает, пока открыт OpacusR; чтобы машина была доступна всегда, \
+                     установите службу ниже",
                 );
             });
             ui.end_row();
+
+            // Tray close + service rows only where the tray exists.
+            #[cfg(any(windows, target_os = "macos"))]
+            {
+                ui.label("Окно");
+                ui.vertical(|ui| {
+                    if ui
+                        .checkbox(
+                            &mut app.config.close_to_tray,
+                            "при закрытии окна сворачивать в трей (работа в фоне)",
+                        )
+                        .changed()
+                    {
+                        let _ = app.config.save();
+                    }
+                    crate::hint(
+                        ui,
+                        "по умолчанию закрытие окна полностью завершает OpacusR; включите, \
+                         чтобы работа продолжалась в трее (выход — через иконку в трее)",
+                    );
+                });
+                ui.end_row();
+
+                #[cfg(windows)]
+                {
+                    ui.label("Служба Windows");
+                    ui.vertical(|ui| host_service_ui(ui, app));
+                    ui.end_row();
+                }
+            }
         });
 
     ui.add_space(10.0);
@@ -478,6 +508,64 @@ fn host_tab(ui: &mut Ui, app: &mut App) {
                 );
             }
         });
+}
+
+/// The «Служба Windows» row (Настройки → Хост): live SCM state plus a
+/// one-click elevated install for zip installs (the MSI installs the
+/// service itself). Status text mirrors what `services.msc` shows.
+#[cfg(windows)]
+fn host_service_ui(ui: &mut Ui, app: &mut App) {
+    use crate::service_ctl::SvcState;
+
+    let state = app.svc_state_cached();
+    let (dot, text, color) = match state {
+        SvcState::Running => (
+            "●",
+            "служба работает — агент стартует при входе в систему без участия OpacusR",
+            theme::TEAL,
+        ),
+        SvcState::StartPending => ("◐", "служба запускается…", theme::MUTED),
+        SvcState::StopPending => ("◐", "служба останавливается…", theme::MUTED),
+        SvcState::Stopped => (
+            "○",
+            "служба установлена, но остановлена (запустится при следующей загрузке Windows)",
+            theme::GOLD,
+        ),
+        SvcState::Other => ("○", "служба в нестандартном состоянии", theme::GOLD),
+        SvcState::NotInstalled => (
+            "○",
+            "служба не установлена — машина доступна, пока открыт OpacusR",
+            theme::MUTED,
+        ),
+    };
+    ui.label(egui::RichText::new(format!("{dot} {text}")).color(color));
+
+    if state == SvcState::NotInstalled && ui.button("Установить службу (автозапуск)").clicked()
+    {
+        match crate::service_ctl::install_elevated() {
+            Ok(()) => {
+                app.status_message = "Служба OpacusRAgent установлена и запущена.".into();
+                app.svc_state_refresh();
+            }
+            Err(e) => {
+                app.status_message = format!("Служба не установлена: {e}");
+                app.svc_state_refresh();
+            }
+        }
+    }
+    if state != SvcState::NotInstalled {
+        crate::hint(
+            ui,
+            "службу устанавливает MSI или кнопка выше; удалить — «opacusr-agent service uninstall» \
+             от Администратора",
+        );
+    } else {
+        crate::hint(
+            ui,
+            "потребуется подтверждение UAC; для подключений без присутствия заранее задайте \
+             пароль доступа (Настройки → Безопасность)",
+        );
+    }
 }
 
 fn about_tab(ui: &mut Ui) {

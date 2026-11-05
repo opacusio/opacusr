@@ -106,8 +106,10 @@ enum ServiceAction {
     /// Show the OS service status (SCM state on Windows, launchctl list
     /// on macOS).
     Status,
-    /// SCM entry point — do not run interactively; the supervisor spawns
-    /// the real agent with `--in-session` inside the user's session.
+    /// Manual dispatch entry (the SCM launches the bare exe with the
+    /// service name as argv[1], routed to the dispatcher before the
+    /// CLI parser). `--in-session` is the per-session agent child
+    /// spawned by the supervisor inside the user's session.
     Run {
         /// Internal: run the regular agent in this (already interactive) session.
         #[arg(long, hide = true)]
@@ -124,6 +126,18 @@ async fn main() -> anyhow::Result<()> {
                 .unwrap_or_else(|_| "info,opacusr=debug".into()),
         )
         .init();
+
+    // The service control manager starts a service process with the
+    // SERVICE NAME as argv[1] ("<exe> OpacusRAgent [args]"). That name is
+    // not a CLI subcommand — clap would reject it and the service process
+    // would die before the dispatcher ever ran. Route straight to the SCM
+    // dispatcher when we were launched by the SCM; the interactive
+    // `service run` subcommand below still works for humans.
+    let mut raw_args = std::env::args();
+    let _exe = raw_args.next();
+    if raw_args.next().as_deref() == Some(opacusr_agent::win_service::SERVICE_NAME) {
+        return opacusr_agent::win_service::dispatch();
+    }
 
     let cli = Cli::parse();
     match cli.cmd {

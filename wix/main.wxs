@@ -54,6 +54,16 @@
 
         <UI>
             <UIRef Id='WixUI_Minimal'/>
+            <!-- TeamViewer model, part 2: a fresh setup visibly opens
+                 the app (checkbox on the final page, checked by
+                 default). The WixShellExec standard custom action runs
+                 in the installing user's session; a failed launch never
+                 fails the install (Return='ignore'). -->
+            <Property Id='WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT' Value='Запустить OpacusR'/>
+            <Property Id='WIXUI_EXITDIALOGOPTIONALCHECKBOX' Value='1'/>
+            <Property Id='WixShellExecTarget' Value='[BinDir]opacusr.exe'/>
+            <CustomAction Id='LaunchGuiAfterInstall' BinaryKey='WixCA' DllEntry='WixShellExec' Impersonate='yes' Return='ignore'/>
+            <Publish Dialog='ExitDialog' Control='Finish' Event='DoAction' Value='LaunchGuiAfterInstall'>WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 and NOT Installed</Publish>
         </UI>
         <WixVariable Id='WixUILicenseRtf' Value='assets\license.rtf'/>
 
@@ -61,7 +71,11 @@
              host-agent Windows service (auto-start on boot) via the
              native ServiceInstall / ServiceControl elements below; the
              same registration the agent CLI performs with
-             "opacusr-agent.exe service install". -->
+             "opacusr-agent.exe service install". NOTE: no Arguments 
+             attribute. The SCM inserts the service name as argv[1] when
+             it starts the process; extra launch arguments would land
+             after it and the agent CLI would never see them (the
+             dispatcher needs the bare exe ImagePath). -->
 
         <Directory Id='TARGETDIR' Name='SourceDir'>
             <Directory Id='ProgramFiles64Folder'>
@@ -92,11 +106,12 @@
             </Component>
             <Component Id='AgentExecutable' Guid='*' Win64='yes'>
                 <File Id='OpacusRAgentExe' Source='target\release\opacusr-agent.exe' KeyPath='yes'/>
-                <!-- The service binary is this component's key file;
-                     "service run" is the same launch line the agent's
-                     own CLI registration uses (win_service::install).
-                     Start='install' leaves the machine reachable right
-                     after setup, not after the next reboot. -->
+                <!-- The service binary is this component's key file.
+                     The ImagePath is the bare exe: the SCM passes the
+                     service name as argv[1] (see the note above and
+                     win_service::install). Start='install' leaves the
+                     machine reachable right after setup, not after the
+                     next reboot. -->
                 <ServiceInstall
                     Id='OpacusRAgentServiceInstall'
                     Name='OpacusRAgent'
@@ -104,8 +119,7 @@
                     Description='OpacusR remote-desktop host agent: supervises a per-session agent instance in the active console session.'
                     Type='ownProcess'
                     Start='auto'
-                    ErrorControl='normal'
-                    Arguments='service run'/>
+                    ErrorControl='normal'/>
                 <ServiceControl
                     Id='OpacusRAgentServiceControl'
                     Name='OpacusRAgent'

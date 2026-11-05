@@ -1,14 +1,19 @@
-//! Windows service mode for the agent: `opacusr-agent service
-//! install|uninstall|status|run`.
+//! Windows service mode for the agent:
+//! `opacusr-agent service install|uninstall|status`.
+//!
+//! The SCM launches the service as `<exe> OpacusRAgent` (the service
+//! name is always argv[1]); `main.rs` routes that invocation straight
+//! to [`imp::dispatch`]. The MSI registers the same bare-exe ImagePath
+//! via the native `ServiceInstall` element.
 //!
 //! Two-process design (TeamViewer-style), which sidesteps session 0
 //! isolation entirely:
 //!
-//! * **Supervisor** — the SCM service itself (`service run`), runs in
-//!   session 0 as LocalSystem. It never captures or talks to signaling:
-//!   it only watches the active console session and (re)spawns a
-//!   per-session agent child there, killing it on logoff, session
-//!   switch, unexpected exit or service stop. A kill-on-close job object
+//! * **Supervisor** — the SCM service itself, runs in session 0 as
+//!   LocalSystem. It never captures or talks to signaling: it only
+//!   watches the active console session and (re)spawns a per-session
+//!   agent child there, killing it on logoff, session switch,
+//!   unexpected exit or service stop. A kill-on-close job object
 //!   guarantees the child cannot outlive a crashed supervisor.
 //! * **Child** — `service run --in-session`, created inside the user's
 //!   console session with the user's token, environment and
@@ -95,10 +100,11 @@ pub fn status() -> anyhow::Result<()> {
     }
 }
 
-/// Enter the SCM dispatcher (blocks). This is the `service run` branch:
-/// without `--in-session` it must be launched by the service control
-/// manager, with `--in-session` it is the per-session child started by
-/// the supervisor (handled in `main.rs`).
+/// Enter the SCM dispatcher (blocks). Called when argv[1] is the
+/// service name (launched by the service control manager; see
+/// `main.rs`). The per-session child started by the supervisor is a
+/// different branch (`service run --in-session`, handled in
+/// `main.rs`).
 pub fn dispatch() -> anyhow::Result<()> {
     #[cfg(windows)]
     {
@@ -452,7 +458,16 @@ mod imp {
             start_type: ServiceStartType::AutoStart,
             error_control: ServiceErrorControl::Normal,
             executable_path: exe,
-            launch_arguments: vec![OsString::from("service"), OsString::from("run")],
+            // ImagePath must be the bare executable. The SCM inserts the
+            // SERVICE NAME as argv[1] when it starts the process
+            // ("<exe> OpacusRAgent [args]"), and `service_dispatcher`
+            // relies on that to connect to the SCM. Any launch argument
+            // would land AFTER the service name, so "service run" would
+            // never be parsed by the CLI (clap would reject the bare
+            // "OpacusRAgent" as an unknown subcommand and the service
+            // could never start). `main.rs` routes argv[1]==SERVICE_NAME
+            // straight to `dispatch()` instead of the CLI parser.
+            launch_arguments: vec![],
             dependencies: vec![],
             account_name: None, // LocalSystem: needed for WTSQueryUserToken
             account_password: None,
@@ -494,11 +509,8 @@ mod imp {
                  Run `opacusr-agent passwd` first."
             );
         }
-        println!("Service '{SERVICE_NAME}' installed (auto-start).");
-        println!("Or reboot; the agent starts for every console logon.");
         Ok(())
     }
-
     #[allow(clippy::too_many_lines)]
     pub fn uninstall() -> anyhow::Result<()> {
         let manager = manager(ServiceManagerAccess::CONNECT)
@@ -543,8 +555,9 @@ mod imp {
         Ok(())
     }
 
-    /// `service run` (without `--in-session`): hand control to the SCM
-    /// dispatcher. Blocks until the service stops.
+    /// Hand control to the SCM dispatcher (blocks until the service is
+    /// stopped). Only meaningful when the process was started by the
+    /// SCM — see `main.rs` routing.
     pub fn dispatch() -> anyhow::Result<()> {
         service_dispatcher::start(SERVICE_NAME, ffi_service_main).context(format!(
             "start the '{SERVICE_NAME}' service dispatcher (this subcommand is meant to be \

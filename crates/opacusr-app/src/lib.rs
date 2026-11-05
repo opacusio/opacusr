@@ -8,7 +8,11 @@ pub mod discovery;
 pub mod home;
 pub mod host_panel;
 pub mod print;
+#[cfg(windows)]
+pub mod service_ctl;
 pub mod settings;
+#[cfg(windows)]
+pub mod single_instance;
 pub mod theme;
 #[cfg(any(windows, target_os = "macos"))]
 pub mod tray;
