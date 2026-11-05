@@ -56,15 +56,18 @@
             <UIRef Id='WixUI_Minimal'/>
             <!-- TeamViewer model, part 2: a fresh setup visibly opens
                  the app (checkbox on the final page, checked by
-                 default). The WixShellExec standard custom action runs
-                 in the installing user's session; a failed launch never
-                 fails the install (Return='ignore'). -->
+                 default). The standard WixShellExec action runs in the
+                 installing user's session; a failed launch never fails
+                 the install (Return='ignore'). NOTE: the CustomAction
+                 itself must live at Product level (CNDL0005 inside UI). -->
             <Property Id='WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT' Value='Запустить OpacusR'/>
             <Property Id='WIXUI_EXITDIALOGOPTIONALCHECKBOX' Value='1'/>
-            <Property Id='WixShellExecTarget' Value='[BinDir]opacusr.exe'/>
-            <CustomAction Id='LaunchGuiAfterInstall' BinaryKey='WixCA' DllEntry='WixShellExec' Impersonate='yes' Return='ignore'/>
+            <!-- [#OpacusRExe] resolves to the installed viewer exe (the
+                 File KeyPath of the ViewerExecutable component). -->
+            <Property Id='WixShellExecTarget' Value='[#OpacusRExe]'/>
             <Publish Dialog='ExitDialog' Control='Finish' Event='DoAction' Value='LaunchGuiAfterInstall'>WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 and NOT Installed</Publish>
         </UI>
+        <CustomAction Id='LaunchGuiAfterInstall' BinaryKey='WixCA' DllEntry='WixShellExec' Impersonate='yes' Return='ignore'/>
         <WixVariable Id='WixUILicenseRtf' Value='assets\license.rtf'/>
 
         <!-- TeamViewer model, part 1: the MSI registers AND STARTS the
