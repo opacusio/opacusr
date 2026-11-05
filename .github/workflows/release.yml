@@ -147,7 +147,7 @@ jobs:
           $ver = $env:GITHUB_REF_NAME.Substring(1)
           & wix\candle.exe -arch x64 "-dMsiVersion=$ver" wix\main.wxs -o build\main.wixobj
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & wix\light.exe -ext WixUIExtension build\main.wixobj -o "opacusr-$ver-x64.msi"
+          & wix\light.exe -ext WixUIExtension -ext WixUtilExtension build\main.wixobj -o "opacusr-$ver-x64.msi"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Package zip
         shell: pwsh
