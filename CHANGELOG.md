@@ -4,6 +4,40 @@ All notable changes to OpacusR are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is
 SemVer-ish (breaking protocol changes bump the minor until 1.0).
 
+## [0.11.2] — 2026-11-05
+
+### Fixed
+
+- **The Windows agent service could never start** — the SCM launches a
+  service process as `<exe> <ServiceName> [args]`, so the registered
+  `ImagePath = exe service run` made clap see `OpacusRAgent` (the
+  service name) as an unknown subcommand and the process died before
+  the dispatcher ran (SCM error 1053). The service is now registered
+  with a bare-exe ImagePath (both `win_service::install` and the WiX
+  `ServiceInstall`), and `opacusr-agent` routes the SCM invocation
+  (argv[1] = service name) straight to the dispatcher before the CLI
+  parser. This is what «не запускаются службы» was.
+- **The app could not be closed** («весит в трее»): closing the window
+  now QUITS the app by default (the in-process agent stops with it; an
+  installed OS service keeps the machine reachable). Hide-to-tray on
+  close became an opt-in setting (Настройки → Хост → «Окно»), and the
+  tray «Выход» got a watchdog `process::exit` so it can never leave a
+  zombie in the tray. Without a tray icon the X always quits.
+- Second `opacusr.exe` launches no longer spawn a duplicate process,
+  tray icon and agent (Windows single-instance guard via a named
+  mutex + auto-reset event): the second launch activates and focuses
+  the running window and exits.
+
+### Added
+
+- **Windows service row in Настройки → Хост**: live SCM status
+  («Служба Windows: работает / остановлена / не установлена») and a
+  one-click «Установить службу» button with a UAC elevation for zip
+  installs — no admin console needed.
+- The MSI now launches OpacusR right after setup (checkbox on the
+  final page, on by default) so a fresh install visibly starts instead
+  of looking like «nothing runs».
+
 ## [0.11.1] — 2026-11-04
 
 ### Changed
