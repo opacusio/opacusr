@@ -60,7 +60,10 @@
                  installing user's session; a failed launch never fails
                  the install (Return='ignore'). NOTE: the CustomAction
                  itself must live at Product level (CNDL0005 inside UI). -->
-            <Property Id='WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT' Value='Запустить OpacusR'/>
+            <!-- Latin-only: the MSI summary database is codepage 1252
+                 (Product/@Codepage); Cyrillic here fails LGHT0311. The
+                 wizard itself is English (Language 1033). -->
+            <Property Id='WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT' Value='Launch OpacusR'/>
             <Property Id='WIXUI_EXITDIALOGOPTIONALCHECKBOX' Value='1'/>
             <!-- [#OpacusRExe] resolves to the installed viewer exe (the
                  File KeyPath of the ViewerExecutable component). -->
