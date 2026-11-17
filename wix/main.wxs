@@ -137,21 +137,23 @@
             <Component Id='ServerExecutable' Guid='*' Win64='yes'>
                 <File Id='OpacusRServerExe' Source='target\release\opacusr-server.exe' KeyPath='yes'/>
             </Component>
-            <!-- TeamViewer-style autostart: HKLM Run starts the GUI
-                 (hidden to the tray via the tray flag) at every user
-                 login; the GUI then starts the host agent itself
-                 (start_agent_automatically). A real Windows SERVICE is
-                 deliberately not installed: screen capture and input
-                 injection must run in the user session (Session 0 has
-                 no desktop), so the login autostart is the correct
-                 mechanism here. -->
+            <!-- TeamViewer-style autostart: HKLM Run starts the GUI at
+                 every user login WITH A VISIBLE WINDOW (TeamViewer opens
+                 its window at logon too). The GUI starts the host agent
+                 itself (start_agent_automatically) — or defers to the
+                 already-running OpacusRAgent service (the service-aware
+                 home card shows «служба работает»). A bare --tray
+                 autostart was removed on purpose: a window that never
+                 appears at logon reads as «приложение запустилось и
+                 висит в трее, не выходит». The GUI still honors --tray
+                 for anything that explicitly launches it that way. -->
             <Component Id='AutoStartRun' Guid='7f1c2d64-9b3e-4c8a-a5f1-2e6b8d4a9c31' Win64='yes'>
                 <RegistryValue
                     Root='HKLM'
                     Key='Software\Microsoft\Windows\CurrentVersion\Run'
                     Name='OpacusR'
                     Type='string'
-                    Value='&quot;[BinDir]opacusr.exe&quot; --tray'
+                    Value='&quot;[BinDir]opacusr.exe&quot;'
                     KeyPath='yes'/>
             </Component>
         </ComponentGroup>

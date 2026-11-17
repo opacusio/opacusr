@@ -4,6 +4,40 @@ All notable changes to OpacusR are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is
 SemVer-ish (breaking protocol changes bump the minor until 1.0).
 
+## [0.11.3] — 2026-11-17
+
+### Fixed
+
+- **The tray icon could linger after «Выход»** («весит в трее»): the
+  quit watchdog `process::exit` bypasses every destructor, so a
+  force-exited process left a dead tray icon on screen until the mouse
+  touched it. The icon is now dropped explicitly (both on tray «Выход»
+  and on the real-exit close path) before the process ends.
+- **Logon autostart no longer launches the window hidden** — the MSI
+  autostart entry dropped the `--tray` flag: at logon the OpacusR
+  window OPENS (TeamViewer opens its window at logon too). A hidden
+  autostarted instance read as «запустилось и висит в трее, не
+  выходит»; the flag is still honored when something launches the exe
+  with it explicitly.
+- **Show-from-tray / second-launch reveal is more robust**: the
+  window is un-minimized (`Minimized(false)`) before `Visible(true)`
+  on every reveal path (tray «Показать», tray icon click, second
+  `opacusr.exe` launch, incoming-consent popup) — a hidden+minimized
+  window on Windows can ignore a bare `Visible(true)`.
+
+### Changed
+
+- **The GUI defers to a running service** (TeamViewer model): when the
+  `OpacusRAgent` Windows service is running, the GUI no longer starts
+  its own in-process agent on top of it — that registered a SECOND ID
+  for the same machine on the signaling server. The home card shows
+  «● служба работает» with a hint, the tray «Запустить агента» stays a
+  no-op until the service is stopped, and Настройки → Хост keeps the
+  service row for install/status control.
+- **The build version is visible in the UI** (top-right of the window,
+  e.g. `v0.11.3`) so it is always clear which binary actually runs —
+  an MSI upgrade never silently leaves an old-looking install.
+
 ## [0.11.2] — 2026-11-05
 
 ### Fixed

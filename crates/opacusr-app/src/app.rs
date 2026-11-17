@@ -256,6 +256,11 @@ pub struct App {
     svc_state: Option<crate::service_ctl::SvcState>,
     #[cfg(windows)]
     svc_state_at: Option<std::time::Instant>,
+    /// The OpacusRAgent service is RUNNING: it already supervises the
+    /// per-session agent, so the GUI must not start a second in-process
+    /// agent (it would register a duplicate ID on the same server).
+    /// Always `false` off Windows (`query_state` answers NotInstalled).
+    pub(crate) service_hosts: bool,
 }
 
 impl App {
@@ -325,8 +330,21 @@ impl App {
             svc_state: None,
             #[cfg(windows)]
             svc_state_at: None,
+            service_hosts: false,
         };
         app.refresh_unattended_display();
+
+        // Windows TeamViewer model: when the agent service is running it
+        // already keeps the machine reachable (supervisor + per-session
+        // child). Starting the GUI's own agent on top would register a
+        // SECOND ID for the same machine — defer to the service.
+        #[cfg(windows)]
+        {
+            app.service_hosts = matches!(
+                crate::service_ctl::query_state(),
+                crate::service_ctl::SvcState::Running
+            );
+        }
 
         // Single-instance (Windows): a second launch of opacusr.exe must
         // reveal THIS window instead of starting a duplicate agent/tray.
@@ -351,8 +369,9 @@ impl App {
         }
 
         // TeamViewer model: the agent starts with the app unless the
-        // user turned the autostart off (Настройки → Хост).
-        if app.config.start_agent_automatically {
+        // user turned the autostart off (Настройки → Хост) — or the
+        // Windows service is already hosting (see above).
+        if app.config.start_agent_automatically && !app.service_hosts {
             app.host_start_clicked();
         }
 
@@ -383,6 +402,11 @@ impl App {
                 // installed OS service keeps the machine reachable).
                 self.quit_requested = true;
                 self.host_stop_clicked();
+                // Remove the icon deterministically: a force-exited
+                // process cannot run destructors, and a dropped icon
+                // can never linger on screen until hover.
+                self.tray = None;
+                self.tray_action_rx = None;
             }
         }
 
@@ -395,6 +419,9 @@ impl App {
         for a in picked {
             match a {
                 TrayAction::Show => {
+                    // Un-minimize first: on Windows a hidden+minimized
+                    // window ignores a bare Visible(true).
+                    ctx.send_viewport_cmd(ViewportCommand::Minimized(false));
                     ctx.send_viewport_cmd(ViewportCommand::Visible(true));
                     ctx.send_viewport_cmd(ViewportCommand::Focus);
                     self.window_hidden = false;
@@ -404,7 +431,9 @@ impl App {
                     self.window_hidden = true;
                 }
                 TrayAction::StartAgent => {
-                    if self.host.is_none() {
+                    // While the Windows service hosts the machine the
+                    // GUI agent would only register a duplicate ID.
+                    if self.host.is_none() && !self.service_hosts {
                         self.host_start_clicked();
                     }
                 }
@@ -416,6 +445,13 @@ impl App {
                 TrayAction::Quit => {
                     self.quit_requested = true;
                     self.host_stop_clicked();
+                    // Drop the tray icon BEFORE the force-exit below:
+                    // std::process::exit skips every destructor, and a
+                    // skipped TrayIcon drop leaves a dead icon in the
+                    // tray until the mouse touches it («висит в трее»
+                    // after quitting).
+                    self.tray = None;
+                    self.tray_action_rx = None;
                     // Not canceled — eframe will exit after this frame.
                     ctx.send_viewport_cmd(ViewportCommand::Close);
                     // Watchdog: the command above normally ends the run
@@ -444,6 +480,7 @@ impl App {
     #[cfg(any(windows, target_os = "macos"))]
     fn auto_show_for_consent(&mut self, ctx: &Context) {
         if self.window_hidden && self.host.as_ref().is_some_and(|h| h.consent.is_some()) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             self.window_hidden = false;
@@ -827,6 +864,9 @@ impl eframe::App for App {
             self.start_hidden = false;
             self.window_hidden = false;
             self.revealed = true;
+            // Un-minimize first (see TrayAction::Show): a hidden or
+            // minimized window on Windows may ignore a bare Visible.
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
         }
@@ -1194,6 +1234,14 @@ impl eframe::App for App {
                 );
                 ui.label(theme::bold("OpacusR").strong().size(18.0));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    // Build marker: lets the user (and support) see which
+                    // binary actually runs — e.g. after an MSI upgrade
+                    // that left an old shortcut or extracted copy around.
+                    ui.label(
+                        egui::RichText::new(concat!("v", env!("CARGO_PKG_VERSION")))
+                            .weak()
+                            .small(),
+                    );
                     if self.session.is_some() && ui.button("⏹ Отключиться").clicked() {
                         self.disconnect_clicked();
                     }

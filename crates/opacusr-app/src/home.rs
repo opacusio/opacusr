@@ -233,8 +233,32 @@ fn password_block(ui: &mut Ui, app: &mut App) {
 }
 
 /// Offline / registration / ready dot + the agent start/stop control,
-/// TeamViewer-style «клиент всегда работает».
+/// TeamViewer-style «клиент всегда работает». When the Windows service
+/// hosts the machine the row says so and offers no duplicate start
+/// button — the service IS the agent.
 fn host_status_row(ui: &mut Ui, app: &mut App) {
+    if app.service_hosts && app.host.is_none() {
+        ui.horizontal(|ui| {
+            ui.label(theme::dot("● служба работает", theme::TEAL));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(
+                    egui::RichText::new("хост-агент работает как служба Windows")
+                        .weak()
+                        .small(),
+                );
+            });
+        });
+        ui.add_space(2.0);
+        ui.label(
+            egui::RichText::new(
+                "Машина доступна уже сейчас (автозапуск при загрузке). Управление службой: \
+                 Настройки → Хост → «Служба Windows».",
+            )
+            .weak()
+            .small(),
+        );
+        return;
+    }
     ui.horizontal(|ui| {
         let running = app.host.is_some();
         if running {
