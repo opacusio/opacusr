@@ -65,7 +65,7 @@ x11rb = { version = "0.13", features = ["randr", "xfixes"] }
 enigo = "0.6"
 arboard = "3"
 portable-pty = "0.8"
-cpal = "0.15"
+cpal = "0.18"
 audiopus = "0.2"
 
 clap = { version = "4", features = ["derive"] }
