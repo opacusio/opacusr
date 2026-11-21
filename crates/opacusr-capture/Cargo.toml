@@ -15,7 +15,7 @@ x11rb = { workspace = true, optional = true }
 [target.'cfg(target_os = "linux")'.dependencies]
 # Wayland (PipeWire) capture — optional, experimental. See src/wayland.rs.
 # The xdg-desktop-portal asks the user which monitor to share.
-ashpd = { version = "0.9", optional = true, default-features = false, features = [
+ashpd = { version = "0.11", optional = true, default-features = false, features = [
     "async-std",
 ] }
 pipewire = { version = "0.8", optional = true }
