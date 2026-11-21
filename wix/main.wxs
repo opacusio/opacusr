@@ -142,11 +142,11 @@
                  its window at logon too). The GUI starts the host agent
                  itself (start_agent_automatically) — or defers to the
                  already-running OpacusRAgent service (the service-aware
-                 home card shows «служба работает»). A bare --tray
+                 home card shows «служба работает»). A bare tray-flag
                  autostart was removed on purpose: a window that never
                  appears at logon reads as «приложение запустилось и
-                 висит в трее, не выходит». The GUI still honors --tray
-                 for anything that explicitly launches it that way. -->
+                 висит в трее, не выходит». The GUI still honors the
+                 tray flag for anything that explicitly launches it that way. -->
             <Component Id='AutoStartRun' Guid='7f1c2d64-9b3e-4c8a-a5f1-2e6b8d4a9c31' Win64='yes'>
                 <RegistryValue
                     Root='HKLM'
