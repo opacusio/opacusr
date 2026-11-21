@@ -1,19 +1,19 @@
 # download/
 
-Prebuilt OpacusR binaries. **v0.11.3 is the current release** — the
+Prebuilt OpacusR binaries. **v0.11.4 is the current release** — the
 «всё должно работать» batch on top of the v0.11.1/0.11.2 fixes: the
 tray icon can no longer linger after «Выход», the MSI autostart opens
 the window at logon (no more invisible-in-tray starts), showing the
 window from the tray / a second launch un-minimizes it first, and the
 GUI defers to a running `OpacusRAgent` service instead of registering
 a duplicate ID (the home card shows «служба работает»). The build
-version is displayed top-right in the window (e.g. `v0.11.3`), so it
+version is displayed top-right in the window (e.g. `v0.11.4`), so it
 is always clear which binary runs. The wire protocol is v9 (bincode
 2.x): update the agent and the viewer together.
 
 The official, checksummed release set (Windows MSVC zip + MSI, Linux
 tar.gz + Wayland variant + debs, macOS tar.gz, SHA256SUMS) lives in
-GitHub Releases: <https://github.com/opacusio/opacusr/releases/tag/v0.11.3>.
+GitHub Releases: <https://github.com/opacusio/opacusr/releases/tag/v0.11.4>.
 
 ## Notes
 
@@ -39,7 +39,7 @@ GitHub Releases: <https://github.com/opacusio/opacusr/releases/tag/v0.11.3>.
 ## Quick start (linux)
 
 ```bash
-tar -xzf opacusr-0.11.3-linux-x86_64.tar.gz
+tar -xzf opacusr-0.11.4-linux-x86_64.tar.gz
 cd opacusr-0.11.3-linux-x86_64
 ./opacusr            # GUI client
 ./opacusr-agent run  # host service

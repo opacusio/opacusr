@@ -151,9 +151,37 @@ pub(crate) fn tick(child: Option<(u32, bool)>, console: u32) -> TickAction {
     }
 }
 
+// ---------------------------------------------------------------------
+// Support-log timestamp (pure, platform-independent, unit-tested).
+// ---------------------------------------------------------------------
+
+/// `YYYY-MM-DD HH:MM:SSZ` for the given unix-epoch seconds — no chrono
+/// dependency (civil_from_days, Howard Hinnant's algorithm). Used by the
+/// Windows service support log (`svc_log`).
+#[allow(dead_code)]
+fn utc_string(secs: u64) -> String {
+    let (days, rem) = (secs / 86400, secs % 86400);
+    let z = days as i64 + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    format!(
+        "{y:04}-{m:02}-{d:02} {:02}:{:02}:{:02}Z",
+        rem / 3600,
+        rem % 3600 / 60,
+        rem % 60
+    )
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{tick, TickAction, NO_SESSION};
+    use super::{tick, utc_string, TickAction, NO_SESSION};
 
     #[test]
     fn spawns_child_for_active_session() {
@@ -184,6 +212,15 @@ mod tests {
     fn waits_without_user_and_child() {
         assert_eq!(tick(None, NO_SESSION), TickAction::Wait);
         assert_eq!(tick(Some((1, false)), NO_SESSION), TickAction::Wait);
+    }
+
+    #[test]
+    fn utc_string_formats_known_epochs() {
+        assert_eq!(utc_string(0), "1970-01-01 00:00:00Z");
+        assert_eq!(utc_string(1_000_000_000), "2001-09-09 01:46:40Z");
+        assert_eq!(utc_string(1_795_242_600), "2026-11-21 06:30:00Z");
+        // Leap-year boundary: 2024-02-29 12:00:00Z
+        assert_eq!(utc_string(1_709_208_000), "2024-02-29 12:00:00Z");
     }
 }
 
@@ -224,14 +261,53 @@ mod imp {
     /// How often the supervisor polls the console session / child state.
     const POLL_INTERVAL: Duration = Duration::from_secs(5);
 
+    // -- support log ----------------------------------------------------
+
+    /// Best-effort append-only support log. A Windows service has no
+    /// console: the tracing subscriber writes to a stdout that goes
+    /// nowhere, so the supervisor's lifecycle (SCM handshake, child
+    /// spawns, errors) used to be invisible and «не стартует» reports
+    /// arrived with zero diagnostics. `C:\ProgramData\OpacusR\service.log`
+    /// is writable by LocalSystem and readable by administrators.
+    fn svc_log(msg: &str) {
+        use std::path::PathBuf;
+        use std::sync::OnceLock;
+        static PATH: OnceLock<Option<PathBuf>> = OnceLock::new();
+        let path = PATH.get_or_init(|| {
+            let dir = PathBuf::from(
+                std::env::var("ProgramData").unwrap_or_else(|_| r"C:\ProgramData".into()),
+            )
+            .join("OpacusR");
+            std::fs::create_dir_all(&dir).ok()?;
+            Some(dir.join("service.log"))
+        });
+        if let Some(p) = path {
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(p)
+            {
+                use std::io::Write;
+                use std::time::{SystemTime, UNIX_EPOCH};
+                let secs = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                let _ = writeln!(f, "{} {}", super::utc_string(secs), msg);
+            }
+        }
+    }
+
     // -- SCM plumbing ---------------------------------------------------
 
     define_windows_service!(ffi_service_main, service_main);
 
     /// Entry point invoked by the SCM in a fresh thread.
     fn service_main(_args: Vec<OsString>) {
+        svc_log("service_main: entered (SCM started the service process)");
         if let Err(e) = run_supervisor() {
             tracing::error!(target: "opacusr", "service supervisor failed: {e:#}");
+            svc_log(&format!("service_main: supervisor FAILED: {e:#}"));
         }
     }
 
@@ -263,6 +339,7 @@ mod imp {
         let handler = move |control: ServiceControl| -> ServiceControlHandlerResult {
             match control {
                 ServiceControl::Stop | ServiceControl::Shutdown => {
+                    svc_log("supervisor: Stop/Shutdown control received");
                     let _ = tx.send(control);
                     ServiceControlHandlerResult::NoError
                 }
@@ -277,7 +354,21 @@ mod imp {
             ServiceState::StartPending,
             Duration::from_secs(10),
         )?;
+        svc_log("supervisor: registered with the SCM (StartPending reported)");
         tracing::info!(target: "opacusr", "service supervisor started");
+
+        // Report RUNNING immediately: the SCM waits ~30 s after the start
+        // request for the first Running status and kills the process with
+        // error 1053 if it never arrives — which Windows Installer
+        // surfaced as «Service 'OpacusR Agent' failed to start». Nothing
+        // blocks between here and the loop below, so the supervisor is
+        // genuinely up the moment Running is reported.
+        report(
+            &status_handle,
+            ServiceState::Running,
+            Duration::from_secs(5),
+        )?;
+        svc_log("supervisor: Running reported to the SCM (service is up)");
 
         let mut child: Option<ChildProc> = None;
         let mut child_session: u32 = NO_SESSION;
@@ -308,6 +399,9 @@ mod imp {
                     match spawn_child(sid) {
                         Ok(c) => {
                             tracing::info!(target: "opacusr", "session agent started in console session {sid}");
+                            svc_log(&format!(
+                                "supervisor: session agent spawned in console session {sid}"
+                            ));
                             last_spawn_error = None;
                             child = Some(c);
                             child_session = sid;
@@ -316,6 +410,9 @@ mod imp {
                             let msg = format!("{e:#}");
                             if last_spawn_error.as_deref() != Some(msg.as_str()) {
                                 tracing::warn!(target: "opacusr", "spawning session agent in session {sid} failed: {msg}");
+                                svc_log(&format!(
+                                    "supervisor: spawn in session {sid} failed: {msg}"
+                                ));
                                 last_spawn_error = Some(msg);
                             }
                         }
@@ -326,6 +423,7 @@ mod imp {
 
         tracing::info!(target: "opacusr", "service stop requested; terminating session agent");
         drop(child);
+        svc_log("supervisor: Stopped reported (service exiting)");
         report(&status_handle, ServiceState::Stopped, Duration::ZERO)
             .context("report Stopped to the service control manager")?;
         Ok(())

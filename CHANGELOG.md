@@ -4,6 +4,26 @@ All notable changes to OpacusR are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is
 SemVer-ish (breaking protocol changes bump the minor until 1.0).
 
+## [0.11.4] — 2026-11-21
+
+### Fixed
+
+- **The Windows service could never reach `Running`** — the real cause
+  of «Service 'OpacusR Agent' failed to start» in the MSI (and of
+  `sc start` timing out with error 1053): the supervisor reported
+  `StartPending`, entered its poll loop and never reported
+  `ServiceState::Running`, so the SCM killed the process ~30 s after
+  every start attempt. The service now reports `Running` immediately
+  after the handshake (nothing blocks before the poll loop), and the
+  per-session agent spawn / stop logic is unchanged.
+- **The service left no diagnostics behind**: a Windows service has no
+  console, so every lifecycle message was lost. The supervisor now
+  appends a timestamped support log to
+  `C:\ProgramData\OpacusR\service.log` (SCM handshake, Running,
+  per-session child spawns and their failures, stop requests) —
+  writable by LocalSystem, readable by administrators, best-effort
+  (a failed log write can never crash the service).
+
 ## [0.11.3] — 2026-11-17
 
 ### Fixed
