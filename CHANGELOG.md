@@ -4,6 +4,31 @@ All notable changes to OpacusR are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is
 SemVer-ish (breaking protocol changes bump the minor until 1.0).
 
+## [0.11.5] — 2026-11-21
+
+### Fixed
+
+- **The Windows service process died before the dispatcher ever ran** —
+  the actual root cause of the MSI «Service 'OpacusR Agent' failed to
+  start» dialog (v0.11.4 fixed the missing `Running` report, but the
+  process never got that far): the SCM launches a service process with
+  the ImagePath as-is and does NOT append the service name to the
+  command line (it goes to `ServiceMain` through the dispatcher), so
+  the old `argv[1] == "OpacusRAgent"` routing never fired, the process
+  fell into the CLI parser and clap exited with «requires a
+  subcommand». The agent now tries `StartServiceCtrlDispatcher` before
+  the CLI parser (`win_service::try_dispatch`): as a service process
+  it connects and runs; anywhere else it fails fast with 1063 and the
+  normal CLI continues.
+- **MSI hardening**: the service's `ErrorControl` is now `ignore`, so a
+  service start failure can never block or roll back the installation
+  with the Retry/Cancel dialog; and `ServiceControl Remove='both'`
+  stops and deletes any stale `OpacusRAgent` registration right before
+  the fresh one is created, so a leftover manual install can no longer
+  make the setup fail.
+- The WiX download step in the release workflow now retries (a
+  transient download failure aborted the first v0.11.5 run).
+
 ## [0.11.4] — 2026-11-21
 
 ### Fixed
