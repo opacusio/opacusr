@@ -77,11 +77,11 @@
              host-agent Windows service (auto-start on boot) via the
              native ServiceInstall / ServiceControl elements below; the
              same registration the agent CLI performs with
-             "opacusr-agent.exe service install". NOTE: no Arguments 
-             attribute. The SCM inserts the service name as argv[1] when
-             it starts the process; extra launch arguments would land
-             after it and the agent CLI would never see them (the
-             dispatcher needs the bare exe ImagePath). -->
+             "opacusr-agent.exe service install". The agent enters the
+             SCM dispatcher before the CLI parser on every start and
+             only falls back to the CLI when the caller is not the SCM
+             (error 1063), so the bare-exe ImagePath needs no launch
+             arguments. -->
 
         <Directory Id='TARGETDIR' Name='SourceDir'>
             <Directory Id='ProgramFiles64Folder'>
@@ -113,11 +113,18 @@
             <Component Id='AgentExecutable' Guid='*' Win64='yes'>
                 <File Id='OpacusRAgentExe' Source='target\release\opacusr-agent.exe' KeyPath='yes'/>
                 <!-- The service binary is this component's key file.
-                     The ImagePath is the bare exe: the SCM passes the
-                     service name as argv[1] (see the note above and
-                     win_service::install). Start='install' leaves the
-                     machine reachable right after setup, not after the
-                     next reboot. -->
+                     The ImagePath is the bare exe (the agent routes
+                     itself into the SCM dispatcher on start; see the
+                     note above and win_service::install). Start='auto'
+                     leaves the machine reachable right after setup,
+                     not after the next reboot. -->
+                <!-- ErrorControl='ignore': a failure to start the
+                     service here can never block or roll back the
+                     installation (the old 'normal' turned any start
+                     hiccup into the blocking Retry/Cancel dialog 1923).
+                     The GUI shows the live service state and
+                     C:\ProgramData\OpacusR\service.log keeps the
+                     diagnostics. -->
                 <ServiceInstall
                     Id='OpacusRAgentServiceInstall'
                     Name='OpacusRAgent'
@@ -125,13 +132,19 @@
                     Description='OpacusR remote-desktop host agent: supervises a per-session agent instance in the active console session.'
                     Type='ownProcess'
                     Start='auto'
-                    ErrorControl='normal'/>
+                    ErrorControl='ignore'/>
+                <!-- Remove='both': DeleteServices runs right before
+                     InstallServices, so a stale registration left over
+                     from an older build or a manual CLI install is
+                     stopped and deleted first and can never make the
+                     fresh registration fail with "service already
+                     exists". Stop='both' covers upgrades too. -->
                 <ServiceControl
                     Id='OpacusRAgentServiceControl'
                     Name='OpacusRAgent'
                     Start='install'
                     Stop='both'
-                    Remove='uninstall'
+                    Remove='both'
                     Wait='yes'/>
             </Component>
             <Component Id='ServerExecutable' Guid='*' Win64='yes'>

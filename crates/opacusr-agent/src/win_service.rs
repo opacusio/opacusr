@@ -1,10 +1,18 @@
 //! Windows service mode for the agent:
 //! `opacusr-agent service install|uninstall|status`.
 //!
-//! The SCM launches the service as `<exe> OpacusRAgent` (the service
-//! name is always argv[1]); `main.rs` routes that invocation straight
-//! to [`imp::dispatch`]. The MSI registers the same bare-exe ImagePath
-//! via the native `ServiceInstall` element.
+//! The SCM starts the service process with the ImagePath AS-IS: the
+//! service name is NOT appended to the process command line (per the
+//! `ServiceMain` contract it is delivered to `ServiceMain` by the
+//! dispatcher, never to `main()`). Because argv cannot tell us who
+//! launched us, `main.rs` calls [`try_dispatch`] BEFORE the CLI
+//! parser: as a service process the dispatcher connects and blocks;
+//! launched any other way it fails fast with 1063 and the CLI runs.
+//! The MSI registers the same bare-exe ImagePath via the native
+//! `ServiceInstall` element. (The old argv[1] routing never fired and
+//! the process died in the CLI parser, so the service could not start
+//! at all, which Windows Installer surfaced as the generic
+//! "failed to start / sufficient privileges" dialog.)
 //!
 //! Two-process design (TeamViewer-style), which sidesteps session 0
 //! isolation entirely:
@@ -100,11 +108,40 @@ pub fn status() -> anyhow::Result<()> {
     }
 }
 
-/// Enter the SCM dispatcher (blocks). Called when argv[1] is the
-/// service name (launched by the service control manager; see
-/// `main.rs`). The per-session child started by the supervisor is a
-/// different branch (`service run --in-session`, handled in
-/// `main.rs`).
+/// Try to enter the SCM dispatcher; returns whether the process was
+/// launched by the service control manager.
+///
+/// The SCM starts the service process with the ImagePath as-is and
+/// does NOT append the service name to the command line (the name is
+/// passed to `ServiceMain` through the dispatcher connection, per its
+/// documented contract), so argv can never identify a service start.
+/// The canonical detection is to just call the dispatcher:
+///
+/// * started by the SCM: it connects and blocks for the whole service
+///   lifetime, then returns `Ok(())` — we report `Ok(true)`;
+/// * started interactively: it fails immediately with
+///   `ERROR_FAILED_SERVICE_CONTROLLER_CONNECT` (1063) — we report
+///   `Ok(false)` and `main.rs` falls through to the CLI parser;
+/// * any other failure is a real error — `Err`.
+///
+/// This replaces the old `argv[1] == SERVICE_NAME` routing, which
+/// never fired (the SCM appends nothing) and made the service process
+/// die in the CLI parser before the dispatcher could ever run.
+pub fn try_dispatch() -> anyhow::Result<bool> {
+    #[cfg(windows)]
+    {
+        imp::try_dispatch()
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(false)
+    }
+}
+
+/// Enter the SCM dispatcher (blocks). Kept for the manual
+/// `service run` subcommand: interactively it explains why dispatch is
+/// not possible. The SCM start path uses [`try_dispatch`] from
+/// `main.rs` instead.
 pub fn dispatch() -> anyhow::Result<()> {
     #[cfg(windows)]
     {
@@ -299,6 +336,11 @@ mod imp {
     }
 
     // -- SCM plumbing ---------------------------------------------------
+
+    /// `StartServiceCtrlDispatcher` error when the process was not
+    /// started by the SCM (interactive run). 1063 =
+    /// ERROR_FAILED_SERVICE_CONTROLLER_CONNECT.
+    const ERROR_NOT_A_SERVICE_PROCESS: i32 = 1063;
 
     define_windows_service!(ffi_service_main, service_main);
 
@@ -556,15 +598,12 @@ mod imp {
             start_type: ServiceStartType::AutoStart,
             error_control: ServiceErrorControl::Normal,
             executable_path: exe,
-            // ImagePath must be the bare executable. The SCM inserts the
-            // SERVICE NAME as argv[1] when it starts the process
-            // ("<exe> OpacusRAgent [args]"), and `service_dispatcher`
-            // relies on that to connect to the SCM. Any launch argument
-            // would land AFTER the service name, so "service run" would
-            // never be parsed by the CLI (clap would reject the bare
-            // "OpacusRAgent" as an unknown subcommand and the service
-            // could never start). `main.rs` routes argv[1]==SERVICE_NAME
-            // straight to `dispatch()` instead of the CLI parser.
+            // ImagePath stays the bare executable. The SCM appends
+            // nothing to the service command line and the agent needs
+            // no launch argument: `main.rs` calls `try_dispatch()`
+            // before the CLI parser, and the dispatcher only connects
+            // when the SCM actually started us (otherwise it fails
+            // with 1063 and the normal CLI runs).
             launch_arguments: vec![],
             dependencies: vec![],
             account_name: None, // LocalSystem: needed for WTSQueryUserToken
@@ -653,13 +692,29 @@ mod imp {
         Ok(())
     }
 
+    pub fn try_dispatch() -> anyhow::Result<bool> {
+        match service_dispatcher::start(SERVICE_NAME, ffi_service_main) {
+            Ok(()) => Ok(true),
+            Err(windows_service::Error::Winapi(e))
+                if e.raw_os_error() == Some(ERROR_NOT_A_SERVICE_PROCESS) =>
+            {
+                Ok(false)
+            }
+            Err(e) => Err(anyhow::Error::new(e).context("start the SCM service dispatcher")),
+        }
+    }
+
     /// Hand control to the SCM dispatcher (blocks until the service is
     /// stopped). Only meaningful when the process was started by the
-    /// SCM — see `main.rs` routing.
+    /// SCM; interactively it explains why dispatch is not possible.
     pub fn dispatch() -> anyhow::Result<()> {
-        service_dispatcher::start(SERVICE_NAME, ffi_service_main).context(format!(
-            "start the '{SERVICE_NAME}' service dispatcher (this subcommand is meant to be \
-             launched by the service control manager, not interactively)"
-        ))
+        if try_dispatch()? {
+            Ok(())
+        } else {
+            bail!(
+                "this subcommand is meant to be launched by the service control manager, \
+                 not interactively"
+            )
+        }
     }
 }

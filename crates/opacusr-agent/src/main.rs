@@ -119,6 +119,26 @@ enum ServiceAction {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Service mode first. The SCM starts the service process with the
+    // bare ImagePath and appends NOTHING to the command line (the
+    // service name goes to `ServiceMain` through the dispatcher, never
+    // to `main()`), so argv can never identify a service start. The old
+    // `argv[1] == SERVICE_NAME` routing therefore never fired, the
+    // process fell into the CLI parser, clap exited with "requires a
+    // subcommand" and the service could not start at all (Windows
+    // Installer showed the generic "failed to start" dialog).
+    //
+    // Instead: try the SCM dispatcher before the CLI parser. As a
+    // service process it connects and blocks for the whole service
+    // lifetime; launched any other way (CLI, GUI, the in-session child)
+    // it fails immediately with ERROR_FAILED_SERVICE_CONTROLLER_CONNECT
+    // (1063) and we continue as a regular CLI run below.
+    match opacusr_agent::win_service::try_dispatch() {
+        Ok(true) => return Ok(()),
+        Ok(false) => {}
+        Err(e) => return Err(e),
+    }
+
     opacusr_transport::update::spawn_update_notice();
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -126,18 +146,6 @@ async fn main() -> anyhow::Result<()> {
                 .unwrap_or_else(|_| "info,opacusr=debug".into()),
         )
         .init();
-
-    // The service control manager starts a service process with the
-    // SERVICE NAME as argv[1] ("<exe> OpacusRAgent [args]"). That name is
-    // not a CLI subcommand — clap would reject it and the service process
-    // would die before the dispatcher ever ran. Route straight to the SCM
-    // dispatcher when we were launched by the SCM; the interactive
-    // `service run` subcommand below still works for humans.
-    let mut raw_args = std::env::args();
-    let _exe = raw_args.next();
-    if raw_args.next().as_deref() == Some(opacusr_agent::win_service::SERVICE_NAME) {
-        return opacusr_agent::win_service::dispatch();
-    }
 
     let cli = Cli::parse();
     match cli.cmd {
