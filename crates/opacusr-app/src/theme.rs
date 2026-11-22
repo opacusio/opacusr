@@ -241,18 +241,18 @@ pub fn drawer_header(ui: &mut Ui, title: &str) -> bool {
     ui.horizontal(|ui| {
         ui.label(bold(title.to_string()).size(17.0));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let (rect, resp) =
-                ui.allocate_exact_size(Vec2::splat(22.0), egui::Sense::click());
+            let (rect, resp) = ui.allocate_exact_size(Vec2::splat(22.0), egui::Sense::click());
             let resp = resp.on_hover_text("Закрыть (Esc)");
             let visuals = ui.style().interact(&resp);
             if resp.hovered() {
-                ui.painter()
-                    .rect_filled(rect, Rounding::same(6.0), HOVER);
+                ui.painter().rect_filled(rect, Rounding::same(6.0), HOVER);
             }
             let r = rect.shrink(7.0);
             let stroke = visuals.fg_stroke;
-            ui.painter().line_segment([r.left_top(), r.right_bottom()], stroke);
-            ui.painter().line_segment([r.right_top(), r.left_bottom()], stroke);
+            ui.painter()
+                .line_segment([r.left_top(), r.right_bottom()], stroke);
+            ui.painter()
+                .line_segment([r.right_top(), r.left_bottom()], stroke);
             if resp.clicked() {
                 close = true;
             }
