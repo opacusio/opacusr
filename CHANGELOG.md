@@ -54,6 +54,11 @@ SemVer-ish (breaking protocol changes bump the minor until 1.0).
   для iOS в libc). Когда стек webrtc поднимет nix — расширим чек.
 - Захват экрана Android (режим хоста с телефона, MediaProjection) —
   следующая итерация; сейчас телефон = зритель.
+- Детали сборки APK (проверены на релизном прогоне): target SDK 34
+  (на раннерах GitHub нет platform 30), релизная подпись —
+  самогенерируемый кейстор, закэшированный между прогонами
+  (`CARGO_APK_RELEASE_KEYSTORE` передаётся абсолютным путём — cargo-apk
+  делает `cd target/release/apk` перед apksigner).
 
 ### Прочее
 
