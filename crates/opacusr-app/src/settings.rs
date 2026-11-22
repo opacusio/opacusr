@@ -160,14 +160,22 @@ fn connect_tab(ui: &mut Ui, app: &mut App) {
         .show(ui, |ui| {
             ui.label("Сигнальный сервер");
             ui.vertical(|ui| {
-                ui.add_sized(
+                let url_resp = ui.add_sized(
                     [360.0, 24.0],
                     egui::TextEdit::singleline(&mut app.server_url)
-                        .hint_text("wss://… — необязат., по умолчанию публичный"),
+                        .hint_text("ws://IP_компьютера:8080/signal — см. подсказку"),
                 );
+                // Persist on change: before 0.11.13 this field lived only
+                // in memory and silently reverted to the loopback default
+                // after a restart — on a phone that read as «host
+                // unavailable» again and again.
+                if url_resp.changed() {
+                    app.config.server_url = app.server_url.clone();
+                    let _ = app.config.save();
+                }
                 crate::hint(
                     ui,
-                    "сервер знакомит участников; сам поток идёт напрямую (P2P)",
+                    "должен быть ОДИН на телефон и компьютер; по умолчанию каждое устройство держит свой локальный сервер и видит только само себя. В одной Wi-Fi сети: ws://IP_компьютера:8080/signal — адрес показан на компьютере в карточке «Этот компьютер»",
                 );
             });
             ui.end_row();

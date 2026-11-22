@@ -280,8 +280,86 @@ fn own_machine_strip(ui: &mut Ui, app: &mut App) {
         });
     }
 
+    // The missing «что вводить на телефоне?» answer: this machine's LAN
+    // address both as a direct ip:port target and as the embedded
+    // signaling URL — a click copies either into the clipboard. Without
+    // it the peer has to run ipconfig and the «host unavailable» error
+    // on the phone stays unexplained.
+    if let Some(ip) = theme::lan_ipv4() {
+        let (direct, signaling) = peer_setup_hints(
+            Some(&ip),
+            &app.server_url,
+            app.config.signal_listen_port,
+            app.config.lan_port,
+        );
+        ui.add_space(6.0);
+        if let Some(d) = &direct {
+            ui.horizontal(|ui| {
+                ui.label(theme::dot("Wi-Fi / LAN:", theme::MUTED).small());
+                copy_chip(ui, app, d);
+            });
+        }
+        if let Some(s) = &signaling {
+            ui.horizontal(|ui| {
+                ui.label(theme::dot("сигналинг:", theme::MUTED).small());
+                copy_chip(ui, app, s);
+            });
+        }
+        if !app.config.allow_lan {
+            crate::hint(
+                ui,
+                "прямые сессии включаются: Настройки → Хост → «Прямые LAN-подключения»",
+            );
+        }
+        crate::hint(
+            ui,
+            "адрес сервера вводится на другом устройстве: Настройки → Подключение",
+        );
+    }
+
     ui.add_space(6.0);
     crate::hint(ui, "Пароль доступа, 2FA и служба — в Настройках.");
+}
+
+/// A mono copy chip: click copies the address into the clipboard — the
+/// phone keyboard gets it right, no manual retyping of digits.
+fn copy_chip(ui: &mut Ui, app: &mut App, text: &str) {
+    let resp = ui
+        .add(
+            egui::Button::new(theme::mono(text).size(13.0).color(theme::TEXT))
+                .fill(theme::INSET)
+                .stroke(egui::Stroke::new(1.0_f32, theme::CARD_STROKE))
+                .rounding(egui::Rounding::same(8.0)),
+        )
+        .on_hover_text("Нажмите, чтобы скопировать адрес");
+    if resp.clicked() {
+        ui.output_mut(|o| o.copied_text = text.to_string());
+        app.status_message = "Адрес скопирован в буфер обмена.".into();
+        app.status_is_error = false;
+    }
+}
+
+/// What the OTHER device should use to reach this machine, derived from
+/// the LAN IP: (direct `ip:port` target, signaling URL to point the
+/// peer's «Сигнальный сервер» setting at). When `server_url` is left at
+/// the embedded default (loopback), peers must use this machine's LAN
+/// address; a custom server_url is itself what both sides share.
+fn peer_setup_hints(
+    lan_ip: Option<&str>,
+    server_url: &str,
+    signal_port: u16,
+    lan_port: u16,
+) -> (Option<String>, Option<String>) {
+    let direct = lan_ip.map(|ip| format!("{ip}:{lan_port}"));
+    let loopback = server_url.is_empty()
+        || server_url.contains("127.0.0.1")
+        || server_url.contains("localhost");
+    let signaling = if loopback {
+        lan_ip.map(|ip| format!("ws://{ip}:{signal_port}/signal"))
+    } else {
+        Some(server_url.to_string())
+    };
+    (direct, signaling)
 }
 
 /// The «История подключений» card — the main body of the window: fills
@@ -428,7 +506,7 @@ fn spaced_id(id: u64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::spaced_id;
+    use super::{peer_setup_hints, spaced_id};
 
     #[test]
     fn digit_grouping_matches_teamviewer() {
@@ -436,5 +514,36 @@ mod tests {
         assert_eq!(spaced_id(987654321), "987 654 321");
         assert_eq!(spaced_id(12345678), "12 345 678");
         assert_eq!(spaced_id(123), "123");
+    }
+
+    #[test]
+    fn loopback_server_url_swaps_to_lan_addresses() {
+        let (direct, signaling) = peer_setup_hints(
+            Some("192.168.1.5"),
+            "ws://127.0.0.1:8080/signal",
+            8080,
+            54000,
+        );
+        assert_eq!(direct.as_deref(), Some("192.168.1.5:54000"));
+        assert_eq!(signaling.as_deref(), Some("ws://192.168.1.5:8080/signal"));
+    }
+
+    #[test]
+    fn custom_server_url_is_shared_verbatim() {
+        let (direct, signaling) = peer_setup_hints(
+            Some("10.0.0.2"),
+            "wss://relay.example.com/signal",
+            8080,
+            54000,
+        );
+        assert_eq!(direct.as_deref(), Some("10.0.0.2:54000"));
+        assert_eq!(signaling.as_deref(), Some("wss://relay.example.com/signal"));
+    }
+
+    #[test]
+    fn no_lan_ip_means_no_hints() {
+        let (direct, signaling) = peer_setup_hints(None, "ws://127.0.0.1:8080/signal", 8080, 54000);
+        assert!(direct.is_none());
+        assert!(signaling.is_none());
     }
 }

@@ -277,12 +277,33 @@ pub fn machine_name() -> String {
         .unwrap_or_else(|_| "my-computer".into())
 }
 
+/// Best-effort primary LAN IPv4 address — the answer to «какой адрес
+/// вводить на другом устройстве?». A connected UDP socket resolves the
+/// outbound interface from the routing table WITHOUT sending a packet,
+/// so this is safe offline (it returns `None` on hosts with no IPv4
+/// default route, e.g. airplane mode or an IPv6-only network).
+pub fn lan_ipv4() -> Option<String> {
+    let sock = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    sock.connect("8.8.8.8:80").ok()?;
+    match sock.local_addr().ok()?.ip() {
+        std::net::IpAddr::V4(v4) => Some(v4.to_string()),
+        std::net::IpAddr::V6(_) => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::machine_name;
+    use super::{lan_ipv4, machine_name};
 
     #[test]
     fn machine_name_is_never_empty() {
         assert!(!machine_name().is_empty());
+    }
+
+    #[test]
+    fn lan_ipv4_is_either_none_or_a_parseable_ipv4() {
+        if let Some(ip) = lan_ipv4() {
+            assert!(ip.parse::<std::net::Ipv4Addr>().is_ok(), "got {ip}");
+        }
     }
 }
