@@ -1,8 +1,8 @@
-//! AnyDesk-style «Контакты» and «История» windows: a search field on
+//! AnyDesk-style «Контакты» and «История» drawers: a search field on
 //! top, sectioned device lists (favorites, address book, LAN-discovered),
-//! round colored avatars with hover actions — and a simple history log
-//! window. The home screen stays TeamViewer-quiet; everything device-
-//! related lives here.
+//! round colored avatars with hover actions — and a history log drawer.
+//! Both dock to the right edge of the window (one tool drawer is open
+//! at a time); the home screen stays TeamViewer-quiet.
 
 use egui::{Color32, Context, Ui, Vec2};
 
@@ -12,115 +12,129 @@ use crate::app::App;
 use crate::theme;
 
 // ---------------------------------------------------------------------
-// Contacts window
+// Contacts drawer
 // ---------------------------------------------------------------------
 
-/// The «Контакты» window (AnyDesk device panel).
-pub fn contacts_window(ctx: &Context, app: &mut App) {
+/// The «Контакты» drawer (AnyDesk device panel) — docked to the right
+/// edge, full height, resizable. Pinned: search on top, «+ Добавить
+/// контакт» at the bottom, the device list scrolls in between.
+pub fn contacts_panel(ctx: &Context, app: &mut App) {
     if !app.show_contacts {
         return;
     }
-    let mut open = true;
-    egui::Window::new(theme::bold("Контакты"))
-        .open(&mut open)
-        .collapsible(false)
+    egui::SidePanel::right("contacts_drawer")
         .resizable(true)
-        .default_width(330.0)
-        .default_height(440.0)
-        .default_pos([56.0, 96.0])
+        .width_range(300.0..=520.0)
+        .default_width(340.0)
+        .frame(theme::drawer_frame())
         .show(ctx, |ui| {
-            // Search, AnyDesk-style, always on top of the list.
-            ui.add_sized(
-                [ui.available_width(), 26.0],
-                egui::TextEdit::singleline(&mut app.contacts_search)
-                    .hint_text("🔍  Поиск устройств…"),
-            );
-            ui.add_space(6.0);
+            if theme::drawer_header(ui, "Контакты") {
+                app.show_contacts = false;
+            }
+            ui.add_space(4.0);
 
-            egui::ScrollArea::vertical()
-                .auto_shrink(false)
-                .show(ui, |ui| {
-                    let q = app.contacts_search.trim().to_lowercase();
-                    let matches = |label: &str, target: &str| {
-                        q.is_empty()
-                            || label.to_lowercase().contains(&q)
-                            || target.to_lowercase().contains(&q)
-                    };
-
-                    // ---- Избранные ----
-                    let favorites: Vec<_> = app
-                        .book
-                        .sorted_contacts()
-                        .into_iter()
-                        .filter(|c| c.favorite)
-                        .collect();
-                    section_header(ui, "Избранные", favorites.len());
-                    if favorites.is_empty() {
-                        empty_note(ui, "Добавьте ★ к контакту, чтобы закрепить его здесь.");
-                    }
-                    for c in favorites {
-                        if !matches(&c.label, &c.target) {
-                            continue;
-                        }
-                        contact_row(ui, app, &c);
-                    }
-
-                    // ---- Адресная книга ----
-                    let others: Vec<_> = app
-                        .book
-                        .sorted_contacts()
-                        .into_iter()
-                        .filter(|c| !c.favorite)
-                        .collect();
+            // Search, AnyDesk-style, pinned above the list.
+            egui::TopBottomPanel::top("contacts_search")
+                .frame(egui::Frame::none())
+                .show_inside(ui, |ui| {
+                    ui.add_sized(
+                        [ui.available_width(), 26.0],
+                        egui::TextEdit::singleline(&mut app.contacts_search)
+                            .hint_text("🔍  Поиск устройств…"),
+                    );
                     ui.add_space(4.0);
-                    section_header(ui, "Все контакты", others.len());
-                    if others.is_empty() {
-                        empty_note(ui, "Сохранённых контактов ещё нет.");
-                    }
-                    for c in others {
-                        if !matches(&c.label, &c.target) {
-                            continue;
-                        }
-                        contact_row(ui, app, &c);
-                    }
-
-                    // ---- Найденные в сети (mDNS) ----
-                    ui.add_space(4.0);
-                    let hosts = app.discovery.snapshot();
-                    let hosts: Vec<_> = hosts
-                        .into_iter()
-                        .filter(|h| {
-                            q.is_empty()
-                                || h.label.to_lowercase().contains(&q)
-                                || h.signal_url.to_lowercase().contains(&q)
-                        })
-                        .collect();
-                    section_header(ui, "Найденные в этой сети", hosts.len());
-                    if hosts.is_empty() {
-                        empty_note(
-                            ui,
-                            "Запущенные агенты в локальной сети появятся здесь автоматически.",
-                        );
-                    }
-                    for host in hosts {
-                        lan_row(ui, app, &host);
-                    }
-                    ui.add_space(6.0);
                 });
 
-            ui.separator();
-            ui.add_space(4.0);
-            egui::CollapsingHeader::new(
-                egui::RichText::new("+ Добавить контакт").color(theme::MUTED),
-            )
-            .default_open(app.add_contact_open)
-            .show(ui, |ui| {
-                add_contact_form(ui, app);
-            });
+            // «Add contact» section, pinned at the bottom of the drawer.
+            egui::TopBottomPanel::bottom("contacts_add")
+                .frame(egui::Frame::none())
+                .show_inside(ui, |ui| {
+                    ui.separator();
+                    ui.add_space(3.0);
+                    egui::CollapsingHeader::new(
+                        egui::RichText::new("+ Добавить контакт").color(theme::MUTED),
+                    )
+                    .default_open(app.add_contact_open)
+                    .show(ui, |ui| {
+                        add_contact_form(ui, app);
+                    });
+                });
+
+            egui::CentralPanel::default()
+                .frame(egui::Frame::none())
+                .show_inside(ui, |ui| {
+                    egui::ScrollArea::vertical()
+                        .auto_shrink(false)
+                        .show(ui, |ui| {
+                            let q = app.contacts_search.trim().to_lowercase();
+                            let matches = |label: &str, target: &str| {
+                                q.is_empty()
+                                    || label.to_lowercase().contains(&q)
+                                    || target.to_lowercase().contains(&q)
+                            };
+
+                            // ---- Избранные ----
+                            let favorites: Vec<_> = app
+                                .book
+                                .sorted_contacts()
+                                .into_iter()
+                                .filter(|c| c.favorite)
+                                .collect();
+                            section_header(ui, "Избранные", favorites.len());
+                            if favorites.is_empty() {
+                                empty_note(ui, "Добавьте ★ к контакту, чтобы закрепить его здесь.");
+                            }
+                            for c in favorites {
+                                if !matches(&c.label, &c.target) {
+                                    continue;
+                                }
+                                contact_row(ui, app, &c);
+                            }
+
+                            // ---- Адресная книга ----
+                            let others: Vec<_> = app
+                                .book
+                                .sorted_contacts()
+                                .into_iter()
+                                .filter(|c| !c.favorite)
+                                .collect();
+                            ui.add_space(4.0);
+                            section_header(ui, "Все контакты", others.len());
+                            if others.is_empty() {
+                                empty_note(ui, "Сохранённых контактов ещё нет.");
+                            }
+                            for c in others {
+                                if !matches(&c.label, &c.target) {
+                                    continue;
+                                }
+                                contact_row(ui, app, &c);
+                            }
+
+                            // ---- Найденные в сети (mDNS) ----
+                            ui.add_space(4.0);
+                            let hosts = app.discovery.snapshot();
+                            let hosts: Vec<_> = hosts
+                                .into_iter()
+                                .filter(|h| {
+                                    q.is_empty()
+                                        || h.label.to_lowercase().contains(&q)
+                                        || h.signal_url.to_lowercase().contains(&q)
+                                })
+                                .collect();
+                            section_header(ui, "Найденные в этой сети", hosts.len());
+                            if hosts.is_empty() {
+                                empty_note(
+                                    ui,
+                                    "Запущенные агенты в локальной сети появятся здесь автоматически.",
+                                );
+                            }
+                            for host in hosts {
+                                lan_row(ui, app, &host);
+                            }
+                            ui.add_space(6.0);
+                        });
+                });
         });
-    if !open {
-        app.show_contacts = false;
-    }
 }
 
 /// One address-book row: avatar + label over target + hover actions
@@ -300,53 +314,65 @@ fn add_contact_form(ui: &mut Ui, app: &mut App) {
 }
 
 // ---------------------------------------------------------------------
-// History window
+// History drawer
 // ---------------------------------------------------------------------
 
-/// The «История подключений» window (AnyDesk history log).
-pub fn history_window(ctx: &Context, app: &mut App) {
+/// The «История подключений» drawer (AnyDesk history log) — docked to
+/// the right edge, full height. The footer («последние 100 попыток…» +
+/// «Очистить») is pinned at the bottom and no longer floats mid-window.
+pub fn history_panel(ctx: &Context, app: &mut App) {
     if !app.show_history {
         return;
     }
-    let mut open = true;
-    egui::Window::new(theme::bold("История подключений"))
-        .open(&mut open)
-        .collapsible(false)
+    egui::SidePanel::right("history_drawer")
         .resizable(true)
-        .default_width(540.0)
-        .default_height(380.0)
-        .default_pos([80.0, 140.0])
+        .width_range(380.0..=700.0)
+        .default_width(470.0)
+        .frame(theme::drawer_frame())
         .show(ctx, |ui| {
-            if app.book.history().is_empty() {
-                empty_note(ui, "Истории подключений пока нет.");
-            } else {
-                egui::ScrollArea::vertical()
-                    .auto_shrink(false)
-                    .show(ui, |ui| {
-                        for h in app.book.history() {
-                            history_row(ui, h);
-                        }
-                    });
+            if theme::drawer_header(ui, "История подключений") {
+                app.show_history = false;
             }
-            ui.add_space(6.0);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui
-                    .button(egui::RichText::new("Очистить").color(theme::DANGER))
-                    .clicked()
-                {
-                    app.book.clear_history();
-                    let _ = app.book.save();
-                }
-                ui.label(
-                    egui::RichText::new("последние 100 попыток подключений")
-                        .weak()
-                        .small(),
-                );
-            });
+            ui.add_space(4.0);
+
+            egui::TopBottomPanel::bottom("history_footer")
+                .frame(egui::Frame::none())
+                .show_inside(ui, |ui| {
+                    ui.separator();
+                    ui.add_space(5.0);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .button(egui::RichText::new("Очистить").color(theme::DANGER))
+                            .clicked()
+                        {
+                            app.book.clear_history();
+                            let _ = app.book.save();
+                        }
+                        ui.label(
+                            egui::RichText::new("последние 100 попыток подключений")
+                                .weak()
+                                .small(),
+                        );
+                    });
+                    ui.add_space(2.0);
+                });
+
+            egui::CentralPanel::default()
+                .frame(egui::Frame::none())
+                .show_inside(ui, |ui| {
+                    if app.book.history().is_empty() {
+                        empty_note(ui, "Истории подключений пока нет.");
+                    } else {
+                        egui::ScrollArea::vertical()
+                            .auto_shrink(false)
+                            .show(ui, |ui| {
+                                for h in app.book.history() {
+                                    history_row(ui, h);
+                                }
+                            });
+                    }
+                });
         });
-    if !open {
-        app.show_history = false;
-    }
 }
 
 fn history_row(ui: &mut Ui, h: &opacusr_client::addressbook::HistoryEntry) {

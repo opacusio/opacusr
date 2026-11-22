@@ -217,6 +217,36 @@ pub fn dot(text: impl Into<String>, color: egui::Color32) -> egui::RichText {
     egui::RichText::new(text.into()).color(color).small()
 }
 
+// ---------------------------------------------------------------------
+// Tool drawers (Настройки / Контакты / История)
+// ---------------------------------------------------------------------
+
+/// Frame of a docked tool drawer: card fill over the app background and
+/// a hairline stroke so the drawer reads as a separate surface. The
+/// drawer is a right `SidePanel` — full height, resizable, never
+/// floating over the home screen.
+pub fn drawer_frame() -> egui::Frame {
+    egui::Frame::default()
+        .fill(CARD)
+        .stroke(Stroke::new(1.0_f32, CARD_STROKE))
+        .inner_margin(egui::Margin::same(12.0))
+}
+
+/// Header row of a tool drawer: bold title on the left, «✕» on the
+/// right. Returns `true` when the close button was clicked.
+pub fn drawer_header(ui: &mut Ui, title: &str) -> bool {
+    let mut close = false;
+    ui.horizontal(|ui| {
+        ui.label(bold(title.to_string()).size(17.0));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.button("✕").on_hover_text("Закрыть (Esc)").clicked() {
+                close = true;
+            }
+        });
+    });
+    close
+}
+
 /// The computer name used as the default network-visible name:
 /// `/etc/hostname` on unix, `COMPUTERNAME` on Windows, env user fallback.
 pub fn machine_name() -> String {

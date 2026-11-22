@@ -200,14 +200,14 @@ pub struct App {
     pub(crate) new_label: String,
     pub(crate) new_target: String,
     pub(crate) new_endpoint: String,
-    /// «История подключений» window open (AnyDesk-style log).
+    /// «История подключений» drawer open (AnyDesk-style log).
     pub(crate) show_history: bool,
-    /// «Контакты» window open (AnyDesk-style device panel).
+    /// «Контакты» drawer open (AnyDesk-style device panel).
     pub(crate) show_contacts: bool,
-    /// Settings window open (TeamViewer-style «Options»). All settings
+    /// Settings drawer open (TeamViewer-style «Options»). All settings
     /// live here — the home screen shows none.
     pub(crate) show_settings: bool,
-    /// Selected section of the settings window.
+    /// Selected section of the settings drawer.
     pub(crate) settings_nav: settings::SettingsTab,
     /// Contact-search scratch field (contacts window).
     pub(crate) contacts_search: String,
@@ -266,6 +266,43 @@ pub struct App {
     /// there; the GUI hosts no agent while the service runs, so this
     /// poll is how the card learns the ID (throttled, cheap).
     last_id_refresh_at: Option<std::time::Instant>,
+}
+
+/// Tool drawers docked to the right edge («Настройки» / «Контакты» /
+/// «История»). Mutually exclusive: opening one closes the others —
+/// they are menus under the top-bar buttons, not stackable free
+/// windows (floating windows overlapped each other and the home
+/// screen and could escape the window bounds).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum ToolDrawer {
+    Settings,
+    Contacts,
+    History,
+}
+
+impl App {
+    /// Open the given drawer, closing the others; clicking the drawer
+    /// that is already open closes it (toggle).
+    pub(crate) fn toggle_drawer(&mut self, d: ToolDrawer) {
+        let was_open = match d {
+            ToolDrawer::Settings => self.show_settings,
+            ToolDrawer::Contacts => self.show_contacts,
+            ToolDrawer::History => self.show_history,
+        };
+        self.close_drawers();
+        match d {
+            ToolDrawer::Settings => self.show_settings = !was_open,
+            ToolDrawer::Contacts => self.show_contacts = !was_open,
+            ToolDrawer::History => self.show_history = !was_open,
+        }
+    }
+
+    /// Close every tool drawer.
+    pub(crate) fn close_drawers(&mut self) {
+        self.show_settings = false;
+        self.show_contacts = false;
+        self.show_history = false;
+    }
 }
 
 impl App {
@@ -906,7 +943,7 @@ impl eframe::App for App {
         if self.host.is_none()
             && self
                 .last_id_refresh_at
-                .map_or(true, |t| t.elapsed().as_secs() >= 3)
+                .is_none_or(|t| t.elapsed().as_secs() >= 3)
         {
             self.last_id_refresh_at = Some(std::time::Instant::now());
             self.config.last_peer_id = AgentConfig::load().last_peer_id;
@@ -1266,26 +1303,23 @@ impl eframe::App for App {
                         self.disconnect_clicked();
                     }
                     if self.session.is_none() {
-                        if ui
-                            .button("👥 Контакты")
+                        if tool_button(ui, "👥 Контакты", self.show_contacts)
                             .on_hover_text("Контакты и устройства в сети (AnyDesk-стиль)")
                             .clicked()
                         {
-                            self.show_contacts = !self.show_contacts;
+                            self.toggle_drawer(ToolDrawer::Contacts);
                         }
-                        if ui
-                            .button("🕘 История")
+                        if tool_button(ui, "🕘 История", self.show_history)
                             .on_hover_text("История подключений")
                             .clicked()
                         {
-                            self.show_history = !self.show_history;
+                            self.toggle_drawer(ToolDrawer::History);
                         }
-                        if ui
-                            .button("⚙ Настройки")
-                            .on_hover_text("Все настройки — как в TeamViewer, в отдельном окне")
+                        if tool_button(ui, "⚙ Настройки", self.show_settings)
+                            .on_hover_text("Настройки — боковая панель")
                             .clicked()
                         {
-                            self.show_settings = !self.show_settings;
+                            self.toggle_drawer(ToolDrawer::Settings);
                         }
                     }
                 });
@@ -1293,13 +1327,24 @@ impl eframe::App for App {
             ui.add_space(4.0);
         });
 
-        // Floating windows: settings (TeamViewer «Options»), contacts and
-        // history (AnyDesk panels). Home-screen only — a viewer session
-        // replaces the whole central area and hides the tool windows.
+        // Docked drawers: settings (TeamViewer «Options»), contacts and
+        // history (AnyDesk panels) — right-edge panels, full height, one
+        // open at a time; they never float over the home screen nor
+        // escape the window. Home-screen only: a viewer session replaces
+        // the whole central area and hides the drawers.
         if self.session.is_none() {
-            settings::settings_window(ctx, self);
-            contacts::contacts_window(ctx, self);
-            contacts::history_window(ctx, self);
+            // Esc closes the open drawer — unless the inline rename
+            // editor is active, then Esc first cancels the rename.
+            if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+                if self.renaming_id.is_some() {
+                    self.renaming_id = None;
+                } else {
+                    self.close_drawers();
+                }
+            }
+            settings::settings_panel(ctx, self);
+            contacts::contacts_panel(ctx, self);
+            contacts::history_panel(ctx, self);
         }
 
         // Incoming-session consent popup: visible on the home screen and
@@ -1329,6 +1374,17 @@ impl App {
     fn home_ui(&mut self, ctx: &Context) {
         home::home_ui(ctx, self);
     }
+}
+
+/// Top-bar drawer button: the label turns violet while its drawer is
+/// open, mirroring the panel state on the button itself.
+fn tool_button(ui: &mut egui::Ui, label: &str, open: bool) -> egui::Response {
+    let text = if open {
+        egui::RichText::new(label).color(theme::ACCENT)
+    } else {
+        egui::RichText::new(label)
+    };
+    ui.button(text)
 }
 
 /// Dark native window chrome. egui paints only the client area — on

@@ -40,23 +40,25 @@ impl SettingsTab {
     }
 }
 
-/// The floating settings window. Drawn every frame while open.
-pub fn settings_window(ctx: &Context, app: &mut App) {
+/// The «Настройки» drawer (TeamViewer options) — docked to the right
+/// edge, full height, resizable. One tool drawer is open at a time;
+/// Esc or the «✕» button closes it.
+pub fn settings_panel(ctx: &Context, app: &mut App) {
     if !app.show_settings {
         return;
     }
-    let mut open = true;
-    egui::Window::new(theme::bold("Настройки"))
-        .open(&mut open)
-        .collapsible(false)
+    egui::SidePanel::right("settings_drawer")
         .resizable(true)
-        .min_width(640.0)
-        .min_height(440.0)
-        .default_width(680.0)
-        .default_height(480.0)
-        .default_pos([120.0, 90.0])
+        .width_range(520.0..=820.0)
+        .default_width(640.0)
+        .frame(theme::drawer_frame())
         .show(ctx, |ui| {
-            ui.set_min_height(400.0);
+            if theme::drawer_header(ui, "Настройки") {
+                app.show_settings = false;
+            }
+            ui.add_space(6.0);
+            ui.separator();
+            ui.add_space(6.0);
             ui.horizontal(|ui| {
                 // ---- left nav (TeamViewer options list) ----
                 let tab = app.settings_nav;
@@ -99,9 +101,6 @@ pub fn settings_window(ctx: &Context, app: &mut App) {
                 });
             });
         });
-    if !open {
-        app.show_settings = false;
-    }
 }
 
 fn general_tab(ui: &mut Ui, app: &mut App) {
