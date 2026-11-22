@@ -281,7 +281,9 @@ jobs:
         env:
           ANDROID_HOME: /usr/local/lib/android/sdk
           ANDROID_NDK_ROOT: ${{ steps.ndk.outputs.ndk-path }}
-          CARGO_APK_RELEASE_KEYSTORE: release.keystore
+          # Absolute path: cargo-apk `cd`s into target/release/apk
+          # before invoking apksigner, a relative path would not resolve.
+          CARGO_APK_RELEASE_KEYSTORE: ${{ github.workspace }}/release.keystore
           CARGO_APK_RELEASE_KEYSTORE_PASSWORD: opacusr-release-key
           CC_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
           CXX_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang++
