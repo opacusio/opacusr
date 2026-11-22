@@ -46,6 +46,8 @@ pub mod clipboard;
 
 /// TeamViewer-style physical input lock (Windows LL hooks / Linux evdev
 /// grabs). Engaged by full-control sessions when `lock_input` is set.
+/// Desktop-only: a phone IS the physical input device — nothing to lock.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub mod lock;
 
 /// Privacy mode v1: put the host's physical displays to sleep while a

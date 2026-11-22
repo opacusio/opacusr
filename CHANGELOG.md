@@ -37,12 +37,21 @@ SemVer-ish (breaking protocol changes bump the minor until 1.0).
   (cargo-apk + NDK r27b) и публикует его в релизе; SHA256SUMS теперь
   считается и по APK.
 - CI: постоянные кросс-проверки на каждый push — `aarch64-linux-android`
-  (GUI-обвязка целиком) и `aarch64-apple-ios` (ядро клиента,
-  `opacusr-client`).
+  (GUI-обвязка целиком) и `aarch64-apple-ios` (чистое ядро: proto + crypto).
 - Мобильная гигиена зависимостей: файловые диалоги вынесены в
   cfg-гейтированные хелперы `pick_file`/`pick_files`/`pick_folder`
   (rfd больше не собирается на мобильных целях), аудио-поток (Opus)
   на мобильных пока отключён — NDK-сборка Opus в следующей итерации.
+- `keychain.rs`: на Android/iOS — заглушка с прежней сигнатурой
+  (ошибка «keychain unavailable», прозрачный фолбэк в конфиг-файл,
+  как на headless-Linux без Secret Service); `lock.rs` (захват
+  физического ввода через evdev/LL-hooks) — только для десктопа,
+  у телефона нет физического ввода, который нужно блокировать; ioctl-
+  cast в evdev-захвате сделан переносимым между юникс-архитектурами.
+- iOS: постоянный CI-чек пока ограничен чистым ядром (proto + crypto) —
+  полный `opacusr-client` для aarch64-apple-ios блокирует upstream:
+  webrtc 0.14 → webrtc-util 0.12 → nix 0.26 (sockaddr_ctl не объявлен
+  для iOS в libc). Когда стек webrtc поднимет nix — расширим чек.
 - Захват экрана Android (режим хоста с телефона, MediaProjection) —
   следующая итерация; сейчас телефон = зритель.
 

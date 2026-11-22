@@ -154,6 +154,9 @@ impl SessionHost {
         // TeamViewer-style physical input lock for full-control sessions.
         // The guard covers every exit path below; if the lock cannot be
         // taken the session continues unlocked with a notice (fail-open).
+        // Mobile targets never host sessions (no capture backend) and
+        // have nothing physical to lock — the module is desktop-only.
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         let _input_lock = if cfg.lock_input && !cfg.view_only {
             match opacusr_input::lock::HostInputLock::enable() {
                 Ok(lock) => {
@@ -168,6 +171,8 @@ impl SessionHost {
         } else {
             None
         };
+        #[cfg(any(target_os = "android", target_os = "ios"))]
+        let _input_lock = ();
 
         // Privacy mode: blank the physical displays while the session is
         // active (capture keeps running). Same fail-open contract as the

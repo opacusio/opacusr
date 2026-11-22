@@ -195,7 +195,11 @@ mod imp {
             }
             if let Ok(file) = OpenOptions::new().read(true).open(entry.path()) {
                 let fd = file.as_raw_fd();
-                let ok = unsafe { libc::ioctl(fd, EVIOCGRAB, 1_i32) } == 0;
+                // The libc `Ioctl` request type differs across unix
+                // arches (c_ulong on x86_64, c_int on some android
+                // triples) — cast through the fn signature instead of
+                // assuming one.
+                let ok = unsafe { libc::ioctl(fd, EVIOCGRAB as _, 1_i32) } == 0;
                 if ok {
                     grabbed.push(file); // keep open; grab lives with the fd
                 }
