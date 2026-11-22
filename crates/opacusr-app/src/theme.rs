@@ -232,14 +232,28 @@ pub fn drawer_frame() -> egui::Frame {
         .inner_margin(egui::Margin::same(12.0))
 }
 
-/// Header row of a tool drawer: bold title on the left, «✕» on the
-/// right. Returns `true` when the close button was clicked.
+/// Header row of a tool drawer: bold title on the left, close «✕» on
+/// the right. The cross is painted with two line segments (exactly how
+/// egui draws its window close icon) — no text glyph, so it cannot fall
+/// back to a missing-glyph box. Returns `true` when clicked.
 pub fn drawer_header(ui: &mut Ui, title: &str) -> bool {
     let mut close = false;
     ui.horizontal(|ui| {
         ui.label(bold(title.to_string()).size(17.0));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.button("✕").on_hover_text("Закрыть (Esc)").clicked() {
+            let (rect, resp) =
+                ui.allocate_exact_size(Vec2::splat(22.0), egui::Sense::click());
+            let resp = resp.on_hover_text("Закрыть (Esc)");
+            let visuals = ui.style().interact(&resp);
+            if resp.hovered() {
+                ui.painter()
+                    .rect_filled(rect, Rounding::same(6.0), HOVER);
+            }
+            let r = rect.shrink(7.0);
+            let stroke = visuals.fg_stroke;
+            ui.painter().line_segment([r.left_top(), r.right_bottom()], stroke);
+            ui.painter().line_segment([r.right_top(), r.left_bottom()], stroke);
+            if resp.clicked() {
                 close = true;
             }
         });
