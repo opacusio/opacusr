@@ -259,10 +259,30 @@ jobs:
           key: android-cargo-release-${{ hashFiles('**/Cargo.lock') }}
       - name: Install cargo-apk
         run: cargo install cargo-apk --locked
+      - name: Restore release keystore
+        # One persistent key so new releases install OVER old ones
+        # (Android refuses an update when the signature changes).
+        # The key is a public-distribution dev key, generated on the
+        # first run and kept alive by the cache.
+        uses: actions/cache@v6
+        with:
+          path: release.keystore
+          key: opacusr-android-release-keystore-v1
+      - name: Create release keystore (first run only)
+        run: |
+          if [ ! -f release.keystore ]; then
+            keytool -genkeypair -v \
+              -keystore release.keystore -alias opacusr \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass opacusr-release-key -keypass opacusr-release-key \
+              -dname "CN=OpacusR, OU=OpacusR, O=OpacusR, L=Internet, ST=Internet, C=RU"
+          fi
       - name: Build APK
         env:
           ANDROID_HOME: /usr/local/lib/android/sdk
           ANDROID_NDK_ROOT: ${{ steps.ndk.outputs.ndk-path }}
+          CARGO_APK_RELEASE_KEYSTORE: release.keystore
+          CARGO_APK_RELEASE_KEYSTORE_PASSWORD: opacusr-release-key
           CC_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
           CXX_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang++
           AR_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
