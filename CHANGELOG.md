@@ -4,6 +4,31 @@ All notable changes to OpacusR are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is
 SemVer-ish (breaking protocol changes bump the minor until 1.0).
 
+## [0.11.6] — 2026-11-22
+
+### Fixed
+
+- **A fresh install could never show an ID** («регистрация на
+  сервере…» forever): the default config registers on
+  `ws://127.0.0.1:8080/signal`, and the embedded signaling server that
+  should own that address was OFF by default — so the registration
+  failed forever and `last_peer_id` stayed empty. The embedded
+  signaling server is now ON by default (`signal_listen = true`): the
+  agent serves its own registry + relay on 0.0.0.0:8080 (+1), registers
+  on it, and the ID appears within seconds of the service starting,
+  with zero setup. Hand-set `signal_listen = false` in agent.toml still
+  wins.
+- **The agent never persisted its ID**: `last_peer_id` was written only
+  by the GUI's in-process agent, so while the Windows service hosted
+  the machine the GUI could never learn the ID. Every agent run
+  (service child, CLI) now persists the ID assigned by the primary
+  signaling endpoint to the shared config (read-modify-write, fan-out
+  endpoints other than the primary never touch it).
+- **The GUI now re-reads the persisted ID** every ~3 s while it hosts
+  no agent itself, so «регистрация на сервере…» turns into the real ID
+  without a restart, and the card explains the state («ID назначен
+  службой · машина доступна»).
+
 ## [0.11.5] — 2026-11-21
 
 ### Fixed

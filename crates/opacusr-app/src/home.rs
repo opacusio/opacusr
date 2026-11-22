@@ -89,6 +89,14 @@ fn id_block(ui: &mut Ui, app: &mut App) {
             }
             if online {
                 ui.label(theme::dot("ID активен", theme::TEAL).small());
+            } else if app.service_hosts {
+                // The service supervises the agent: its registration is
+                // what assigned this ID (persisted to the shared config).
+                ui.label(
+                    egui::RichText::new("ID назначен службой · машина доступна")
+                        .weak()
+                        .small(),
+                );
             } else {
                 ui.label(
                     egui::RichText::new("последний ID · запустите агента, чтобы подключиться")

@@ -134,6 +134,11 @@ pub struct AgentConfig {
     /// (`signal_listen_port` / +1). Zero-infra mode: expose it behind a
     /// free tunnel (cloudflared / Tailscale Funnel) or a mesh VPN — see
     /// docs/serverless.md. The agent registers on the local endpoint too.
+    /// ON by default: a fresh install must show an ID immediately with
+    /// zero setup (the old default `false` left a brand-new install
+    /// registering on `ws://127.0.0.1:8080/signal` where nothing
+    /// listened, so the ID never appeared). Explicitly setting it to
+    /// `false` in agent.toml still wins.
     pub signal_listen: bool,
     /// HTTP/WS port for the embedded signaling server; the TCP relay
     /// binds the next port (`+1`).
@@ -218,7 +223,7 @@ impl Default for AgentConfig {
             auth_lockout_secs: 60,
             turn_api: true,
             signaling_urls: Vec::new(),
-            signal_listen: false,
+            signal_listen: true,
             signal_listen_port: 8080,
             lock_input: false,
             privacy_mode: false,

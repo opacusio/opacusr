@@ -146,7 +146,7 @@ impl AgentService {
 
         let consent: Arc<ConsentFn> = Arc::new(consent);
         let mut set = tokio::task::JoinSet::new();
-        for url in endpoints {
+        for (idx, url) in endpoints.into_iter().enumerate() {
             let svc = AgentService {
                 cfg: self.cfg.clone(),
                 events: self.events.clone(),
@@ -156,7 +156,15 @@ impl AgentService {
             let consent = consent.clone();
             let gate = gate.clone();
             let shutdown = shutdown.clone();
-            set.spawn(async move { svc.endpoint_loop(url, consent, gate, shutdown).await });
+            // Only the primary endpoint (server_url, first in the list)
+            // feeds the persisted «your ID»: fan-out endpoints mint
+            // their own IDs and the primary one is the address viewers
+            // resolve first.
+            let primary = idx == 0;
+            set.spawn(async move {
+                svc.endpoint_loop(url, primary, consent, gate, shutdown)
+                    .await
+            });
         }
 
         // Tasks end only on shutdown (they retry errors internally), so
@@ -182,6 +190,7 @@ impl AgentService {
     async fn endpoint_loop(
         &self,
         url: String,
+        primary: bool,
         consent: Arc<ConsentFn>,
         gate: Arc<AuthGate>,
         mut shutdown: tokio::sync::watch::Receiver<bool>,
@@ -196,7 +205,7 @@ impl AgentService {
         let mut backoff = std::time::Duration::from_secs(1);
         loop {
             match self
-                .serve_once(&url, consent.as_ref(), &mut shutdown, &gate, &turn)
+                .serve_once(&url, primary, consent.as_ref(), &mut shutdown, &gate, &turn)
                 .await
             {
                 Ok(()) => return Ok(()), // graceful shutdown
@@ -252,6 +261,7 @@ impl AgentService {
     async fn serve_once(
         &self,
         url: &str,
+        primary: bool,
         consent: &ConsentFn,
         shutdown: &mut tokio::sync::watch::Receiver<bool>,
         gate: &Arc<AuthGate>,
@@ -269,6 +279,20 @@ impl AgentService {
 
         let my_id = match sig.recv().await? {
             SignalMessage::Welcome(w) => {
+                // Remember the assigned ID so every GUI on this machine
+                // (and the CLI) can display it even when THIS process is
+                // the service child — the GUI never hosts its own agent
+                // while the service runs, so otherwise it would never
+                // learn the ID (the «регистрация на сервере…» report).
+                // Read-modify-write: only last_peer_id changes, nothing
+                // else the user may have edited while we ran.
+                if primary {
+                    let mut disk = crate::config::AgentConfig::load();
+                    if disk.last_peer_id != Some(w.id) {
+                        disk.last_peer_id = Some(w.id);
+                        let _ = disk.save();
+                    }
+                }
                 let _ = self.events.send(AgentEvent::Registered {
                     id: w.id,
                     server: url.to_string(),

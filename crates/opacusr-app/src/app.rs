@@ -261,6 +261,11 @@ pub struct App {
     /// agent (it would register a duplicate ID on the same server).
     /// Always `false` off Windows (`query_state` answers NotInstalled).
     pub(crate) service_hosts: bool,
+    /// Last time the ID card re-read `last_peer_id` from the config
+    /// file. The service child (and CLI runs) persist the assigned ID
+    /// there; the GUI hosts no agent while the service runs, so this
+    /// poll is how the card learns the ID (throttled, cheap).
+    last_id_refresh_at: Option<std::time::Instant>,
 }
 
 impl App {
@@ -331,6 +336,7 @@ impl App {
             #[cfg(windows)]
             svc_state_at: None,
             service_hosts: false,
+            last_id_refresh_at: None,
         };
         app.refresh_unattended_display();
 
@@ -891,6 +897,20 @@ impl eframe::App for App {
         }
         crate::update_banner::ensure_started(ctx);
         crate::update_banner::paint(ctx);
+
+        // The service child (or a CLI `run`) assigns and persists the
+        // host ID while this GUI shows the card. Re-read it throttled
+        // so «регистрация на сервере…» turns into the real ID within a
+        // few seconds. Only when this GUI hosts no agent itself (its
+        // registration updates the field in memory directly).
+        if self.host.is_none()
+            && self
+                .last_id_refresh_at
+                .map_or(true, |t| t.elapsed().as_secs() >= 3)
+        {
+            self.last_id_refresh_at = Some(std::time::Instant::now());
+            self.config.last_peer_id = AgentConfig::load().last_peer_id;
+        }
 
         // Tray + close-to-tray (TeamViewer model). Runs first so a
         // queued «Выход» short-circuits the frame.
