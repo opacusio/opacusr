@@ -139,7 +139,7 @@ jobs:
           AR_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
         run: cargo check -p opacusr-android --target aarch64-linux-android
 
-      - name: iOS — cargo check (pure core: proto + crypto)
+      - name: "iOS — cargo check (pure core: proto + crypto)"
         # Full client is blocked upstream for now: webrtc 0.14 →
         # webrtc-util 0.12 → nix 0.26, whose socket module references
         # libc::sockaddr_ctl — defined for macOS but NOT for iOS — so
