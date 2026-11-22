@@ -17,7 +17,6 @@ opacusr-crypto = { workspace = true }
 opacusr-transport = { workspace = true }
 opacusr-capture = { workspace = true }
 opacusr-codec = { workspace = true }
-opacusr-agent = { workspace = true }
 eframe = { workspace = true }
 egui = { workspace = true }
 raw-window-handle = { workspace = true }
@@ -32,11 +31,11 @@ serde = { workspace = true }
 toml = { workspace = true }
 mdns-sd = { workspace = true }
 
-# The workspace entry carries `default-features = false` so hosts without
-# ALSA headers can build the agent tests. The desktop GUI opts back into
-# audio (Opus mic/loopback streaming); mobile builds skip audio for now
-# — the audiopus vendored autotools build is not wired for NDK yet.
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+# Desktop: the workspace entry carries default-features = false (mobile
+# targets build the agent without audio — the Opus vendored build is
+# not wired for NDK); the desktop GUI opts back into audio streaming.
+opacusr-agent = { workspace = true, features = ["audio"] }
 opacusr-client = { workspace = true, features = ["audio"] }
 arboard = { workspace = true }
 # Native file dialogs (desktop). Mobile callers use the cfg-gated
@@ -46,10 +45,9 @@ rfd = { workspace = true }
 
 [target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
 opacusr-client = { workspace = true }
-# Mobile: the agent lib compiles without its audio feature — the Opus
-# vendored build is not wired for NDK yet, and a phone never hosts a
-# session anyway (no capture backend).
-opacusr-agent = { workspace = true, default-features = false }
+# Mobile: the agent lib without its audio feature — a phone never
+# hosts a session (no capture backend).
+opacusr-agent = { workspace = true }
 
 # System tray (TeamViewer-style background operation). Linux is
 # deliberately excluded: the tray-icon Linux backends need GTK /
