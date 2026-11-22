@@ -83,6 +83,12 @@ fn connect_card(ui: &mut Ui, app: &mut App) {
                 .password(true)
                 .hint_text("пароль компьютера партнёра"),
         );
+        // An empty-password connect attempt pops the keyboard onto this
+        // field at once — the fix is one keystroke away.
+        if app.focus_password {
+            pw_resp.request_focus();
+            app.focus_password = false;
+        }
         ui.add_space(10.0);
 
         // Connect: violet CTA, full width, TeamViewer-style.
@@ -116,7 +122,17 @@ fn connect_card(ui: &mut Ui, app: &mut App) {
 
         ui.add_space(4.0);
         // Status under the fields, left-aligned — it belongs to them.
-        ui.label(egui::RichText::new(&app.status_message).weak().small());
+        // Errors are gold, not muted gray: on a phone a weak small line
+        // after a tap reads as «ничего не произошло».
+        if app.status_is_error {
+            ui.label(
+                egui::RichText::new(&app.status_message)
+                    .color(theme::GOLD)
+                    .size(13.0),
+            );
+        } else {
+            ui.label(egui::RichText::new(&app.status_message).weak().small());
+        }
 
         ui.add_space(8.0);
         ui.separator();

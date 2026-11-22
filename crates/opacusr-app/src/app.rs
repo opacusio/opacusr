@@ -189,6 +189,14 @@ pub struct App {
 
     pub config: AgentConfig,
     pub status_message: String,
+    /// The current `status_message` is an error («Введите пароль»,
+    /// «Подключение не удалось…») — the connect card paints it gold
+    /// instead of muted gray so it cannot be missed on a phone, where a
+    /// weak small line reads as «ничего не происходит».
+    pub(crate) status_is_error: bool,
+    /// Focus the partner-password field on the next frame (empty-password
+    /// connect attempt — on a phone the keyboard must come up at once).
+    pub(crate) focus_password: bool,
     pub host_password_input: String,
 
     /// Saved contacts + connection history (`addressbook.toml`).
@@ -329,6 +337,8 @@ impl App {
             host_consent_rx: None,
             config,
             status_message: "Готово.".into(),
+            status_is_error: false,
+            focus_password: false,
             host_password_input: String::new(),
             totp_input: String::new(),
             book: AddressBook::load(),
@@ -540,7 +550,12 @@ impl App {
         let input = self.peer_id_input.replace([' ', '-'], "");
         let password = self.password_input.clone();
         if password.is_empty() {
-            self.status_message = "Введите пароль компьютера".into();
+            // Gold on the card + the keyboard up on the password field:
+            // on a phone this must be unmissable.
+            self.status_message =
+                "Введите пароль компьютера — без него подключение невозможно".into();
+            self.status_is_error = true;
+            self.focus_password = true;
             return;
         }
 
@@ -561,7 +576,8 @@ impl App {
         let proxy_raw = self.config.proxy.trim().to_string();
         if !proxy_raw.is_empty() {
             if let Err(e) = opacusr_transport::Proxy::parse(&proxy_raw) {
-                self.status_message = format!("Bad proxy URL: {e}");
+                self.status_message = format!("Некорректный адрес прокси: {e}");
+                self.status_is_error = true;
                 return;
             }
         }
@@ -607,7 +623,8 @@ impl App {
         if input.contains(':') {
             // LAN mode: ip:port.
             let addr = input.clone();
-            self.status_message = format!("Connecting to {addr}…");
+            self.status_message = format!("Подключение к {addr}…");
+            self.status_is_error = false;
             self.rt.spawn(async move {
                 match SessionClient::connect_direct(&addr, make_settings(None)).await {
                     Ok((client, mut events)) => {
@@ -626,7 +643,10 @@ impl App {
             let host_id: PeerId = match input.parse() {
                 Ok(v) if opacusr_proto::is_valid_peer_id(v) => v,
                 _ => {
-                    self.status_message = "Введите корректный 9-значный ID или ip:port".into();
+                    self.status_message =
+                        "Введите корректный 9-значный ID или адрес ip:порт".into();
+                    self.status_is_error = true;
+                    self.focus_password = false;
                     return;
                 }
             };
@@ -647,9 +667,10 @@ impl App {
             let choice = self.transport_choice;
             let turn_api = self.config.turn_api;
             self.status_message = format!(
-                "Requesting session with host {host_id} over {} endpoint(s)…",
+                "Запрос сессии к хосту {host_id} через {} сервер(ов)…",
                 urls.len()
             );
+            self.status_is_error = false;
             self.rt.spawn(async move {
                 let mut cmd_rx = Some(cmd_rx);
                 let mut last_err = String::from("no endpoints configured");
@@ -734,7 +755,11 @@ impl App {
         }
         self.finish_attempt();
         self.session = None;
-        self.status_message = "Отключено.".into();
+        // A failed attempt keeps its gold explanation on the card;
+        // «Отключено.» only for a session that actually worked.
+        if !self.status_is_error {
+            self.status_message = "Отключено.".into();
+        }
     }
 
     /// Finalize the history entry of the current attempt, if any.
@@ -1210,6 +1235,31 @@ impl eframe::App for App {
                         self.book.finish_history(ts, outcome, duration);
                         let _ = self.book.save();
                     }
+                    // Mirror the outcome onto the connect card: the session
+                    // screen dies with the session, the home card is what
+                    // the user sees next — it must say WHY it failed (on a
+                    // phone a silent return to the home screen reads as
+                    // «ничего не происходит»). A clean host-side close is
+                    // not an error — neutral gray, no guidance.
+                    let low = reason.to_lowercase();
+                    let failed = [
+                        "failed",
+                        "offline",
+                        "timed out",
+                        "timeout",
+                        "rejected",
+                        "refused",
+                        "error",
+                    ]
+                    .iter()
+                    .any(|k| low.contains(k));
+                    if failed {
+                        self.status_message = friendly_connect_error(&reason);
+                        self.status_is_error = true;
+                    } else {
+                        self.status_message = "Сессия закрыта.".into();
+                        self.status_is_error = false;
+                    }
                 }
             }
         }
@@ -1370,6 +1420,39 @@ fn tool_button(ui: &mut egui::Ui, label: &str, open: bool) -> egui::Response {
         egui::RichText::new(label)
     };
     ui.button(text)
+}
+
+/// Human-facing text for a failed viewer attempt, shown on the connect
+/// card in gold. The raw `reason` stays on the session screen and in
+/// Настройки → Диагностика; here it is followed by the guidance the
+/// user actually needs (TeamViewer's «why can't I connect» answer).
+fn friendly_connect_error(reason: &str) -> String {
+    let mut msg = format!("Подключение не удалось: {reason}");
+    let low = reason.to_lowercase();
+    if low.contains("is offline") || low.contains("all signaling endpoints failed") {
+        msg.push_str(
+            "\n\nКомпьютер с таким ID не найден на сигнальном сервере. Проверьте ID \
+             (в поле ID он вводится без пробелов) и убедитесь, что: агент на компьютере \
+             запущен; оба устройства используют ОДИН сигнальный сервер (по умолчанию \
+             каждое устройство держит свой локальный — для связи через интернет \
+             пропишите один общий адрес в Настройки → Подключение на обоих). \
+             В одной Wi-Fi сети проще подключаться по адресу компьютера: включите \
+             «Прямые LAN-подключения» (Настройки → Хост) и введите в поле ID \
+             ip:порт вместо девяти цифр.",
+        );
+    } else if low.contains("rejected") || low.contains("password") || low.contains("auth") {
+        msg.push_str(
+            "\n\nПроверьте пароль компьютера (он задаётся на хосте: Настройки → \
+             Безопасность) и код 2FA, если хост его требует. После нескольких \
+             неудачных попыток хост временно блокирует подключения.",
+        );
+    } else if low.contains("timed out") || low.contains("timeout") {
+        msg.push_str(
+            "\n\nСервер не ответил вовремя. Проверьте интернет на обоих устройствах \
+             и адрес сигнального сервера (Настройки → Подключение).",
+        );
+    }
+    msg
 }
 
 /// Dark native window chrome. egui paints only the client area — on

@@ -452,6 +452,30 @@ fn host_tab(ui: &mut Ui, app: &mut App) {
             });
             ui.end_row();
 
+            ui.label("LAN");
+            ui.vertical(|ui| {
+                if ui
+                    .checkbox(
+                        &mut app.config.allow_lan,
+                        "прямые подключения по локальной сети (без сервера)",
+                    )
+                    .changed()
+                {
+                    let _ = app.config.save();
+                }
+                crate::hint(
+                    ui,
+                    &format!(
+                        "телефон или компьютер в той же Wi-Fi сети подключается по адресу \
+                         этого компьютера: в поле ID вводится ip:{} вместо девятизначного ID; \
+                         signaling-сервер и интернет не нужны; вступает в силу после \
+                         перезапуска агента",
+                        app.config.lan_port
+                    ),
+                );
+            });
+            ui.end_row();
+
             // Tray close + service rows only where the tray exists.
             #[cfg(any(windows, target_os = "macos"))]
             {
