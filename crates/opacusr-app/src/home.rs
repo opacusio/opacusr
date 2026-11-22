@@ -2,24 +2,46 @@
 //! управление этим компьютером» on top (ID + password + start/stop)
 //! and «Управлять удалённым компьютером» beneath it (partner ID +
 //! password + connect), exactly like TeamViewer's main window. Every
-//! option lives in the settings window (`crate::settings`); this screen
+//! option lives in the settings drawer (`crate::settings`); this screen
 //! shows only what TeamViewer shows.
+//!
+//! Layout rules (fixes the «пустые места / не выровнено» complaints):
+//! 1. The card fills the central area up to 840 px and is centered
+//!    horizontally AND vertically, so neither wide windows nor an open
+//!    tool drawer leave dead margins or a dead band at the bottom.
+//! 2. When the central area is narrow (drawer open, small window), the
+//!    two host columns stack into one — nothing is squeezed.
+//! 3. The ID button always fits its column and the mono ID is scaled
+//!    so «123 456 789» never wraps onto several lines.
+//! 4. Every input fills its column — no dangling half-width fields.
 
 use egui::{Color32, Ui};
 
 use crate::app::App;
 use crate::theme;
 
-/// The TeamViewer-like home layout: a single centered card with the
-/// encryption footnote at the bottom.
+/// Vertical centering: below this available height the card is simply
+/// laid out from the top (no scrolling games on tiny windows).
+const MIN_CENTER_HEIGHT: f32 = 620.0;
+
+/// The home layout: a single centered card with the encryption footnote
+/// at the bottom. Centers the content vertically using the height
+/// measured on the previous frame (converges on frame 2).
 pub fn home_ui(ctx: &egui::Context, app: &mut App) {
     egui::CentralPanel::default().show(ctx, |ui| {
-        ui.add_space(16.0);
+        let h = ui.available_height();
+        let top_gap = if h > MIN_CENTER_HEIGHT {
+            ((h - app.home_content_h) / 2.0).max(12.0)
+        } else {
+            12.0
+        };
+        ui.add_space(top_gap);
+        let mut content_h = 0.0;
         ui.horizontal(|ui| {
             let w = ui.available_width();
-            ui.add_space(((w - 700.0) / 2.0).max(0.0));
+            ui.add_space(((w - 840.0) / 2.0).max(0.0));
             ui.vertical(|ui| {
-                ui.set_max_width(700.0_f32.min(w));
+                ui.set_max_width(840.0_f32.min(w));
                 single_card(ui, app);
                 ui.add_space(14.0);
                 ui.vertical_centered(|ui| {
@@ -29,8 +51,10 @@ pub fn home_ui(ctx: &egui::Context, app: &mut App) {
                          WebRTC/DTLS; при заблокированном P2P — TCP-ретранслятор.",
                     );
                 });
+                content_h = ui.min_rect().height();
             });
         });
+        app.home_content_h = top_gap + content_h;
     });
 }
 
@@ -41,10 +65,19 @@ fn single_card(ui: &mut Ui, app: &mut App) {
         // ---------------- host: allow control ----------------
         theme::section(ui, "Разрешить управление этим компьютером");
         ui.add_space(10.0);
-        ui.columns(2, |cols| {
-            id_block(&mut cols[0], app);
-            password_block(&mut cols[1], app);
-        });
+        // Narrow central area (tool drawer open, small window or the
+        // mobile portrait screen): stack the two blocks in one column.
+        let inner_w = ui.available_width();
+        if inner_w >= 620.0 {
+            ui.columns(2, |cols| {
+                id_block(&mut cols[0], app);
+                password_block(&mut cols[1], app);
+            });
+        } else {
+            id_block(ui, app);
+            ui.add_space(10.0);
+            password_block(ui, app);
+        }
         ui.add_space(8.0);
         host_status_row(ui, app);
 
@@ -70,9 +103,14 @@ fn id_block(ui: &mut Ui, app: &mut App) {
         Some(id) => {
             let online = running_id.is_some();
             let text = spaced_id(id);
+            // Scale the mono digits to the column: «123 456 789» is 11
+            // glyphs, a mono glyph is ~0.6 em — keep it on ONE line no
+            // matter how narrow the column is (drawer open and so on).
+            let col_w = ui.available_width();
+            let size = ((col_w - 26.0) / 6.9).clamp(15.0, 30.0);
             let resp = ui
                 .add(
-                    egui::Button::new(theme::mono(&text).size(30.0).color(if online {
+                    egui::Button::new(theme::mono(&text).size(size).color(if online {
                         theme::TEXT
                     } else {
                         theme::MUTED
@@ -80,7 +118,7 @@ fn id_block(ui: &mut Ui, app: &mut App) {
                     .fill(theme::INSET)
                     .stroke(egui::Stroke::new(1.0_f32, theme::CARD_STROKE))
                     .rounding(egui::Rounding::same(10.0))
-                    .min_size([240.0, 44.0].into()),
+                    .min_size([col_w.max(120.0), 44.0].into()),
                 )
                 .on_hover_text("Нажмите, чтобы скопировать ID");
             if resp.clicked() {
@@ -136,6 +174,7 @@ fn spaced_id(id: u64) -> String {
 /// The access password, exactly as visible as TeamViewer's «Пароль»:
 /// dots + reveal toggle when an unattended password is set, a quiet
 /// inline form otherwise (attended mode confirms every session by hand).
+/// Inputs fill the column width — no dangling half-width fields.
 fn password_block(ui: &mut Ui, app: &mut App) {
     if app.config.is_unattended() {
         ui.label(egui::RichText::new("Пароль доступа").weak().small());
@@ -194,8 +233,9 @@ fn password_block(ui: &mut Ui, app: &mut App) {
         if app.password_editing {
             ui.add_space(6.0);
             ui.horizontal(|ui| {
+                let w = ui.available_width() - 64.0;
                 let resp = ui.add_sized(
-                    [150.0, 26.0],
+                    [w.max(120.0), 26.0],
                     egui::TextEdit::singleline(&mut app.host_password_input)
                         .password(true)
                         .hint_text("новый пароль (мин. 4)"),
@@ -221,8 +261,9 @@ fn password_block(ui: &mut Ui, app: &mut App) {
                 .small(),
         );
         ui.horizontal(|ui| {
+            let w = ui.available_width() - 96.0;
             let resp = ui.add_sized(
-                [150.0, 26.0],
+                [w.max(110.0), 26.0],
                 egui::TextEdit::singleline(&mut app.host_password_input)
                     .password(true)
                     .hint_text("пароль доступа (мин. 4)"),
@@ -302,7 +343,7 @@ fn host_status_row(ui: &mut Ui, app: &mut App) {
             .on_hover_text("Зритель получит файл в свою папку загрузок")
             .clicked()
         {
-            if let Some(path) = rfd::FileDialog::new().pick_file() {
+            if let Some(path) = crate::pick_file() {
                 if let Some(tx) = app.host.as_ref().and_then(|h| h.commands.as_ref()) {
                     let _ = tx.send(opacusr_agent::session::HostCommand::SendFile(path));
                 }
@@ -314,7 +355,7 @@ fn host_status_row(ui: &mut Ui, app: &mut App) {
 /// Управлять удалённым компьютером — the viewer half of the card:
 /// partner ID, password, the violet Connect CTA. The 2FA code is the
 /// one extra field (revealed on demand); everything else is in the
-/// settings window.
+/// settings drawer.
 fn viewer_block(ui: &mut Ui, app: &mut App) {
     theme::section(ui, "Управлять удалённым компьютером");
     ui.add_space(10.0);
@@ -366,9 +407,8 @@ fn viewer_block(ui: &mut Ui, app: &mut App) {
     });
 
     ui.add_space(4.0);
-    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        ui.label(egui::RichText::new(&app.status_message).weak().small());
-    });
+    // Status under the fields, left-aligned — it belongs to them.
+    ui.label(egui::RichText::new(&app.status_message).weak().small());
 }
 
 #[cfg(test)]

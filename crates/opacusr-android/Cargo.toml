@@ -1,0 +1,43 @@
+[package]
+name = "opacusr-android"
+description = "OpacusR Android app: NativeActivity glue around the egui UI"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish = false
+
+# NativeActivity loads this cdylib (libopacusr_android.so) — the whole
+# egui UI from opacusr-app runs inside it.
+[lib]
+crate-type = ["cdylib"]
+
+# cargo-apk manifest: OpacusR.apk, arm64-v8a, screen-sharing viewer.
+[package.metadata.android]
+package = "io.opacusr.app"
+apk_name = "OpacusR"
+build_targets = ["aarch64-linux-android"]
+
+[package.metadata.android.sdk]
+min_sdk_version = 24
+target_sdk_version = 30
+
+[package.metadata.android.application]
+label = "OpacusR"
+
+[package.metadata.android.application.activity]
+orientation = "fullUser"
+launch_mode = "singleTop"
+theme = "@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen"
+resizeable_activity = true
+
+# Everything is android-only: on desktop targets the crate compiles to
+# an empty cdylib and costs nothing.
+[target.'cfg(target_os = "android")'.dependencies]
+opacusr-app = { workspace = true }
+egui = { workspace = true }
+eframe = { workspace = true, features = ["android-native-activity"] }
+winit = { version = "0.30", default-features = false, features = ["android-native-activity"] }
+tracing-subscriber = { workspace = true }
+tracing = { workspace = true }

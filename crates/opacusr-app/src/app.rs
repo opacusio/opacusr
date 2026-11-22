@@ -191,6 +191,11 @@ pub struct App {
     pub status_message: String,
     pub host_password_input: String,
 
+    /// Measured height of the home card + footnote (previous frame):
+    /// used to vertically center the home content so wide windows do
+    /// not leave a dead band under the card.
+    pub(crate) home_content_h: f32,
+
     /// Saved contacts + connection history (`addressbook.toml`).
     pub book: AddressBook,
     /// mDNS browser for LAN discovery (Phase 3); refreshed on a
@@ -337,6 +342,7 @@ impl App {
             config,
             status_message: "Готово.".into(),
             host_password_input: String::new(),
+            home_content_h: 430.0,
             totp_input: String::new(),
             book: AddressBook::load(),
             discovery: crate::discovery::Discovery::start(),

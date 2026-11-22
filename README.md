@@ -93,8 +93,9 @@ In the GUI: enter the signaling URL, connect, pick the host from the list (or ty
 | Debian/Ubuntu | `opacusr-app_*.deb`, `opacusr-agent_*.deb` | viewer ships a `.desktop` entry + icon; agent ships a systemd **user** unit (`systemctl --user enable --now opacusr-agent`) |
 | Windows | `opacusr-*-x64.msi` | installs viewer + agent + server into `Program Files\OpacusR\bin`, Start-menu shortcut, icon embedded |
 | macOS / portable | `.tar.gz` per release | unpack and run |
+| Android (viewer) | `opacusr-*-android-arm64.apk` | arm64-v8a (Android 7+): download the APK, allow "install from unknown sources" and open it. The phone works as a viewer: same UI, connect by ID or `ip:port` |
 
-Assets are produced automatically on every `v*` tag by [.github/workflows/release.yml](.github/workflows/release.yml) (Linux deb + tar.gz, Windows MSI + zip, macOS tar.gz). To build locally: `cargo deb -p opacusr-app -p opacusr-agent` (needs `cargo install cargo-deb`); MSI: see `wix/main.wxs` header.
+Assets are produced automatically on every `v*` tag by [.github/workflows/release.yml](.github/workflows/release.yml) (Linux deb + tar.gz, Windows MSI + zip, macOS tar.gz, Android APK). To build locally: `cargo deb -p opacusr-app -p opacusr-agent` (needs `cargo install cargo-deb`); MSI: see `wix/main.wxs` header; APK: `cargo install cargo-apk` then `cargo apk build -p opacusr-android --release` (needs the Android SDK + NDK).
 
 #### Windows: run the agent as a service
 

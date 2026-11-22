@@ -48,6 +48,32 @@ pub fn hint(ui: &mut egui::Ui, text: &str) {
     ui.add(egui::Label::new(egui::RichText::new(text).weak().small()));
 }
 
+/// Native single-file picker. Desktop only: Android/iOS have no
+/// XDG file dialog — the caller gets `None` there (file picking is a
+/// desktop-session feature).
+pub fn pick_file() -> Option<std::path::PathBuf> {
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    return rfd::FileDialog::new().pick_file();
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    return None;
+}
+
+/// Native multi-file picker (viewer → host upload).
+pub fn pick_files() -> Option<Vec<std::path::PathBuf>> {
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    return rfd::FileDialog::new().pick_files();
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    return None;
+}
+
+/// Native folder picker (downloads folder in the settings drawer).
+pub fn pick_folder() -> Option<std::path::PathBuf> {
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    return rfd::FileDialog::new().pick_folder();
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    return None;
+}
+
 /// Shared context handle for spawning tokio work from the UI thread.
 pub type Runtime = tokio::runtime::Runtime;
 

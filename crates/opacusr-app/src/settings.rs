@@ -133,7 +133,7 @@ fn general_tab(ui: &mut Ui, app: &mut App) {
                             .small(),
                     );
                     if ui.button("Выбрать…").clicked() {
-                        if let Some(dir) = rfd::FileDialog::new().pick_folder() {
+                        if let Some(dir) = crate::pick_folder() {
                             app.config.download_dir = dir;
                             match app.config.save() {
                                 Ok(p) => {

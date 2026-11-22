@@ -11,16 +11,15 @@ members = [
     "crates/opacusr-client",
     "crates/opacusr-server",
     "crates/opacusr-app",
+    "crates/opacusr-android",
 ]
 
 [workspace.package]
-version = "0.11.7"
+version = "0.11.8"
 edition = "2021"
 license = "AGPL-3.0-or-later"
-authors = ["OpacusR contributors"]
 repository = "https://github.com/opacusio/opacusr"
 homepage = "https://github.com/opacusio"
-description = "OpacusR — self-hosted open-source remote desktop (TeamViewer alternative)"
 
 [workspace.dependencies]
 opacusr-proto = { path = "crates/opacusr-proto", version = "0.11.1" }
@@ -71,7 +70,6 @@ audiopus = "0.2"
 clap = { version = "4", features = ["derive"] }
 toml = "1.1"
 dirs = "6"
-rpassword = "7"
 windows-service = "0.8"
 
 webrtc = "0.14"

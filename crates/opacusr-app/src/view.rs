@@ -579,7 +579,7 @@ fn files_panel(ui: &mut egui::Ui, s: &mut SessionHandle) {
     );
     ui.horizontal(|ui| {
         if ui.button("⬆ Send files…").clicked() {
-            if let Some(paths) = rfd::FileDialog::new().pick_files() {
+            if let Some(paths) = crate::pick_files() {
                 for p in paths {
                     let _ = s.commands.send(Command::PushFile(p));
                 }

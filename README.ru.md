@@ -93,8 +93,9 @@ cargo run --release -p opacusr-app
 | Debian/Ubuntu | `opacusr-app_*.deb`, `opacusr-agent_*.deb` | у зрителя — `.desktop` и иконка; у агента — systemd **user**-юнит (`systemctl --user enable --now opacusr-agent`) |
 | Windows | `opacusr-*-x64.msi` | ставит viewer + agent + server в `Program Files\OpacusR\bin`, ярлык в меню Пуск, иконка вшита в exe |
 | macOS / portable | `.tar.gz` из релизов | распаковать и запустить |
+| Android (зритель) | `opacusr-*-android-arm64.apk` | arm64-v8a (Android 7+): скачайте APK, разрешите «установку из неизвестных источников» и откройте файл. Телефон работает зрителем: тот же интерфейс, подключение по ID или `ip:port` |
 
-Артефакты собираются автоматически на каждый тег `v*` ([.github/workflows/release.yml](.github/workflows/release.yml): Linux deb + tar.gz, Windows MSI + zip, macOS tar.gz). Локально: `cargo deb -p opacusr-app -p opacusr-agent` (нужен `cargo install cargo-deb`); MSI — см. шапку `wix/main.wxs`.
+Артефакты собираются автоматически на каждый тег `v*` ([.github/workflows/release.yml](.github/workflows/release.yml): Linux deb + tar.gz, Windows MSI + zip, macOS tar.gz, Android APK). Локально: `cargo deb -p opacusr-app -p opacusr-agent` (нужен `cargo install cargo-deb`); MSI — см. шапку `wix/main.wxs`; APK — `cargo install cargo-apk` и `cargo apk build -p opacusr-android --release` (нужен Android SDK + NDK).
 
 #### Windows: агент как служба
 

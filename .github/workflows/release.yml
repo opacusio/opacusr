@@ -233,9 +233,54 @@ jobs:
           name: macos-artifacts
           path: opacusr-*-macos-aarch64.tar.gz
 
+  android:
+    name: Android (APK, viewer)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r27b
+          add-to-path: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: android-cargo-release-${{ hashFiles('**/Cargo.lock') }}
+      - name: Install cargo-apk
+        run: cargo install cargo-apk --locked
+      - name: Build APK
+        env:
+          ANDROID_HOME: /usr/local/lib/android/sdk
+          ANDROID_NDK_ROOT: ${{ steps.ndk.outputs.ndk-path }}
+          CC_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
+          CXX_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang++
+          AR_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
+        run: cargo apk build -p opacusr-android --release --target aarch64-linux-android
+      - name: Rename APK
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          apk=$(find target -name '*.apk' -path '*release*' | head -1)
+          test -n "$apk"
+          cp "$apk" "opacusr-${VER}-android-arm64.apk"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: android-artifacts
+          path: opacusr-*-android-arm64.apk
+
   publish:
     name: Publish GitHub Release
-    needs: [linux, windows, macos]
+    needs: [linux, windows, macos, android]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -269,6 +314,7 @@ jobs:
             dist/*.zip
             dist/*.msi
             dist/*.deb
+            dist/*.apk
             dist/SHA256SUMS
           body_path: release_body.md
           generate_release_notes: true

@@ -104,3 +104,41 @@ jobs:
         run: cargo test --workspace
         env:
           RUST_TEST_THREADS: '1'
+
+  mobile:
+    name: Mobile cross-check (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: aarch64-linux-android
+          - os: macos-latest
+            target: aarch64-apple-ios
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Android — install NDK
+        if: runner.os == 'Linux'
+        id: ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r27b
+          add-to-path: false
+
+      - name: Android — cargo check (GUI glue + client core)
+        if: runner.os == 'Linux'
+        env:
+          ANDROID_NDK_ROOT: ${{ steps.ndk.outputs.ndk-path }}
+          CC_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
+          CXX_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang++
+          AR_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
+        run: cargo check -p opacusr-android --target aarch64-linux-android
+
+      - name: iOS — cargo check (client core)
+        if: runner.os == 'macOS'
+        run: cargo check -p opacusr-client --target aarch64-apple-ios --no-default-features

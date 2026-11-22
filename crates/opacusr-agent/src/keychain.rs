@@ -5,21 +5,52 @@
 //! On Linux the Secret Service needs a running provider; when none is
 //! available every function returns an error and the agent transparently
 //! falls back to the plaintext `agent.toml` field (mode 0600).
+//! Android/iOS have no `keyring` backend — the same error path applies
+//! (mobile viewers never store unattended passwords anyway).
 //!
 //! The password must be *recoverable* (the host re-runs Argon2id for every
 //! challenge), so hashed storage is not an option — keychain storage keeps
 //! it out of world-readable config files and out of backups.
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use keyring::Entry;
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 const SERVICE: &str = "opacusr";
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 const ACCOUNT: &str = "unattended";
 
+/// Android/iOS build: no OS keychain crate is linked — every call
+/// returns the same «unavailable» error so callers fall back to the
+/// config file, exactly like a headless Linux box without Secret
+/// Service.
+#[cfg(any(target_os = "android", target_os = "ios"))]
+fn unavailable() -> String {
+    "keychain unavailable on this platform".into()
+}
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+pub fn store_password(_password: &str) -> Result<(), String> {
+    Err(unavailable())
+}
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+pub fn load_password() -> Result<Option<String>, String> {
+    Err(unavailable())
+}
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+pub fn delete_password() -> Result<(), String> {
+    Err(unavailable())
+}
+
+/// Desktop build: real `keyring` backends.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn entry() -> Result<Entry, String> {
     Entry::new(SERVICE, ACCOUNT).map_err(|e| format!("keychain unavailable: {e}"))
 }
 
-/// Store the password in the OS keychain.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn store_password(password: &str) -> Result<(), String> {
     entry()?
         .set_password(password)
@@ -27,6 +58,7 @@ pub fn store_password(password: &str) -> Result<(), String> {
 }
 
 /// Read the password back. `Ok(None)` when the entry does not exist.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn load_password() -> Result<Option<String>, String> {
     match entry()?.get_password() {
         Ok(p) => Ok(Some(p)),
@@ -36,6 +68,7 @@ pub fn load_password() -> Result<Option<String>, String> {
 }
 
 /// Remove the stored password. Missing entry counts as success.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn delete_password() -> Result<(), String> {
     match entry()?.delete_credential() {
         Ok(()) => Ok(()),
@@ -44,7 +77,7 @@ pub fn delete_password() -> Result<(), String> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(any(target_os = "android", target_os = "ios"))))]
 mod tests {
     use super::*;
     use keyring::credential::{Credential, CredentialApi, CredentialBuilderApi};
