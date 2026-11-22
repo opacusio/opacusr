@@ -259,25 +259,20 @@ jobs:
           key: android-cargo-release-${{ hashFiles('**/Cargo.lock') }}
       - name: Install cargo-apk
         run: cargo install cargo-apk --locked
-      - name: Restore release keystore
-        # One persistent key so new releases install OVER old ones
-        # (Android refuses an update when the signature changes).
-        # The key is a public-distribution dev key, generated on the
-        # first run and kept alive by the cache.
-        uses: actions/cache@v6
-        with:
-          path: release.keystore
-          key: opacusr-android-release-keystore-v1
-      - name: Create release keystore (first run only)
+      - name: Verify release keystore is present
         run: |
-          if [ ! -f release.keystore ]; then
-            keytool -genkeypair -v \
-              -keystore release.keystore -alias opacusr \
-              -keyalg RSA -keysize 2048 -validity 10000 \
-              -storepass opacusr-release-key -keypass opacusr-release-key \
-              -dname "CN=OpacusR, OU=OpacusR, O=OpacusR, L=Internet, ST=Internet, C=RU"
-          fi
+          test -f release.keystore || {
+            echo "::error::release.keystore missing — every APK would get a one-off signature"
+            exit 1
+          }
       - name: Build APK
+        # release.keystore is COMMITTED to the repo: a per-run or
+        # cache-held key died on cache eviction and every release was
+        # signed with a different identity, so Android refused to
+        # install a new APK over the old one («conflicts with an
+        # existing package»). The key is a public-distribution dev
+        # key — its password is public in this file by design; the
+        # stable identity is what lets updates chain without uninstall.
         env:
           ANDROID_HOME: /usr/local/lib/android/sdk
           ANDROID_NDK_ROOT: ${{ steps.ndk.outputs.ndk-path }}
