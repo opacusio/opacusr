@@ -19,6 +19,17 @@ package = "io.opacusr.app"
 apk_name = "OpacusR"
 build_targets = ["aarch64-linux-android"]
 
+# WITHOUT INTERNET Android refuses EVERY socket() — including loopback —
+# so the agent could never register («регистрация на сервере…» forever,
+# v0.11.9/0.11.10 APKs shipped with zero permissions). The embedded
+# signaling listener binds a port too, so INTERNET covers bind+connect;
+# ACCESS_NETWORK_STATE lets us read connectivity for diagnostics.
+[[package.metadata.android.uses_permission]]
+name = "android.permission.INTERNET"
+
+[[package.metadata.android.uses_permission]]
+name = "android.permission.ACCESS_NETWORK_STATE"
+
 [package.metadata.android.sdk]
 min_sdk_version = 24
 # 34: GitHub ubuntu-latest runners preinstall platform 34 (30 is NOT
@@ -28,6 +39,12 @@ target_sdk_version = 34
 
 [package.metadata.android.application]
 label = "OpacusR"
+# The default signaling endpoints are cleartext `ws://` (the embedded
+# loopback listener and LAN `ip:port` servers). Our WebSockets are
+# native Rust sockets, which the platform's cleartext switch does not
+# inspect anyway, but declare it so any future JVM-side HTTP usage
+# (update checks, metrics) is not silently blocked on API 28+.
+uses_cleartext_traffic = true
 
 [package.metadata.android.application.activity]
 orientation = "fullUser"

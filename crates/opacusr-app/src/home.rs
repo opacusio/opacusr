@@ -181,6 +181,23 @@ fn own_machine_strip(ui: &mut Ui, app: &mut App) {
                     .weak()
                     .small(),
             );
+            // The endpoint loop reports every failed attempt into
+            // `host.notices`, but that log lives in Настройки → Диагностика
+            // — a host that cannot reach its signaling endpoint (Android
+            // without the INTERNET permission, dead server, wrong port)
+            // sat on «регистрация на сервере…» forever with no visible
+            // reason. Surface the LAST failure right here.
+            if let Some(host) = &app.host {
+                if let Some(last) = host.notices.last() {
+                    ui.add_space(4.0);
+                    ui.label(
+                        egui::RichText::new(last.clone())
+                            .weak()
+                            .small()
+                            .color(theme::GOLD),
+                    );
+                }
+            }
         }
     }
 
