@@ -1,12 +1,10 @@
-//! AnyDesk-style «Контакты» and «История» drawers: a search field on
-//! top, sectioned device lists (favorites, address book, LAN-discovered),
-//! round colored avatars with hover actions — and a history log drawer.
-//! Both dock to the right edge of the window (one tool drawer is open
-//! at a time); the home screen stays TeamViewer-quiet.
+//! AnyDesk-style «Контакты» drawer: a search field on top, sectioned
+//! device lists (favorites, address book, LAN-discovered), round
+//! colored avatars with hover actions. Docks to the right edge of the
+//! window; the connection history is NOT here anymore — it is the main
+//! window content (`crate::home`).
 
 use egui::{Color32, Context, Ui, Vec2};
-
-use opacusr_client::addressbook::{fmt_duration, fmt_ts, Outcome};
 
 use crate::app::App;
 use crate::theme;
@@ -311,101 +309,6 @@ fn add_contact_form(ui: &mut Ui, app: &mut App) {
             let _ = app.book.save();
         }
     }
-}
-
-// ---------------------------------------------------------------------
-// History drawer
-// ---------------------------------------------------------------------
-
-/// The «История подключений» drawer (AnyDesk history log) — docked to
-/// the right edge, full height. The footer («последние 100 попыток…» +
-/// «Очистить») is pinned at the bottom and no longer floats mid-window.
-pub fn history_panel(ctx: &Context, app: &mut App) {
-    if !app.show_history {
-        return;
-    }
-    egui::SidePanel::right("history_drawer")
-        .resizable(true)
-        .width_range(380.0..=700.0)
-        .default_width(470.0)
-        .frame(theme::drawer_frame())
-        .show(ctx, |ui| {
-            if theme::drawer_header(ui, "История подключений") {
-                app.show_history = false;
-            }
-            ui.add_space(4.0);
-
-            egui::TopBottomPanel::bottom("history_footer")
-                .frame(egui::Frame::none())
-                .show_inside(ui, |ui| {
-                    ui.separator();
-                    ui.add_space(5.0);
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .button(egui::RichText::new("Очистить").color(theme::DANGER))
-                            .clicked()
-                        {
-                            app.book.clear_history();
-                            let _ = app.book.save();
-                        }
-                        ui.label(
-                            egui::RichText::new("последние 100 попыток подключений")
-                                .weak()
-                                .small(),
-                        );
-                    });
-                    ui.add_space(2.0);
-                });
-
-            egui::CentralPanel::default()
-                .frame(egui::Frame::none())
-                .show_inside(ui, |ui| {
-                    if app.book.history().is_empty() {
-                        empty_note(ui, "Истории подключений пока нет.");
-                    } else {
-                        egui::ScrollArea::vertical()
-                            .auto_shrink(false)
-                            .show(ui, |ui| {
-                                for h in app.book.history() {
-                                    history_row(ui, h);
-                                }
-                            });
-                    }
-                });
-        });
-}
-
-fn history_row(ui: &mut Ui, h: &opacusr_client::addressbook::HistoryEntry) {
-    ui.horizontal(|ui| {
-        // AnyDesk history rows: time, device, result mark, duration.
-        ui.label(egui::RichText::new(fmt_ts(h.ts)).weak().small().monospace());
-        match &h.label {
-            Some(label) => {
-                ui.label(egui::RichText::new(label).strong());
-                ui.label(theme::mono(h.target.clone()).weak().small());
-            }
-            None => {
-                ui.label(theme::mono(h.target.clone()).small());
-            }
-        }
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if let Some(d) = h.duration_secs {
-                ui.label(egui::RichText::new(fmt_duration(d)).weak().small());
-            }
-            let dot = match h.outcome {
-                Outcome::Connected => theme::dot("●", theme::TEAL),
-                Outcome::Failed => theme::dot("●", theme::DANGER),
-                Outcome::Unknown => egui::RichText::new("●").weak(),
-            };
-            let tip = match h.outcome {
-                Outcome::Connected => "подключено",
-                Outcome::Failed => "не удалось",
-                Outcome::Unknown => "в процессе",
-            };
-            ui.label(dot).on_hover_text(tip);
-        });
-    });
-    ui.add_space(2.0);
 }
 
 // ---------------------------------------------------------------------

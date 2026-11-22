@@ -218,7 +218,7 @@ pub fn dot(text: impl Into<String>, color: egui::Color32) -> egui::RichText {
 }
 
 // ---------------------------------------------------------------------
-// Tool drawers (Настройки / Контакты / История)
+// Tool drawers (Настройки / Контакты)
 // ---------------------------------------------------------------------
 
 /// Frame of a docked tool drawer: card fill over the app background and

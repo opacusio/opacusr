@@ -191,11 +191,6 @@ pub struct App {
     pub status_message: String,
     pub host_password_input: String,
 
-    /// Measured height of the home card + footnote (previous frame):
-    /// used to vertically center the home content so wide windows do
-    /// not leave a dead band under the card.
-    pub(crate) home_content_h: f32,
-
     /// Saved contacts + connection history (`addressbook.toml`).
     pub book: AddressBook,
     /// mDNS browser for LAN discovery (Phase 3); refreshed on a
@@ -205,8 +200,6 @@ pub struct App {
     pub(crate) new_label: String,
     pub(crate) new_target: String,
     pub(crate) new_endpoint: String,
-    /// «История подключений» drawer open (AnyDesk-style log).
-    pub(crate) show_history: bool,
     /// «Контакты» drawer open (AnyDesk-style device panel).
     pub(crate) show_contacts: bool,
     /// Settings drawer open (TeamViewer-style «Options»). All settings
@@ -229,8 +222,6 @@ pub struct App {
     pub(crate) unattended_display: Option<String>,
     /// Host-card password reveal toggle.
     pub(crate) reveal_password: bool,
-    /// Host-card inline password-change editor open.
-    pub(crate) password_editing: bool,
     /// History ts of the current connection attempt.
     cur_hist_ts: Option<u64>,
     /// Unix ts when the current attempt actually connected (for duration).
@@ -273,16 +264,16 @@ pub struct App {
     last_id_refresh_at: Option<std::time::Instant>,
 }
 
-/// Tool drawers docked to the right edge («Настройки» / «Контакты» /
-/// «История»). Mutually exclusive: opening one closes the others —
-/// they are menus under the top-bar buttons, not stackable free
-/// windows (floating windows overlapped each other and the home
-/// screen and could escape the window bounds).
+/// Tool drawers docked to the right edge («Настройки» / «Контакты»).
+/// Mutually exclusive: opening one closes the other — they are menus
+/// under the top-bar buttons, not stackable free windows (floating
+/// windows overlapped each other and the main screen and could escape
+/// the window bounds). The history is NOT a drawer anymore — it is the
+/// main window content.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum ToolDrawer {
     Settings,
     Contacts,
-    History,
 }
 
 impl App {
@@ -292,13 +283,11 @@ impl App {
         let was_open = match d {
             ToolDrawer::Settings => self.show_settings,
             ToolDrawer::Contacts => self.show_contacts,
-            ToolDrawer::History => self.show_history,
         };
         self.close_drawers();
         match d {
             ToolDrawer::Settings => self.show_settings = !was_open,
             ToolDrawer::Contacts => self.show_contacts = !was_open,
-            ToolDrawer::History => self.show_history = !was_open,
         }
     }
 
@@ -306,7 +295,6 @@ impl App {
     pub(crate) fn close_drawers(&mut self) {
         self.show_settings = false;
         self.show_contacts = false;
-        self.show_history = false;
     }
 }
 
@@ -342,14 +330,12 @@ impl App {
             config,
             status_message: "Готово.".into(),
             host_password_input: String::new(),
-            home_content_h: 430.0,
             totp_input: String::new(),
             book: AddressBook::load(),
             discovery: crate::discovery::Discovery::start(),
             new_label: String::new(),
             new_target: String::new(),
             new_endpoint: String::new(),
-            show_history: false,
             show_contacts: false,
             show_settings: false,
             settings_nav: settings::SettingsTab::General,
@@ -360,7 +346,6 @@ impl App {
             rename_focused: false,
             unattended_display: None,
             reveal_password: false,
-            password_editing: false,
             cur_hist_ts: None,
             cur_connected_at: None,
             #[cfg(any(windows, target_os = "macos"))]
@@ -1315,12 +1300,6 @@ impl eframe::App for App {
                         {
                             self.toggle_drawer(ToolDrawer::Contacts);
                         }
-                        if tool_button(ui, "🕘 История", self.show_history)
-                            .on_hover_text("История подключений")
-                            .clicked()
-                        {
-                            self.toggle_drawer(ToolDrawer::History);
-                        }
                         if tool_button(ui, "⚙ Настройки", self.show_settings)
                             .on_hover_text("Настройки — боковая панель")
                             .clicked()
@@ -1333,11 +1312,12 @@ impl eframe::App for App {
             ui.add_space(4.0);
         });
 
-        // Docked drawers: settings (TeamViewer «Options»), contacts and
-        // history (AnyDesk panels) — right-edge panels, full height, one
-        // open at a time; they never float over the home screen nor
-        // escape the window. Home-screen only: a viewer session replaces
-        // the whole central area and hides the drawers.
+        // Docked drawers: settings (TeamViewer «Options») and contacts
+        // (AnyDesk panel) — right-edge panels, full height, one open at
+        // a time; they never float over the main screen nor escape the
+        // window. Main-screen only: a viewer session replaces the whole
+        // central area and hides the drawers. The history is always on
+        // the main screen (it IS the main screen) — no drawer for it.
         if self.session.is_none() {
             // Esc closes the open drawer — unless the inline rename
             // editor is active, then Esc first cancels the rename.
@@ -1350,7 +1330,6 @@ impl eframe::App for App {
             }
             settings::settings_panel(ctx, self);
             contacts::contacts_panel(ctx, self);
-            contacts::history_panel(ctx, self);
         }
 
         // Incoming-session consent popup: visible on the home screen and
@@ -1373,10 +1352,10 @@ impl eframe::App for App {
 }
 
 impl App {
-    /// The TeamViewer-like home screen: just the two cards (allow
-    /// control / control a remote computer). Everything else — settings,
-    /// contacts, history — lives in its own window opened from the top
-    /// toolbar.
+    /// The main window: the history list as the primary content, the
+    /// compact connect card beside it («сразу окно с историей»). The
+    /// old TeamViewer-style home card is gone — host options live in
+    /// the settings drawer.
     fn home_ui(&mut self, ctx: &Context) {
         home::home_ui(ctx, self);
     }
