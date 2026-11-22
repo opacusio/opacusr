@@ -46,6 +46,10 @@ rfd = { workspace = true }
 
 [target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
 opacusr-client = { workspace = true }
+# Mobile: the agent lib compiles without its audio feature — the Opus
+# vendored build is not wired for NDK yet, and a phone never hosts a
+# session anyway (no capture backend).
+opacusr-agent = { workspace = true, default-features = false }
 
 # System tray (TeamViewer-style background operation). Linux is
 # deliberately excluded: the tray-icon Linux backends need GTK /
