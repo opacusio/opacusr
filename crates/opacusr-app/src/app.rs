@@ -412,13 +412,13 @@ impl App {
         app
     }
 
-    /// Tray actions + the close behavior. The window's X is a REAL exit
-    /// by default (the user asked for it: an app that «hangs in the
-    /// tray» after close is a support bug, not a feature). Hide-to-tray
-    /// on close only when the user turned it on (Настройки → Хост) and
-    /// a tray icon actually exists; tray «Выход» exits for real — with
-    /// a watchdog that cannot be swallowed by a hidden-window edge
-    /// case.
+    /// Tray actions + the close behavior. The window's X hides to the
+    /// tray by default (TeamViewer/AnyDesk model, config `close_to_tray`
+    /// defaults to `true`; old agent.toml files are migrated once — see
+    /// `AgentConfig::migrate`). Real exit is tray «Выход» — with a
+    /// watchdog that cannot be swallowed by a hidden-window edge case;
+    /// closing for real also happens when the tray icon is unavailable
+    /// or the user unticked the box in Настройки → Хост.
     #[cfg(any(windows, target_os = "macos"))]
     fn process_tray(&mut self, ctx: &Context) {
         use crate::tray::TrayAction;

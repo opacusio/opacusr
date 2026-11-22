@@ -183,13 +183,27 @@ pub struct AgentConfig {
     /// (so the machine is reachable without a manual «Запустить»).
     /// On Windows the MSI additionally autostarts the GUI at user login.
     pub start_agent_automatically: bool,
-    /// What the window's X does when a tray icon is available. `false`
-    /// (default): closing the window quits the whole app (the in-process
+    /// What the window's X does when a tray icon is available. `true`
+    /// (default, TeamViewer/AnyDesk model): the window hides to the tray
+    /// and the app keeps serving in the background until tray «Выход».
+    /// `false`: closing the window quits the whole app (the in-process
     /// agent stops too; an installed OS service keeps the machine
-    /// reachable). `true`: the window hides to the tray and the app keeps
-    /// serving in the background until tray «Выход».
+    /// reachable).
     pub close_to_tray: bool,
+    /// Schema version of the saved agent.toml. Files written before the
+    /// field existed load as version **0** (field-level serde default —
+    /// deliberately NOT the struct default, which is the current version)
+    /// and get migrated once by [`AgentConfig::load_from`] — e.g. v0.11.9
+    /// files pinned `close_to_tray = false` because that was the old
+    /// default; 0.11.10 flips the default to hide-to-tray, so the
+    /// migration re-applies it to files that never opted out deliberately.
+    #[serde(default)]
+    pub config_version: u32,
 }
+
+/// Current [`AgentConfig`] schema version. Bump when the meaning of a
+/// stored field changes and add a migration step in `load_from`.
+const CONFIG_VERSION: u32 = 2;
 
 impl Default for AgentConfig {
     fn default() -> Self {
@@ -236,7 +250,8 @@ impl Default for AgentConfig {
             tunnel: "loopback".into(),
             last_peer_id: None,
             start_agent_automatically: true,
-            close_to_tray: false,
+            close_to_tray: true,
+            config_version: CONFIG_VERSION,
         }
     }
 }
@@ -287,12 +302,32 @@ impl AgentConfig {
     }
 
     pub fn load_from(path: &PathBuf) -> Self {
-        match fs::read_to_string(path) {
+        let mut cfg = match fs::read_to_string(path) {
             Ok(text) => toml::from_str(&text).unwrap_or_else(|e| {
                 tracing::warn!(target: "opacusr", "config {path:?} invalid ({e}); using defaults");
                 Self::default()
             }),
             Err(_) => Self::default(),
+        };
+        cfg.migrate();
+        cfg
+    }
+
+    /// One-time migrations for agent.toml files written by older builds.
+    /// Runs after every load (idempotent): a migrated file carries the
+    /// current [`CONFIG_VERSION`], so the steps below become no-ops.
+    fn migrate(&mut self) {
+        if self.config_version < 2 {
+            // Files saved by <= 0.11.9 wrote `close_to_tray = false` because
+            // that was the default — not a deliberate user choice. 0.11.10
+            // makes hide-to-tray the default (closing the window must keep
+            // the app in the tray), so old files adopt it once; users who
+            // prefer a real exit on close can re-uncheck the box in
+            // Настройки → Хост, and their choice sticks (the file now
+            // carries `config_version = 2`).
+            self.close_to_tray = true;
+            self.config_version = CONFIG_VERSION;
+            tracing::info!(target: "opacusr", "agent.toml migrated to config v{CONFIG_VERSION} (close-to-tray default)");
         }
     }
 
@@ -497,5 +532,48 @@ mod tests {
         let text = toml::to_string_pretty(&cfg).unwrap();
         let back: AgentConfig = toml::from_str(&text).unwrap();
         assert_eq!(back.proxy, "socks5://user:pass@proxy.corp:1080");
+    }
+
+    #[test]
+    fn close_to_tray_defaults_on() {
+        // TeamViewer model: the X hides the window, the app stays in the tray.
+        assert!(AgentConfig::default().close_to_tray);
+    }
+
+    #[test]
+    fn v0_11_9_file_migrates_to_close_to_tray() {
+        // What v0.11.9 save() wrote: no config_version key, close_to_tray
+        // pinned to the then-default `false`. Loading it must flip
+        // close-to-tray on exactly once and stamp the schema version,
+        // while every other field survives untouched.
+        let old = "server_url = \"ws://relay.example.com:8080/signal\"\n\
+                   name = \"Офис-ПК\"\n\
+                   close_to_tray = false\n";
+        let path = std::env::temp_dir().join(format!(
+            "opacusr-migrate-test-{}-old.toml",
+            std::process::id()
+        ));
+        std::fs::write(&path, old).unwrap();
+        let cfg = AgentConfig::load_from(&path);
+        std::fs::remove_file(&path).ok();
+        assert!(cfg.close_to_tray, "old file must adopt the new default");
+        assert_eq!(cfg.config_version, CONFIG_VERSION);
+        assert_eq!(cfg.server_url, "ws://relay.example.com:8080/signal");
+        assert_eq!(cfg.name, "Офис-ПК");
+    }
+
+    #[test]
+    fn explicit_close_to_tray_false_survives_migration() {
+        // A file that already carries the current version was written by a
+        // build that knows about the box — respect the user's opt-out.
+        let modern = "close_to_tray = false\nconfig_version = 2\n";
+        let path = std::env::temp_dir().join(format!(
+            "opacusr-migrate-test-{}-modern.toml",
+            std::process::id()
+        ));
+        std::fs::write(&path, modern).unwrap();
+        let cfg = AgentConfig::load_from(&path);
+        std::fs::remove_file(&path).ok();
+        assert!(!cfg.close_to_tray, "explicit opt-out must stick");
     }
 }
