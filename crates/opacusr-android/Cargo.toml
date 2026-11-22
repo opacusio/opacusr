@@ -21,7 +21,10 @@ build_targets = ["aarch64-linux-android"]
 
 [package.metadata.android.sdk]
 min_sdk_version = 24
-target_sdk_version = 30
+# 34: GitHub ubuntu-latest runners preinstall platform 34 (30 is NOT
+# in the preinstalled image — "Platform 30 is not installed" on
+# `cargo apk build`).
+target_sdk_version = 34
 
 [package.metadata.android.application]
 label = "OpacusR"
