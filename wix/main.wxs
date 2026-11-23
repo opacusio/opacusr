@@ -117,16 +117,16 @@
                      first inbound packet from a phone on the same
                      Wi-Fi — the remote side sees timeouts while
                      everything on localhost works. -->
-                <fire:FirewallException Id='OpacusRAppFwTcp' Name='OpacusR' Scope='any' Profile='all' Protocol='tcp'/>
-                <fire:FirewallException Id='OpacusRAppFwUdp' Name='OpacusR' Scope='any' Profile='all' Protocol='udp'/>
+                <fire:FirewallException Id='OpacusRAppFwTcp' Name='OpacusR' Scope='any' Profile='all' Protocol='tcp' File='OpacusRExe'/>
+                <fire:FirewallException Id='OpacusRAppFwUdp' Name='OpacusR' Scope='any' Profile='all' Protocol='udp' File='OpacusRExe'/>
             </Component>
             <Component Id='AgentExecutable' Guid='*' Win64='yes'>
                 <File Id='OpacusRAgentExe' Source='target\release\opacusr-agent.exe' KeyPath='yes'/>
                 <!-- Same story for the service binary: unattended
                      sessions are inbound TCP (signaling registry,
                      relay, direct ip:port). -->
-                <fire:FirewallException Id='OpacusRAgentFwTcp' Name='OpacusR Agent' Scope='any' Profile='all' Protocol='tcp'/>
-                <fire:FirewallException Id='OpacusRAgentFwUdp' Name='OpacusR Agent' Scope='any' Profile='all' Protocol='udp'/>
+                <fire:FirewallException Id='OpacusRAgentFwTcp' Name='OpacusR Agent' Scope='any' Profile='all' Protocol='tcp' File='OpacusRAgentExe'/>
+                <fire:FirewallException Id='OpacusRAgentFwUdp' Name='OpacusR Agent' Scope='any' Profile='all' Protocol='udp' File='OpacusRAgentExe'/>
                 <!-- The service binary is this component's key file.
                      The ImagePath is the bare exe (the agent routes
                      itself into the SCM dispatcher on start; see the
