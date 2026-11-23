@@ -60,6 +60,13 @@ fn android_main(android_app: AndroidApp) {
     eframe::run_native("OpacusR", options, Box::new(app_creator)).expect("OpacusR UI failed");
 }
 
+/// The acquired MulticastLock global ref, stored as an address and
+/// leaked on purpose: the lock has to stay valid for the whole app
+/// lifetime (raw pointers are not Send/Sync; we never delete it).
+/// Module-level so the fake-JNI wiring test below can assert that the
+/// success path really ran to completion.
+static MULTICAST_LOCK: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+
 /// Acquires a WiFiManager.MulticastLock for the process lifetime via
 /// raw JNI (jni-sys vtable calls — deliberately NOT the `jni` crate,
 /// whose 0.22 macro API churn we do not need for five calls).
@@ -72,19 +79,12 @@ fn android_main(android_app: AndroidApp) {
 /// leaked global ref — it must outlive everything; every call is
 /// exception-checked and the whole thing degrades to a log line on
 /// failure. NOT gated to Android so the host build type-checks the JNI
-/// usage too; on desktop it is simply never called.
+/// usage too; on desktop it is exercised by the fake-JNI wiring test.
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
 fn android_acquire_multicast_lock(
     vm_raw: *mut core::ffi::c_void,
     activity_raw: *mut core::ffi::c_void,
 ) {
-    use std::sync::OnceLock;
-
-    /// The acquired MulticastLock global ref, stored as an address and
-    /// leaked on purpose: the lock has to stay valid for the whole app
-    /// lifetime (raw pointers are not Send/Sync; we never delete it).
-    static MULTICAST_LOCK: OnceLock<usize> = OnceLock::new();
-
     let fail = |what: &str| tracing::warn!(target: "opacusr", "multicast lock: {what}");
     if MULTICAST_LOCK.get().is_some() {
         return; // already acquired
@@ -94,13 +94,33 @@ fn android_acquire_multicast_lock(
         return;
     }
     unsafe {
-        let vm: jni_sys::JavaVM = vm_raw.cast();
+        // THE v0.11.15/16 WHITE-SCREEN ROOT CAUSE, fixed here. jni-sys
+        // 0.4 types `JavaVM` as the raw JNIInvokeInterface VTABLE VALUE,
+        // but `AndroidApp::vm_as_ptr()` hands us the NDK JavaVM handle —
+        // a `struct _JavaVM*` whose FIRST FIELD is that vtable pointer.
+        // The JNIInvokeInterface fns take the HANDLE back as their first
+        // argument (typed `*mut JavaVM` in jni-sys terms) and recover
+        // their ART-side state from it. So: dereference the handle ONCE
+        // to load the vtable, then pass the HANDLE itself as the first
+        // argument. The old code did the exact opposite on both ends:
+        // it dereferenced the handle as if it were the vtable (reading a
+        // function pointer from memory past the 8-byte `_JavaVM` struct
+        // — i.e. calling garbage) and passed the address of the local
+        // `vm` copy as the handle. SIGSEGV before the first UI frame on
+        // every real device — the desktop test only exercised the
+        // null-handle early return and could never see it.
+        let vm_handle: *mut jni_sys::JavaVM = vm_raw.cast();
+        let vm: jni_sys::JavaVM = *vm_handle;
+        if vm.is_null() {
+            fail("JavaVM vtable pointer is null");
+            return;
+        }
         // The android_main thread is attached by android-activity;
         // AttachCurrentThread on an already-attached thread just
         // returns the existing JNIEnv.
         let mut env: *mut jni_sys::JNIEnv = std::ptr::null_mut();
         let res = ((*vm).v1_1.AttachCurrentThread)(
-            &vm as *const jni_sys::JavaVM as *mut jni_sys::JavaVM,
+            vm_handle,
             (&mut env) as *mut *mut jni_sys::JNIEnv as *mut *mut core::ffi::c_void,
             std::ptr::null_mut(),
         );
@@ -109,6 +129,15 @@ fn android_acquire_multicast_lock(
             return;
         }
         let iface: *const jni_sys::JNINativeInterface_ = *env;
+        // Wiring self-check: GetVersion on a correctly resolved vtable
+        // must report at least JNI 1.6 (Android 7+, our minSdk). If our
+        // handle/vtable model were wrong AGAIN, this bails out with a
+        // log line instead of jumping through a garbage function pointer.
+        let version = ((*iface).v1_6.GetVersion)(env);
+        if version < jni_sys::JNI_VERSION_1_6 {
+            fail(&format!("GetVersion sanity check: {version:#x}"));
+            return;
+        }
         // Every JNI call below is followed by an exception check; any
         // problem aborts the whole (optional) feature.
         macro_rules! clean {
@@ -198,5 +227,202 @@ mod tests {
     fn multicast_lock_helper_degrades_gracefully_on_null_handles() {
         super::android_acquire_multicast_lock(std::ptr::null_mut(), std::ptr::null_mut());
         // No panic, no lock — best-effort semantics preserved.
+    }
+
+    // ------------------------------------------------------------------
+    // Fake-JNI wiring test. The v0.11.15/16 white screen came from a
+    // handle-vs-vtable mix-up in the AttachCurrentThread call — a bug
+    // class that COMPILES cleanly (all types are raw pointers) and that
+    // the null-handle test above cannot see. These fakes build REAL
+    // memory layouts (NDK-style handles whose first field points at a
+    // vtable) and verify the helper calls the right slots with the right
+    // arguments, end to end, on the desktop.
+    // ------------------------------------------------------------------
+    use core::sync::atomic::{AtomicUsize, Ordering};
+
+    /// What fake_attach_current_thread received as its first argument.
+    static RECORDED_VM_ARG: AtomicUsize = AtomicUsize::new(0);
+    /// Fake JNIEnv handle written into the p_env out-param.
+    static FAKE_ENV_HANDLE: AtomicUsize = AtomicUsize::new(0);
+    /// CallObjectMethod invocation counter (systemService → createLock).
+    static CALL_OBJECT_SEQ: AtomicUsize = AtomicUsize::new(0);
+
+    unsafe extern "system" fn fake_attach_current_thread(
+        vm: *mut jni_sys::JavaVM,
+        penv: *mut *mut core::ffi::c_void,
+        _args: *mut core::ffi::c_void,
+    ) -> jni_sys::jint {
+        RECORDED_VM_ARG.store(vm as usize, Ordering::SeqCst);
+        *penv = FAKE_ENV_HANDLE.load(Ordering::SeqCst) as *mut core::ffi::c_void;
+        jni_sys::JNI_OK
+    }
+
+    unsafe extern "system" fn fake_get_version(_env: *mut jni_sys::JNIEnv) -> jni_sys::jint {
+        jni_sys::JNI_VERSION_1_6
+    }
+
+    unsafe extern "system" fn fake_exception_check(
+        _env: *mut jni_sys::JNIEnv,
+    ) -> jni_sys::jboolean {
+        false
+    }
+
+    unsafe extern "system" fn fake_get_object_class(
+        _env: *mut jni_sys::JNIEnv,
+        _obj: jni_sys::jobject,
+    ) -> jni_sys::jclass {
+        0x1010usize as jni_sys::jclass
+    }
+
+    unsafe extern "system" fn fake_get_method_id(
+        _env: *mut jni_sys::JNIEnv,
+        _cls: jni_sys::jclass,
+        _name: *const core::ffi::c_char,
+        _sig: *const core::ffi::c_char,
+    ) -> jni_sys::jmethodID {
+        0x2020usize as jni_sys::jmethodID
+    }
+
+    unsafe extern "system" fn fake_new_string_utf(
+        _env: *mut jni_sys::JNIEnv,
+        _utf: *const core::ffi::c_char,
+    ) -> jni_sys::jstring {
+        0x3030usize as jni_sys::jstring
+    }
+
+    unsafe extern "C" fn fake_call_object_method(
+        _env: *mut jni_sys::JNIEnv,
+        _obj: jni_sys::jobject,
+        _mid: jni_sys::jmethodID,
+        _: ...
+    ) -> jni_sys::jobject {
+        // 1st call: getSystemService("wifi") → WifiManager; 2nd:
+        // createMulticastLock → MulticastLock. Both non-null sentinels.
+        let n = CALL_OBJECT_SEQ.fetch_add(1, Ordering::SeqCst);
+        (0x4040 + n) as jni_sys::jobject
+    }
+
+    unsafe extern "C" fn fake_call_void_method(
+        _env: *mut jni_sys::JNIEnv,
+        _obj: jni_sys::jobject,
+        _mid: jni_sys::jmethodID,
+        _: ...
+    ) {
+    }
+
+    unsafe extern "system" fn fake_new_global_ref(
+        _env: *mut jni_sys::JNIEnv,
+        _obj: jni_sys::jobject,
+    ) -> jni_sys::jobject {
+        0x5050usize as jni_sys::jobject
+    }
+
+    unsafe extern "system" fn fake_delete_local_ref(
+        _env: *mut jni_sys::JNIEnv,
+        _obj: jni_sys::jobject,
+    ) {
+    }
+
+    #[test]
+    fn multicast_lock_wiring_survives_a_fake_vm_handle() {
+        use jni_sys::JavaVM;
+
+        // Field offsets inside the real jni-sys vtable structs are taken
+        // from uninit temporaries below, so the fakes cannot drift from
+        // the crate's actual layout.
+
+        // Fake JavaVM vtable (16 words is plenty) + the VM handle: NDK
+        // `struct _JavaVM` — one word holding the vtable address. Heap
+        // allocation (Box::leak): the helper reads these through raw
+        // pointers, and stack slots the compiler cannot see being read
+        // would be dead-code-eliminated — the fake calls would then
+        // jump through zero and kill the test process.
+        let vm_table: &mut [usize; 16] = Box::leak(Box::new([0usize; 16]));
+        let vm_table_addr = vm_table.as_mut_ptr() as usize;
+        let vm_handle_mem: &mut [usize; 2] = Box::leak(Box::new([vm_table_addr, 0]));
+        let vm_handle = vm_handle_mem.as_mut_ptr() as *mut JavaVM as usize;
+
+        let off = |raw: usize, base: usize| (raw - base) / 8;
+
+        let invoke_base: *const jni_sys::JNIInvokeInterface_ = {
+            let tmp = core::mem::MaybeUninit::<jni_sys::JNIInvokeInterface_>::uninit();
+            tmp.as_ptr()
+        };
+        let ib = invoke_base as usize;
+        vm_table[off(
+            unsafe { core::ptr::addr_of!((*invoke_base).v1_1.AttachCurrentThread) as usize },
+            ib,
+        )] = fake_attach_current_thread as *const () as usize;
+
+        // Fake JNIEnv vtable (the real struct has ~230 slots) + handle.
+        let env_table: &mut [usize; 256] = Box::leak(Box::new([0usize; 256]));
+        let env_table_addr = env_table.as_mut_ptr() as usize;
+        let env_handle_mem: &mut [usize; 2] = Box::leak(Box::new([env_table_addr, 0]));
+        let env_handle = env_handle_mem.as_mut_ptr() as *mut jni_sys::JNIEnv as usize;
+
+        let env_base: *const jni_sys::JNINativeInterface_ = {
+            let tmp = core::mem::MaybeUninit::<jni_sys::JNINativeInterface_>::uninit();
+            tmp.as_ptr()
+        };
+        let eb = env_base as usize;
+        let mut put = |slot: usize, f: usize| env_table[slot] = f;
+        unsafe {
+            put(
+                (core::ptr::addr_of!((*env_base).v1_6.GetVersion) as usize - eb) / 8,
+                fake_get_version as *const () as usize,
+            );
+            put(
+                (core::ptr::addr_of!((*env_base).v1_6.ExceptionCheck) as usize - eb) / 8,
+                fake_exception_check as *const () as usize,
+            );
+            put(
+                (core::ptr::addr_of!((*env_base).v1_6.GetObjectClass) as usize - eb) / 8,
+                fake_get_object_class as *const () as usize,
+            );
+            put(
+                (core::ptr::addr_of!((*env_base).v1_6.GetMethodID) as usize - eb) / 8,
+                fake_get_method_id as *const () as usize,
+            );
+            put(
+                (core::ptr::addr_of!((*env_base).v1_6.NewStringUTF) as usize - eb) / 8,
+                fake_new_string_utf as *const () as usize,
+            );
+            put(
+                (core::ptr::addr_of!((*env_base).v1_6.CallObjectMethod) as usize - eb) / 8,
+                fake_call_object_method as *const () as usize,
+            );
+            put(
+                (core::ptr::addr_of!((*env_base).v1_6.CallVoidMethod) as usize - eb) / 8,
+                fake_call_void_method as *const () as usize,
+            );
+            put(
+                (core::ptr::addr_of!((*env_base).v1_6.NewGlobalRef) as usize - eb) / 8,
+                fake_new_global_ref as *const () as usize,
+            );
+            put(
+                (core::ptr::addr_of!((*env_base).v1_6.DeleteLocalRef) as usize - eb) / 8,
+                fake_delete_local_ref as *const () as usize,
+            );
+        }
+
+        RECORDED_VM_ARG.store(0, Ordering::SeqCst);
+        FAKE_ENV_HANDLE.store(env_handle, Ordering::SeqCst);
+        CALL_OBJECT_SEQ.store(0, Ordering::SeqCst);
+
+        // Run the helper against the fakes. If the handle/vtable wiring
+        // is wrong in ANY way (the 0.11.15 bug), this jumps through a
+        // zero slot and the test process dies — the crash we ship-fixed.
+        super::android_acquire_multicast_lock(
+            vm_handle as *mut core::ffi::c_void,
+            0x6060usize as *mut core::ffi::c_void,
+        );
+
+        // AttachCurrentThread must have received THE HANDLE (the address
+        // whose first field is the vtable), not the vtable itself and
+        // not the address of some local copy.
+        assert_eq!(RECORDED_VM_ARG.load(Ordering::SeqCst), vm_handle);
+        // And the full success path must have completed.
+        assert_eq!(CALL_OBJECT_SEQ.load(Ordering::SeqCst), 2);
+        assert_eq!(super::MULTICAST_LOCK.get(), Some(&0x5050usize));
     }
 }
