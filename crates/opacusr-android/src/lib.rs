@@ -73,11 +73,11 @@ fn android_main(android_app: AndroidApp) {
 /// exception-checked and the whole thing degrades to a log line on
 /// failure. NOT gated to Android so the host build type-checks the JNI
 /// usage too; on desktop it is simply never called.
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
 fn android_acquire_multicast_lock(
     vm_raw: *mut core::ffi::c_void,
     activity_raw: *mut core::ffi::c_void,
 ) {
-    use std::ffi::CStr;
     use std::sync::OnceLock;
 
     /// The acquired MulticastLock global ref, stored as an address and
@@ -126,18 +126,11 @@ fn android_acquire_multicast_lock(
         let get_service = ((*iface).v1_6.GetMethodID)(
             env,
             ctx_cls,
-            CStr::from_bytes_with_nul(b"getSystemService\0")
-                .unwrap()
-                .as_ptr(),
-            CStr::from_bytes_with_nul(b"(Ljava/lang/String;)Ljava/lang/Object;\0")
-                .unwrap()
-                .as_ptr(),
+            c"getSystemService".as_ptr(),
+            c"(Ljava/lang/String;)Ljava/lang/Object;".as_ptr(),
         );
         clean!();
-        let wifi: jni_sys::jstring = ((*iface).v1_6.NewStringUTF)(
-            env,
-            CStr::from_bytes_with_nul(b"wifi\0").unwrap().as_ptr(),
-        );
+        let wifi: jni_sys::jstring = ((*iface).v1_6.NewStringUTF)(env, c"wifi".as_ptr());
         clean!();
         let wifi_mgr: jni_sys::jobject =
             ((*iface).v1_6.CallObjectMethod)(env, ctx, get_service, wifi);
@@ -151,20 +144,11 @@ fn android_acquire_multicast_lock(
         let create_lock = ((*iface).v1_6.GetMethodID)(
             env,
             wm_cls,
-            CStr::from_bytes_with_nul(b"createMulticastLock\0")
-                .unwrap()
-                .as_ptr(),
-            CStr::from_bytes_with_nul(b"(Ljava/lang/String;)Landroid/net/wifi/MulticastLock;\0")
-                .unwrap()
-                .as_ptr(),
+            c"createMulticastLock".as_ptr(),
+            c"(Ljava/lang/String;)Landroid/net/wifi/MulticastLock;".as_ptr(),
         );
         clean!();
-        let tag: jni_sys::jstring = ((*iface).v1_6.NewStringUTF)(
-            env,
-            CStr::from_bytes_with_nul(b"opacusr-mdns\0")
-                .unwrap()
-                .as_ptr(),
-        );
+        let tag: jni_sys::jstring = ((*iface).v1_6.NewStringUTF)(env, c"opacusr-mdns".as_ptr());
         clean!();
         let lock: jni_sys::jobject =
             ((*iface).v1_6.CallObjectMethod)(env, wifi_mgr, create_lock, tag);
@@ -178,20 +162,14 @@ fn android_acquire_multicast_lock(
         let set_ref = ((*iface).v1_6.GetMethodID)(
             env,
             lock_cls,
-            CStr::from_bytes_with_nul(b"setReferenceCounted\0")
-                .unwrap()
-                .as_ptr(),
-            CStr::from_bytes_with_nul(b"(Z)V\0").unwrap().as_ptr(),
+            c"setReferenceCounted".as_ptr(),
+            c"(Z)V".as_ptr(),
         );
         clean!();
         ((*iface).v1_6.CallVoidMethod)(env, lock, set_ref, 0 as core::ffi::c_int);
         clean!();
-        let acquire = ((*iface).v1_6.GetMethodID)(
-            env,
-            lock_cls,
-            CStr::from_bytes_with_nul(b"acquire\0").unwrap().as_ptr(),
-            CStr::from_bytes_with_nul(b"()V\0").unwrap().as_ptr(),
-        );
+        let acquire =
+            ((*iface).v1_6.GetMethodID)(env, lock_cls, c"acquire".as_ptr(), c"()V".as_ptr());
         clean!();
         ((*iface).v1_6.CallVoidMethod)(env, lock, acquire);
         clean!();
