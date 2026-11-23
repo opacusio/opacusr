@@ -32,6 +32,7 @@ impl SignalingClient {
     /// the proxy first, then the WebSocket (and TLS for `wss://`) runs
     /// over that tunnel.
     pub async fn connect_via(url: &str, proxy: Option<&Proxy>) -> Result<Self> {
+        crate::ensure_rustls_crypto_provider();
         let request = url.into_client_request().map_err(|e| {
             TransportError::Signaling(format!("invalid signaling url {url:?}: {e}"))
         })?;

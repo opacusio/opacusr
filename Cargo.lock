@@ -5437,6 +5437,7 @@ dependencies = [
  "opacusr-crypto",
  "opacusr-proto",
  "rand 0.8.8",
+ "rustls",
  "serde_json",
  "sha2 0.10.9",
  "tar",

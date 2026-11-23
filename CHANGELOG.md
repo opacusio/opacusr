@@ -31,6 +31,16 @@ SemVer-ish (breaking protocol changes bump the minor until 1.0).
 - Крейт пока ни в один бинарник не вшит — режим опционален и не влияет на
   релизные сборки.
 
+### CI: конфликт криптопровайдеров rustls
+
+- Тесты `--workspace` падали на всех десктопных ОС: при объединении фич
+  workspace rustls собирался сразу с ring (стек webrtc) и aws-lc-rs
+  (rust-libp2p) и паниковал на первом `builder()` («no process-level
+  CryptoProvider available»). Исправление: новый
+  `opacusr_transport::ensure_rustls_crypto_provider()` — однократная явная
+  установка ring при первом использовании транспорта (webrtc, сигналинг
+  `wss://`, проверка обновлений).
+
 ## [0.11.15] — 2026-11-23
 
 ### Сценарий «в одной Wi-Fi сети» работает сам: находка хостов и файрвол

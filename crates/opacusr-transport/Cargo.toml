@@ -18,6 +18,10 @@ thiserror = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 tokio-tungstenite = { workspace = true, features = ["rustls-tls-webpki-roots"] }
+# Direct dep so we can pin the process-wide crypto provider (see
+# `ensure_rustls_crypto_provider` in lib.rs): the WebRTC stack uses ring
+# while rust-libp2p compiles aws-lc-rs into the same rustls.
+rustls = { version = "0.23", default-features = false, features = ["std", "ring"] }
 webrtc = { workspace = true }
 serde_json = "1"
 bincode = { workspace = true }

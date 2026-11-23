@@ -66,6 +66,7 @@ const CHANNELS_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Create a peer connection with the given ICE configuration.
 pub async fn new_peer_connection(cfg: &WebRtcConfig) -> Result<Arc<RTCPeerConnection>> {
+    crate::ensure_rustls_crypto_provider();
     let api = APIBuilder::new().build();
     let rtc = RTCConfiguration {
         ice_servers: cfg

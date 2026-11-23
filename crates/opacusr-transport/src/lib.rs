@@ -28,6 +28,19 @@ pub use secure::SecureSession;
 
 use async_trait::async_trait;
 
+/// Install the process-wide rustls crypto provider.
+///
+/// The workspace compiles rustls with two crypto backends: the WebRTC
+/// stack wants **ring** while rust-libp2p (opacusr-libp2p) pulls in
+/// **aws-lc-rs**. With both feature sets unified rustls refuses to
+/// auto-pick a process default and panics on the first `builder()` call
+/// ("no process-level CryptoProvider available"). Pinning ring on the
+/// first transport use removes the ambiguity; a second install attempt
+/// is a harmless no-op.
+pub fn ensure_rustls_crypto_provider() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+}
+
 /// Transport failures, unified across backends.
 #[derive(Debug, thiserror::Error)]
 pub enum TransportError {

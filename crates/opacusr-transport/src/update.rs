@@ -36,6 +36,7 @@ pub struct LatestRelease {
 /// prereleases. All failures are reported as `Err(message)`, callers decide
 /// how loudly to complain.
 pub fn fetch_latest_release() -> Result<LatestRelease, String> {
+    crate::ensure_rustls_crypto_provider();
     let resp = match ureq::get(LATEST_URL)
         .set("User-Agent", concat!("opacusr/", env!("CARGO_PKG_VERSION")))
         .set("Accept", "application/vnd.github+json")
