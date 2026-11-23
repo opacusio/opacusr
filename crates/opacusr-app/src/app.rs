@@ -97,6 +97,9 @@ pub struct SessionHandle {
     /// streamed-screen pixels.
     pub cursor_pos: Option<(i32, i32, bool, u64)>,
     pub status: String,
+    /// When the session screen opened — drives the «still no frame?»
+    /// diagnostics shown in the viewer while the first frame is pending.
+    pub opened_at: std::time::Instant,
 }
 
 impl SessionHandle {
@@ -147,6 +150,7 @@ impl SessionHandle {
             cursor_shapes: std::collections::HashMap::new(),
             cursor_pos: None,
             status: "connecting…".into(),
+            opened_at: std::time::Instant::now(),
         }
     }
 }
@@ -894,7 +898,8 @@ impl App {
     pub(crate) fn save_host_password(&mut self) {
         let p = self.host_password_input.trim().to_string();
         if p.len() < 4 {
-            self.status_message = "Password too short (min 4 chars).".into();
+            self.status_message = "Пароль слишком короткий — минимум 4 символа.".into();
+            self.status_is_error = true;
             return;
         }
         // Prefer the OS keychain; fall back to the 0600 config file.
@@ -902,25 +907,27 @@ impl App {
             Ok(()) => {
                 self.config.password = None;
                 self.config.password_in_keychain = true;
+                self.status_message = "Пароль сохранён в связке ключей ОС.".into();
             }
             Err(e) => {
                 self.config.password = Some(p);
                 self.config.password_in_keychain = false;
-                self.status_message = format!("Keychain unavailable ({e}); using config file. ");
+                self.status_message = format!(
+                    "Связка ключей недоступна ({e}) — пароль сохранён в конфиг с правами 0600."
+                );
             }
         }
+        self.status_is_error = false;
         self.host_password_input.clear();
         match self.config.save() {
             Ok(path) => {
-                if !self.status_message.is_empty() {
-                    self.status_message
-                        .push_str(&format!("Saved flag to {}", path.display()));
-                } else {
-                    self.status_message =
-                        format!("Saved to the OS keychain (flag in {})", path.display());
-                }
+                self.status_message
+                    .push_str(&format!(" (файл: {})", path.display()));
             }
-            Err(e) => self.status_message = format!("Save failed: {e}"),
+            Err(e) => {
+                self.status_message = format!("Не сохранить настройки: {e}");
+                self.status_is_error = true;
+            }
         }
     }
 }

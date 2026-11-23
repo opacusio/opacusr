@@ -8,6 +8,7 @@ use opacusr_proto::message::mods;
 use opacusr_proto::message::{MouseButtonId, OpKey};
 
 use crate::app::SessionHandle;
+use crate::theme;
 use opacusr_agent::config::AgentConfig;
 
 /// Session screen: central remote view + toggleable right sidebar.
@@ -81,7 +82,7 @@ pub fn session_ui(ctx: &Context, s: &mut SessionHandle, cfg: &mut AgentConfig) {
                         }
                     }
                     None => {
-                        s.status = "print: no frame received yet".into();
+                        s.status = "Печать: кадр ещё не получен".into();
                     }
                 }
             }
@@ -187,8 +188,35 @@ pub fn session_ui(ctx: &Context, s: &mut SessionHandle, cfg: &mut AgentConfig) {
     egui::CentralPanel::default().show(ctx, |ui| {
         let available = ui.available_size();
         let Some(tex) = &s.texture else {
+            // Still no frame: say what we ARE doing and give the two
+            // known causes after a grace period (Android host = capture
+            // not implemented yet; locked Windows screen = blank frames).
             ui.centered_and_justified(|ui| {
-                ui.label(egui::RichText::new("waiting for the first frame…").weak());
+                ui.vertical_centered(|ui| {
+                    ui.add_space(24.0);
+                    ui.label(
+                        egui::RichText::new("Ожидание первого кадра…")
+                            .weak()
+                            .size(16.0),
+                    );
+                    if !s.status.is_empty() {
+                        ui.add_space(4.0);
+                        ui.label(theme::mono(s.status.clone()).weak().small());
+                    }
+                    let waiting = s.opened_at.elapsed().as_secs();
+                    if waiting >= 10 {
+                        ui.add_space(12.0);
+                        ui.label(
+                            egui::RichText::new(
+                                "Если хост — телефон: трансляция экрана телефона ещё в разработке.\n\
+                                 Если хост — компьютер: проверьте, что на нём экран разблокирован\n\
+                                 и OpacusR работает.",
+                            )
+                            .weak()
+                            .small(),
+                        );
+                    }
+                });
             });
             return;
         };
