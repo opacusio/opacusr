@@ -12,6 +12,7 @@ members = [
     "crates/opacusr-server",
     "crates/opacusr-app",
     "crates/opacusr-android",
+    "crates/opacusr-libp2p",
 ]
 
 [workspace.package]

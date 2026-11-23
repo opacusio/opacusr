@@ -1,0 +1,51 @@
+[package]
+name = "opacusr-libp2p"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Phase-1 prototype of the decentralized mode: rust-libp2p (kad + autonat + relay v2 + DCUtR) rendezvous for OpacusR"
+
+[dependencies]
+libp2p = { version = "0.57", default-features = false, features = [
+    "tokio",
+    "tcp",
+    "noise",
+    "yamux",
+    "quic",
+    "dns",
+    "identify",
+    "kad",
+    "autonat",
+    "relay",
+    "dcutr",
+    "request-response",
+    "cbor",
+    "macros",
+] }
+tokio = { workspace = true }
+futures = { workspace = true }
+serde = { workspace = true }
+bincode = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+libp2p = { version = "0.57", default-features = false, features = [
+    "tokio",
+    "tcp",
+    "noise",
+    "yamux",
+    "quic",
+    "dns",
+    "identify",
+    "kad",
+    "autonat",
+    "relay",
+    "dcutr",
+    "request-response",
+    "cbor",
+    "macros",
+] }
+tokio = { workspace = true }
+tracing-subscriber = { workspace = true }
