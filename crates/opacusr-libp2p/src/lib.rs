@@ -47,10 +47,7 @@ use futures::StreamExt;
 use libp2p::core::multiaddr::Protocol as AddrProtocol;
 use libp2p::swarm::behaviour::toggle::Toggle;
 use libp2p::swarm::{NetworkBehaviour, StreamProtocol, SwarmEvent};
-use libp2p::{
-    autonat, dcutr, identify, kad, noise, relay, request_response, tcp, yamux, Multiaddr, PeerId,
-    Swarm,
-};
+use libp2p::{autonat, dcutr, identify, kad, noise, relay, request_response, tcp, yamux, Swarm};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
@@ -59,6 +56,11 @@ use tracing::{debug, info, warn};
 /// `seed_addr.with(Protocol::P2p(seed_peer_id))`.
 pub use libp2p::core::multiaddr::Protocol;
 pub use libp2p::identity::Keypair;
+/// Re-exported: embedders and the CLI build/parse multiaddrs and PeerIds.
+pub use libp2p::{Multiaddr, PeerId};
+
+/// Stable node identity (see [`keypair`] for the file format).
+pub mod keypair;
 
 const IDENTIFY_PROTO: &str = "/opacusr/id/1.0.0";
 const KAD_PROTO: &str = "/opacusr/kad/1.0.0";
@@ -622,6 +624,11 @@ fn handle_event(
         })) => match result {
             kad::QueryResult::Bootstrap(Ok(_)) => {
                 debug!(%self_peer, "kad bootstrap done");
+                // The routing table is live now — publish immediately
+                // instead of waiting for the next periodic tick (the
+                // first publish would otherwise lag up to
+                // publish_interval and DHT discovery stalls).
+                publish_addresses(swarm, state, self_peer);
             }
             kad::QueryResult::Bootstrap(Err(e)) => {
                 debug!(?e, "kad bootstrap failed");

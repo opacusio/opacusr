@@ -190,6 +190,18 @@ pub struct AgentConfig {
     /// agent stops too; an installed OS service keeps the machine
     /// reachable).
     pub close_to_tray: bool,
+    /// Decentralized mode (phase 2, experimental): an embedded
+    /// rust-libp2p node (Kademlia DHT + AutoNAT + Relay v2 + DCUtR) that
+    /// lets partners dial by PeerId without a signaling server. Managed
+    /// in the settings UI; full sessions over this channel are the next
+    /// step. Desktop-only: the mobile shells build the app without it.
+    pub p2p_enabled: bool,
+    /// Bootstrap addresses of the decentralized mode: multiaddrs like
+    /// `/ip4/host/udp/4001/quic-v1/p2p/<PeerId>`; they double as relays.
+    /// Empty: the node is its own seed (kad server + relay) — enough for
+    /// two machines on one LAN, where the invite address of the first
+    /// machine is pasted into the second one's list.
+    pub p2p_bootstrap: Vec<String>,
     /// Schema version of the saved agent.toml. Files written before the
     /// field existed load as version **0** (field-level serde default —
     /// deliberately NOT the struct default, which is the current version)
@@ -270,6 +282,8 @@ impl Default for AgentConfig {
             last_peer_id: None,
             start_agent_automatically: true,
             close_to_tray: true,
+            p2p_enabled: false,
+            p2p_bootstrap: Vec::new(),
             config_version: CONFIG_VERSION,
         }
     }

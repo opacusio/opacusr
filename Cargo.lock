@@ -5284,6 +5284,7 @@ dependencies = [
  "opacusr-client",
  "opacusr-codec",
  "opacusr-crypto",
+ "opacusr-libp2p",
  "opacusr-proto",
  "opacusr-transport",
  "raw-window-handle",

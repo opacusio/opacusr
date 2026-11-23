@@ -37,6 +37,10 @@ mdns-sd = { workspace = true }
 # not wired for NDK); the desktop GUI opts back into audio streaming.
 opacusr-agent = { workspace = true, features = ["audio"] }
 opacusr-client = { workspace = true, features = ["audio"] }
+# Embedded libp2p node for the experimental decentralized mode
+# (Настройки → Децентрализованный). Not linked on mobile: the libp2p
+# stack (aws-lc-rs) is not wired for the mobile cross-builds.
+opacusr-libp2p = { workspace = true }
 arboard = { workspace = true }
 # Native file dialogs (desktop). Mobile callers use the cfg-gated
 # helpers in lib.rs (`pick_file`/`pick_files`/`pick_folder`), which

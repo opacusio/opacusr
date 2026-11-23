@@ -33,6 +33,7 @@ opacusr-agent = { path = "crates/opacusr-agent", version = "0.11.1", default-fea
 opacusr-client = { path = "crates/opacusr-client", version = "0.11.1", default-features = false }
 opacusr-server = { path = "crates/opacusr-server", version = "0.11.1" }
 opacusr-app = { path = "crates/opacusr-app", version = "0.11.1" }
+opacusr-libp2p = { path = "crates/opacusr-libp2p", version = "0.11.1" }
 
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time", "fs", "signal"] }
 futures = "0.3"

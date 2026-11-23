@@ -165,7 +165,7 @@ pub struct HostHandle {
 
 pub struct App {
     ctx: Context,
-    rt: crate::Runtime,
+    pub(crate) rt: crate::Runtime,
 
     // shared settings
     pub server_url: String,
@@ -270,6 +270,17 @@ pub struct App {
     /// there; the GUI hosts no agent while the service runs, so this
     /// poll is how the card learns the ID (throttled, cheap).
     last_id_refresh_at: Option<std::time::Instant>,
+
+    /// Embedded libp2p node for the experimental decentralized mode
+    /// (Настройки → Децентрализованный). Desktop only: the mobile shells
+    /// build the app without the p2p module.
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    pub(crate) p2p: Option<crate::p2p::P2pUi>,
+    /// Scratch: PeerId to ping in the decentralized tab.
+    pub p2p_ping_input: String,
+    /// Scratch: bootstrap list editor (decentralized tab), one multiaddr
+    /// per line.
+    pub p2p_bootstrap_edit: String,
 }
 
 /// Tool drawers docked to the right edge («Настройки» / «Контакты»).
@@ -320,6 +331,7 @@ impl App {
         } else {
             config.name.clone()
         };
+        let bootstrap_edit = config.p2p_bootstrap.join("\n");
         let mut app = Self {
             ctx,
             rt: spawn_runtime(),
@@ -375,6 +387,10 @@ impl App {
             svc_state_at: None,
             service_hosts: false,
             last_id_refresh_at: None,
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            p2p: None,
+            p2p_ping_input: String::new(),
+            p2p_bootstrap_edit: bootstrap_edit,
         };
         app.refresh_unattended_display();
 
@@ -417,6 +433,13 @@ impl App {
         // Windows service is already hosting (see above).
         if app.config.start_agent_automatically && !app.service_hosts {
             app.host_start_clicked();
+        }
+
+        // Experimental decentralized mode: bring the node up with the
+        // app when it is enabled (Настройки → Децентрализованный).
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        if app.config.p2p_enabled {
+            crate::p2p::start_node(&mut app);
         }
 
         app
@@ -994,6 +1017,10 @@ impl eframe::App for App {
                 }
             }
         }
+
+        // ---- poll the embedded libp2p node (decentralized mode) ----
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        crate::p2p::poll_events(self, ctx);
 
         // ---- poll host events (into a buffer, then apply) ----
         let mut host_evs = Vec::new();

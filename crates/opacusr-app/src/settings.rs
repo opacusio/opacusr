@@ -17,15 +17,17 @@ pub enum SettingsTab {
     Connect,
     Security,
     Host,
+    P2p,
     About,
 }
 
 impl SettingsTab {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::General,
         Self::Connect,
         Self::Security,
         Self::Host,
+        Self::P2p,
         Self::About,
     ];
 
@@ -35,6 +37,7 @@ impl SettingsTab {
             Self::Connect => "Подключение",
             Self::Security => "Безопасность",
             Self::Host => "Хост",
+            Self::P2p => "Децентрализованный",
             Self::About => "О программе",
         }
     }
@@ -96,6 +99,7 @@ pub fn settings_panel(ctx: &Context, app: &mut App) {
                         SettingsTab::Connect => connect_tab(ui, app),
                         SettingsTab::Security => security_tab(ui, app),
                         SettingsTab::Host => host_tab(ui, app),
+                        SettingsTab::P2p => p2p_tab(ui, app),
                         SettingsTab::About => about_tab(ui),
                     }
                 });
@@ -622,5 +626,218 @@ fn about_tab(ui: &mut Ui) {
     crate::hint(
         ui,
         "Лицензия: AGPL-3.0-or-later. github.com/opacusio/opacusr",
+    );
+}
+
+/// Настройки → Децентрализованный (эксперимент): embedded rust-libp2p
+/// node — connect-by-PeerId without a signaling server.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn p2p_tab(ui: &mut Ui, app: &mut App) {
+    ui.label(theme::bold("Децентрализованный (эксперимент)").size(18.0));
+    ui.add_space(8.0);
+    crate::hint(
+        ui,
+        "подключение по PeerId без сигнального сервера: rust-libp2p — Kademlia DHT + AutoNAT + \
+         Relay v2 + DCUtR. Сейчас по каналу идёт проверка связи (пинг); полноценные сессии — \
+         следующий шаг.",
+    );
+    ui.add_space(4.0);
+
+    let node_up = app.p2p.as_ref().is_some_and(|p| p.handle.is_some());
+    // Strings cloned out of the node state up front — the closures below
+    // need `&mut App` and cannot hold borrows into `app.p2p`.
+    let (peer_id, invite, reach, status, ping_status) = match app.p2p.as_ref() {
+        Some(p) => (
+            p.peer_id.clone(),
+            p.invite_addr.clone(),
+            p.reachability.clone(),
+            p.status.clone(),
+            p.ping_status.clone(),
+        ),
+        None => (
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+        ),
+    };
+
+    egui::Grid::new("set_p2p")
+        .num_columns(2)
+        .spacing([12.0, 8.0])
+        .show(ui, |ui| {
+            ui.label("Узел");
+            ui.vertical(|ui| {
+                let before = app.config.p2p_enabled;
+                if ui
+                    .checkbox(
+                        &mut app.config.p2p_enabled,
+                        "запускать узел вместе с OpacusR",
+                    )
+                    .changed()
+                {
+                    match app.config.save() {
+                        Ok(_) => {
+                            if app.config.p2p_enabled {
+                                crate::p2p::start_node(app);
+                            } else {
+                                crate::p2p::stop_node(app);
+                            }
+                        }
+                        Err(e) => {
+                            app.config.p2p_enabled = before;
+                            app.status_message = format!("Не сохранить: {e}");
+                        }
+                    }
+                }
+                ui.label(
+                    egui::RichText::new(if node_up {
+                        "● работает"
+                    } else {
+                        "○ остановлен"
+                    })
+                    .color(if node_up { theme::TEAL } else { theme::MUTED })
+                    .small(),
+                );
+            });
+            ui.end_row();
+
+            if node_up && !peer_id.is_empty() {
+                ui.label("Мой PeerId");
+                ui.vertical(|ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(&peer_id).small().strong());
+                        if ui.small_button("Копировать").clicked() {
+                            ui.output_mut(|o| o.copied_text = peer_id.clone());
+                            app.status_message = "PeerId скопирован.".into();
+                        }
+                    });
+                    crate::hint(
+                        ui,
+                        "адрес этого устройства в децентрализованном режиме — партнёр вставляет \
+                         его в «Проверка связи» на своём компьютере",
+                    );
+                });
+                ui.end_row();
+
+                if !invite.is_empty() {
+                    ui.label("Пригласительный адрес");
+                    ui.vertical(|ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new(&invite).small().weak());
+                            if ui.small_button("Копировать").clicked() {
+                                ui.output_mut(|o| o.copied_text = invite.clone());
+                                app.status_message = "Адрес скопирован.".into();
+                            }
+                        });
+                        crate::hint(
+                            ui,
+                            "вставьте его в список bootstrap на другой машине этой же сети — она \
+                             найдёт эту машину без сигнального сервера",
+                        );
+                    });
+                    ui.end_row();
+                }
+            }
+
+            ui.label("Bootstrap-узлы");
+            ui.vertical(|ui| {
+                ui.add_sized(
+                    [360.0, 72.0],
+                    egui::TextEdit::multiline(&mut app.p2p_bootstrap_edit).hint_text(
+                        "по одному multiaddr в строке:\n\
+                         /ip4/хост/udp/4001/quic-v1/p2p/12D3KooW…",
+                    ),
+                );
+                if ui.button("Сохранить и перезапустить узел").clicked()
+                {
+                    let parsed: Vec<String> = app
+                        .p2p_bootstrap_edit
+                        .lines()
+                        .map(|l| l.trim().to_string())
+                        .filter(|l| !l.is_empty())
+                        .collect();
+                    let valid: Vec<String> = parsed
+                        .iter()
+                        .filter(|l| l.parse::<opacusr_libp2p::Multiaddr>().is_ok())
+                        .cloned()
+                        .collect();
+                    if valid.len() != parsed.len() {
+                        app.status_message =
+                            "Часть строк не разобрана — проверьте формат multiaddr.".into();
+                    }
+                    app.config.p2p_bootstrap = valid;
+                    let _ = app.config.save();
+                    crate::p2p::stop_node(app);
+                    if app.config.p2p_enabled {
+                        crate::p2p::start_node(app);
+                    }
+                }
+                crate::hint(
+                    ui,
+                    "пусто = узел сам себе seed (kad-сервер + релей) — этого хватает двум машинам \
+                     в одной LAN (пригласительный адрес первой машины — во вторую); для разных \
+                     сетей нужен seed с публичным адресом: p2p-node --seed",
+                );
+            });
+            ui.end_row();
+
+            if node_up {
+                ui.label("Доступность");
+                ui.vertical(|ui| {
+                    ui.label(egui::RichText::new(&reach).weak().small());
+                    for a in &app
+                        .p2p
+                        .as_ref()
+                        .map(|p| p.listen_addrs.clone())
+                        .unwrap_or_default()
+                    {
+                        ui.label(egui::RichText::new(a).weak().small());
+                    }
+                });
+                ui.end_row();
+
+                ui.label("Проверка связи");
+                ui.vertical(|ui| {
+                    ui.horizontal(|ui| {
+                        ui.add_sized(
+                            [360.0, 24.0],
+                            egui::TextEdit::singleline(&mut app.p2p_ping_input)
+                                .hint_text("PeerId партнёра: 12D3KooW…"),
+                        );
+                        if ui.button("Пинг").clicked() {
+                            crate::p2p::ping_clicked(app);
+                        }
+                    });
+                    if !ping_status.is_empty() {
+                        ui.label(egui::RichText::new(&ping_status).weak().small());
+                    }
+                    crate::hint(
+                        ui,
+                        "ищет узел в DHT, дозванивается и пингует: покажет время ответа и было ли \
+                         соединение прямым или через релей",
+                    );
+                });
+                ui.end_row();
+
+                ui.label("События");
+                ui.vertical(|ui| {
+                    ui.label(egui::RichText::new(&status).weak().small());
+                });
+                ui.end_row();
+            }
+        });
+}
+
+/// Mobile shells have no embedded node — the tab explains why.
+#[cfg(any(target_os = "android", target_os = "ios"))]
+fn p2p_tab(ui: &mut Ui, _app: &mut App) {
+    ui.label(theme::bold("Децентрализованный (эксперимент)").size(18.0));
+    ui.add_space(8.0);
+    crate::hint(
+        ui,
+        "на этой платформе узел децентрализованного режима пока не встроен — используйте \
+         настольную версию или прямое LAN-подключение по ip:порт",
     );
 }

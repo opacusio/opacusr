@@ -7,6 +7,11 @@ pub mod contacts;
 pub mod discovery;
 pub mod home;
 pub mod host_panel;
+/// Experimental decentralized mode (embedded libp2p node). Desktop
+/// only: aws-lc-rs (rustls backend of the libp2p stack) is not wired
+/// for the mobile cross-builds.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub mod p2p;
 pub mod print;
 #[cfg(windows)]
 pub mod service_ctl;
