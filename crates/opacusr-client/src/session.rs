@@ -259,7 +259,9 @@ impl Default for SessionSettings {
         Self {
             password: String::new(),
             display_name: "OpacusR viewer".into(),
-            download_dir: dirs::home_dir()
+            download_dir: std::env::var_os("OPACUSR_CONFIG_DIR")
+                .map(PathBuf::from)
+                .or_else(dirs::home_dir)
                 .unwrap_or_else(|| PathBuf::from("."))
                 .join("OpacusR-Received"),
             auto_accept_files: true,

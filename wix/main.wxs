@@ -22,7 +22,8 @@
   -arch x64 and the files land under ProgramFiles64Folder (otherwise
   light fails ICE80).
 -->
-<Wix xmlns='http://schemas.microsoft.com/wix/2006/wi'>
+<Wix xmlns='http://schemas.microsoft.com/wix/2006/wi'
+     xmlns:fire='http://schemas.microsoft.com/wix/FirewallExtension'>
     <Product
         Name='OpacusR'
         Id='*'
@@ -109,9 +110,23 @@
         <ComponentGroup Id='ProductComponents' Directory='BinDir'>
             <Component Id='ViewerExecutable' Guid='17cf64b6-5991-4f8a-8193-f78e2135a9f3' Win64='yes'>
                 <File Id='OpacusRExe' Source='target\release\opacusr.exe' KeyPath='yes'/>
+                <!-- Program-scoped inbound exceptions (no ports: the
+                     app owns signaling 8080, relay 8081, direct LAN
+                     54000 and ephemeral WebRTC ICE ports). Without
+                     them Windows Firewall silently drops the very
+                     first inbound packet from a phone on the same
+                     Wi-Fi — the remote side sees timeouts while
+                     everything on localhost works. -->
+                <fire:FirewallException Id='OpacusRAppFwTcp' Name='OpacusR' Scope='any' Profile='all' Protocol='tcp'/>
+                <fire:FirewallException Id='OpacusRAppFwUdp' Name='OpacusR' Scope='any' Profile='all' Protocol='udp'/>
             </Component>
             <Component Id='AgentExecutable' Guid='*' Win64='yes'>
                 <File Id='OpacusRAgentExe' Source='target\release\opacusr-agent.exe' KeyPath='yes'/>
+                <!-- Same story for the service binary: unattended
+                     sessions are inbound TCP (signaling registry,
+                     relay, direct ip:port). -->
+                <fire:FirewallException Id='OpacusRAgentFwTcp' Name='OpacusR Agent' Scope='any' Profile='all' Protocol='tcp'/>
+                <fire:FirewallException Id='OpacusRAgentFwUdp' Name='OpacusR Agent' Scope='any' Profile='all' Protocol='udp'/>
                 <!-- The service binary is this component's key file.
                      The ImagePath is the bare exe (the agent routes
                      itself into the SCM dispatcher on start; see the

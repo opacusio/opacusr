@@ -317,6 +317,16 @@ fn own_machine_strip(ui: &mut Ui, app: &mut App) {
         );
     }
 
+    // Android is viewer-only today: a session INTO this phone renders an
+    // empty frame stream because MediaProjection capture is not
+    // implemented yet. Say so where users build the wrong expectation
+    // (the «С ноутбука на телефон пусто» report).
+    #[cfg(target_os = "android")]
+    crate::hint(
+        ui,
+        "трансляция экрана ЭТОГО устройства пока в разработке: телефон работает как пульт и смотрит чужие экраны",
+    );
+
     ui.add_space(6.0);
     crate::hint(ui, "Пароль доступа, 2FA и служба — в Настройках.");
 }

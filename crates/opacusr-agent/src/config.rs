@@ -205,11 +205,32 @@ pub struct AgentConfig {
 /// stored field changes and add a migration step in `load_from`.
 const CONFIG_VERSION: u32 = 2;
 
+/// Base directory for all OpacusR state (`<base>/opacusr/agent.toml`,
+/// `<base>/opacusr/addressbook.toml`): `$OPACUSR_CONFIG_DIR` when set —
+/// Android exports the app's internal files dir there because
+/// `dirs::config_dir()` is `None` on Android and the `.` fallback
+/// landed in an unwritable process root (settings, password and the
+/// address book silently failed to persist) — otherwise the platform
+/// config dir.
+pub fn config_root() -> PathBuf {
+    if let Some(dir) = std::env::var_os("OPACUSR_CONFIG_DIR") {
+        return PathBuf::from(dir);
+    }
+    dirs::config_dir().unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// Base for user-visible data folders (downloads, recordings):
+/// `$OPACUSR_CONFIG_DIR` on Android, the home dir elsewhere.
+pub fn data_root() -> PathBuf {
+    if let Some(dir) = std::env::var_os("OPACUSR_CONFIG_DIR") {
+        return PathBuf::from(dir);
+    }
+    dirs::home_dir().unwrap_or_else(|| PathBuf::from("."))
+}
+
 impl Default for AgentConfig {
     fn default() -> Self {
-        let download_dir = dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("OpacusR-Received");
+        let download_dir = crate::config::data_root().join("OpacusR-Received");
         Self {
             server_url: "ws://127.0.0.1:8080/signal".into(),
             name: whoami_fallback(),
@@ -244,9 +265,7 @@ impl Default for AgentConfig {
             mdns_advertise: true,
             totp_secret: None,
             record: false,
-            record_dir: dirs::home_dir()
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join("OpacusR-Recordings"),
+            record_dir: crate::config::data_root().join("OpacusR-Recordings"),
             tunnel: "loopback".into(),
             last_peer_id: None,
             start_agent_automatically: true,
@@ -290,8 +309,7 @@ fn whoami_fallback() -> String {
 impl AgentConfig {
     /// Default config file path.
     pub fn path() -> PathBuf {
-        dirs::config_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
+        crate::config::config_root()
             .join("opacusr")
             .join("agent.toml")
     }
@@ -575,5 +593,22 @@ mod tests {
         let cfg = AgentConfig::load_from(&path);
         std::fs::remove_file(&path).ok();
         assert!(!cfg.close_to_tray, "explicit opt-out must stick");
+    }
+
+    #[test]
+    fn opacusr_config_dir_routes_every_state_path() {
+        // Android exports its internal files dir before the config
+        // loads; the helpers must route agent.toml through it (the
+        // pre-0.11.15 `.` fallback made the password unwritable).
+        let dir = std::env::temp_dir().join(format!("opacusr-cfg-{}", std::process::id()));
+        std::env::set_var("OPACUSR_CONFIG_DIR", &dir);
+        assert_eq!(config_root(), dir);
+        assert_eq!(data_root(), dir);
+        assert_eq!(AgentConfig::path(), dir.join("opacusr").join("agent.toml"));
+        let default = AgentConfig::default();
+        assert_eq!(default.download_dir, dir.join("OpacusR-Received"));
+        std::env::remove_var("OPACUSR_CONFIG_DIR");
+        assert_ne!(config_root(), dir);
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

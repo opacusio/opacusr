@@ -84,11 +84,18 @@ pub struct AddressBook {
 
 impl AddressBook {
     /// Default storage path: `<config_dir>/opacusr/addressbook.toml`.
+    /// The base is `$OPACUSR_CONFIG_DIR` when set (Android's internal
+    /// files dir — `dirs::config_dir()` is `None` there and history/
+    /// contacts silently failed to persist), else the platform config
+    /// dir. Mirrors `opacusr_agent::config::config_root` (the client
+    /// crate does not depend on the agent).
     pub fn path() -> PathBuf {
-        dirs::config_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("opacusr")
-            .join("addressbook.toml")
+        let base = if let Some(dir) = std::env::var_os("OPACUSR_CONFIG_DIR") {
+            PathBuf::from(dir)
+        } else {
+            dirs::config_dir().unwrap_or_else(|| PathBuf::from("."))
+        };
+        base.join("opacusr").join("addressbook.toml")
     }
 
     /// Load from the default path; missing file → empty book.

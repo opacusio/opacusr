@@ -52,12 +52,17 @@ launch_mode = "singleTop"
 theme = "@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen"
 resizeable_activity = true
 
-# Everything is android-only: on desktop targets the crate compiles to
-# an empty cdylib and costs nothing.
+[dependencies]
+# Raw JNI vtable access for the WiFiManager.MulticastLock (mDNS
+# multicast receive): the same jni-sys android-activity already uses,
+# so no second jni runtime is pulled in. Needed on ALL targets: the
+# acquisition helper is ungated so the desktop build type-checks it.
+jni-sys = "0.4"
+tracing = { workspace = true }
+
 [target.'cfg(target_os = "android")'.dependencies]
 opacusr-app = { workspace = true }
 egui = { workspace = true }
 eframe = { workspace = true, features = ["android-native-activity"] }
 winit = { version = "0.30", default-features = false, features = ["android-native-activity"] }
 tracing-subscriber = { workspace = true }
-tracing = { workspace = true }

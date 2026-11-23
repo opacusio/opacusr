@@ -663,6 +663,17 @@ impl App {
                 }
                 u
             };
+            // mDNS-discovered LAN signaling endpoints join the ladder
+            // automatically: on one Wi-Fi the plain 9-digit ID then works
+            // even when BOTH devices keep their loopback defaults — each
+            // discovered endpoint carries its own registry, and the one
+            // that knows the ID completes the handshake. No manual
+            // «укажите адрес сервера» step anymore.
+            for host in self.discovery.snapshot() {
+                if !urls.contains(&host.signal_url) {
+                    urls.push(host.signal_url);
+                }
+            }
             urls.dedup();
             let choice = self.transport_choice;
             let turn_api = self.config.turn_api;
