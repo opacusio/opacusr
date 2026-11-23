@@ -30,6 +30,14 @@ name = "android.permission.INTERNET"
 [[package.metadata.android.uses_permission]]
 name = "android.permission.ACCESS_NETWORK_STATE"
 
+# WifiManager.MulticastLock (acquired by the raw-JNI helper in android_
+# main so mDNS «Контакты» discovery can RECEIVE multicast) requires
+# CHANGE_WIFI_MULTICAST_STATE — without it acquire() throws
+# SecurityException and our best-effort helper degrades to a log line
+# (v0.11.17 shipped without it; normal permission, auto-granted).
+[[package.metadata.android.uses_permission]]
+name = "android.permission.CHANGE_WIFI_MULTICAST_STATE"
+
 [package.metadata.android.sdk]
 min_sdk_version = 24
 # 34: GitHub ubuntu-latest runners preinstall platform 34 (30 is NOT

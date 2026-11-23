@@ -4,6 +4,17 @@ All notable changes to OpacusR are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is
 SemVer-ish (breaking protocol changes bump the minor until 1.0).
 
+## [0.11.18] — 2026-11-23
+
+### Добавлено: разрешение для mDNS-обнаружения на Android
+
+- `android.permission.CHANGE_WIFI_MULTICAST_STATE` — захват
+  `WifiManager.MulticastLock` (исправленный в 0.11.17) требует именно его:
+  без разрешения `acquire()` бросает SecurityException, наш best-effort
+  хелпер понижается до строки в логе, и mDNS-обнаружение в «Контактах»
+  не работает. Разрешение обычное (normal), выдаётся автоматически при
+  установке. Ничего другого не изменено.
+
 ## [0.11.17] — 2026-11-23
 
 ### Исправлено: белое окно при запуске на Android (критический краш)
