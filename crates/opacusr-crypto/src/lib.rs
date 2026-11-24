@@ -104,32 +104,44 @@ pub fn derive_session_key(psk: &[u8; 32], session_salt: &[u8; 16]) -> Zeroizing<
     out
 }
 
-/// Seals and opens messages with strict monotonic nonces.
+/// Seals and opens messages with strict monotonic nonces, PER CHANNEL.
 ///
-/// Both peers construct this with the *same* session key; each instance
-/// keeps independent send/recv counters, so counters never collide between
-/// directions.
+/// Both peers construct this with the *same* session key. The transport
+/// delivers two independent channels (control, media) and — by design —
+/// does NOT order one against the other (a viewer drains whichever queue
+/// is ready first, tokio::select!). A single shared counter across both
+/// channels made every cross-channel interleaving look like a replay
+/// (v0.11.24 field report: «replayed or out-of-order message: got counter
+/// 4, expected 3» the moment the first frame met a control message in
+/// flight). Each channel therefore carries its OWN counter pair, and the
+/// channel id is bound into both the nonce and the AAD so an envelope can
+/// never be transplanted onto the other channel by the untrusted relay.
 pub struct SessionCrypto {
     cipher: ChaCha20Poly1305,
-    send_counter: u64,
-    recv_counter: u64,
+    send_counters: [u64; N_CHANNELS],
+    recv_counters: [u64; N_CHANNELS],
 }
+
+/// Number of independent channel counters. Channel ids above this are a
+/// protocol error (proto defines Control=0, Media=1; room to grow).
+pub const N_CHANNELS: usize = 4;
 
 impl SessionCrypto {
     pub fn new(session_key: &[u8; 32]) -> Self {
         Self {
             cipher: ChaCha20Poly1305::new(Key::from_slice(session_key)),
-            send_counter: 0,
-            recv_counter: 0,
+            send_counters: [0; N_CHANNELS],
+            recv_counters: [0; N_CHANNELS],
         }
     }
 
-    /// Seal `plaintext`. The AAD binds the counter into the tag.
-    pub fn seal(&mut self, plaintext: &[u8]) -> CryptoEnvelope {
-        let counter = self.send_counter;
-        self.send_counter += 1;
-        let nonce = counter_nonce(counter);
-        let aad = counter.to_be_bytes();
+    /// Seal `plaintext` on `channel`. The AAD binds channel AND counter
+    /// into the tag.
+    pub fn seal_channel(&mut self, channel: u8, plaintext: &[u8]) -> CryptoEnvelope {
+        let counter = self.send_counters[channel_usize(channel)];
+        self.send_counters[channel_usize(channel)] += 1;
+        let nonce = counter_nonce(channel, counter);
+        let aad = counter_aad(channel, counter);
         let ciphertext = self
             .cipher
             .encrypt(
@@ -146,16 +158,22 @@ impl SessionCrypto {
         }
     }
 
-    /// Open a sealed message; enforces strict in-order delivery.
-    pub fn open(&mut self, envelope: &CryptoEnvelope) -> Result<Vec<u8>, CryptoError> {
-        if envelope.counter != self.recv_counter {
+    /// Open a sealed message from `channel`; enforces strict in-order
+    /// delivery WITHIN the channel.
+    pub fn open_channel(
+        &mut self,
+        channel: u8,
+        envelope: &CryptoEnvelope,
+    ) -> Result<Vec<u8>, CryptoError> {
+        let ch = channel_usize(channel);
+        if envelope.counter != self.recv_counters[ch] {
             return Err(CryptoError::Replay {
                 got: envelope.counter,
-                expected: self.recv_counter,
+                expected: self.recv_counters[ch],
             });
         }
-        let nonce = counter_nonce(envelope.counter);
-        let aad = envelope.counter.to_be_bytes();
+        let nonce = counter_nonce(channel, envelope.counter);
+        let aad = counter_aad(channel, envelope.counter);
         let plaintext = self
             .cipher
             .decrypt(
@@ -166,16 +184,37 @@ impl SessionCrypto {
                 },
             )
             .map_err(|_| CryptoError::Decrypt)?;
-        self.recv_counter += 1;
+        self.recv_counters[ch] += 1;
         Ok(plaintext)
     }
 }
 
-/// 12-byte nonce: 4 zero bytes ‖ big-endian counter (unique per key).
-fn counter_nonce(counter: u64) -> Nonce {
+/// Channel id → counter-slot index. Unknown ids are a hard protocol
+/// violation (fail closed rather than silently sharing slot 0).
+fn channel_usize(channel: u8) -> usize {
+    if (channel as usize) < N_CHANNELS {
+        channel as usize
+    } else {
+        panic!("session crypto channel id {channel} out of range");
+    }
+}
+
+/// 12-byte nonce: `[0, 0, channel, 0] ‖ big-endian counter` — unique per
+/// (key, channel, counter); the channel byte keeps the spaces apart.
+fn counter_nonce(channel: u8, counter: u64) -> Nonce {
     let mut n = [0u8; 12];
+    n[2] = channel;
     n[4..].copy_from_slice(&counter.to_be_bytes());
     Nonce::from(n)
+}
+
+/// AAD: channel byte ‖ big-endian counter — an envelope from one channel
+/// never verifies on the other.
+fn counter_aad(channel: u8, counter: u64) -> [u8; 9] {
+    let mut aad = [0u8; 9];
+    aad[0] = channel;
+    aad[1..].copy_from_slice(&counter.to_be_bytes());
+    aad
 }
 
 #[cfg(test)]
@@ -229,6 +268,9 @@ mod tests {
         );
     }
 
+    const CTL: u8 = 0;
+    const MED: u8 = 1;
+
     #[test]
     fn cipher_round_trip_and_tamper_detection() {
         let key = derive_session_key(
@@ -238,30 +280,33 @@ mod tests {
         let mut alice = SessionCrypto::new(&key);
         let mut bob = SessionCrypto::new(&key);
 
-        let env = alice.seal(b"hello opacusr");
-        assert_eq!(bob.open(&env).unwrap(), b"hello opacusr");
+        let env = alice.seal_channel(CTL, b"hello opacusr");
+        assert_eq!(bob.open_channel(CTL, &env).unwrap(), b"hello opacusr");
 
         // Tampered ciphertext must fail.
-        let mut env2 = alice.seal(b"secret frame data");
+        let mut env2 = alice.seal_channel(CTL, b"secret frame data");
         env2.ciphertext[3] ^= 0xFF;
-        assert!(matches!(bob.open(&env2), Err(CryptoError::Decrypt)));
+        assert!(matches!(
+            bob.open_channel(CTL, &env2),
+            Err(CryptoError::Decrypt)
+        ));
 
         // Replay must fail even if ciphertext is intact. Note: the failed
         // tamper attempt above did NOT advance the receive counter, so the
         // next valid message must arrive at counter 1 — anything else is
         // rejected (a broken stream is fatal by design).
-        let env3 = alice.seal(b"again");
+        let env3 = alice.seal_channel(CTL, b"again");
         assert!(matches!(
-            bob.open(&env3),
+            bob.open_channel(CTL, &env3),
             Err(CryptoError::Replay {
                 got: 2,
                 expected: 1
             })
         ));
-        let env4 = alice.seal(b"fresh after error");
-        assert!(bob.open(&env4).is_err());
+        let env4 = alice.seal_channel(CTL, b"fresh after error");
+        assert!(bob.open_channel(CTL, &env4).is_err());
         assert!(matches!(
-            bob.open(&alice.seal(b"resync")),
+            bob.open_channel(CTL, &alice.seal_channel(CTL, b"resync")),
             Err(CryptoError::Replay { .. })
         ));
     }
@@ -271,10 +316,73 @@ mod tests {
         let key = derive_session_key(&random_bytes::<32>(), &random_bytes::<16>());
         let mut a = SessionCrypto::new(&key);
         let mut b = SessionCrypto::new(&key);
-        let e1 = a.seal(b"one");
-        let e2 = b.seal(b"uno");
+        let e1 = a.seal_channel(CTL, b"one");
+        let e2 = b.seal_channel(CTL, b"uno");
         // Interleaved directions must both decrypt fine.
-        assert_eq!(a.open(&e2).unwrap(), b"uno");
-        assert_eq!(b.open(&e1).unwrap(), b"one");
+        assert_eq!(a.open_channel(CTL, &e2).unwrap(), b"uno");
+        assert_eq!(b.open_channel(CTL, &e1).unwrap(), b"one");
+    }
+
+    /// THE v0.11.24 field bug: the host ships video frames on the media
+    /// channel and control traffic on the control channel; the viewer's
+    /// receive loop drains whichever queue is ready first, so envelopes
+    /// from the two channels arrive ARBITRARILY interleaved. With per-
+    /// channel counters every interleaving decrypts cleanly.
+    #[test]
+    fn cross_channel_interleaving_never_looks_like_replay() {
+        let key = derive_session_key(&random_bytes::<32>(), &random_bytes::<16>());
+        let mut host = SessionCrypto::new(&key);
+        let mut viewer = SessionCrypto::new(&key);
+
+        // Sealed in the natural send order: ctl 0..3, then frames+ctl.
+        let ctl0 = host.seal_channel(CTL, b"welcome");
+        let ctl1 = host.seal_channel(CTL, b"accept");
+        let ctl2 = host.seal_channel(CTL, b"quality");
+        let ctl3 = host.seal_channel(CTL, b"input-ack");
+        let med0 = host.seal_channel(MED, b"frame0");
+        let med1 = host.seal_channel(MED, b"frame1");
+
+        // Delivered in a shuffled cross-channel order — exactly what a
+        // tokio::select! receive loop produces under load.
+        assert_eq!(viewer.open_channel(CTL, &ctl0).unwrap(), b"welcome");
+        assert_eq!(viewer.open_channel(MED, &med0).unwrap(), b"frame0");
+        assert_eq!(viewer.open_channel(MED, &med1).unwrap(), b"frame1");
+        assert_eq!(viewer.open_channel(CTL, &ctl1).unwrap(), b"accept");
+        assert_eq!(
+            viewer
+                .open_channel(MED, &host.seal_channel(MED, b"frame2"))
+                .unwrap(),
+            b"frame2"
+        );
+        assert_eq!(viewer.open_channel(CTL, &ctl2).unwrap(), b"quality");
+        assert_eq!(viewer.open_channel(CTL, &ctl3).unwrap(), b"input-ack");
+    }
+
+    /// An envelope transplanted onto the OTHER channel (the untrusted
+    /// relay could try) must fail authentication — channel id is in the
+    /// AAD, not only in the nonce space.
+    #[test]
+    fn envelopes_cannot_move_across_channels() {
+        let key = derive_session_key(&random_bytes::<32>(), &random_bytes::<16>());
+        let mut host = SessionCrypto::new(&key);
+        let mut viewer = SessionCrypto::new(&key);
+
+        let on_media = host.seal_channel(MED, b"frame");
+        // Same counter value on the control channel — different nonce AND
+        // AAD; verification must fail either way.
+        assert!(matches!(
+            viewer.open_channel(CTL, &on_media),
+            Err(CryptoError::Decrypt)
+        ));
+        // And the legit delivery still works afterwards.
+        assert_eq!(viewer.open_channel(MED, &on_media).unwrap(), b"frame");
+    }
+
+    #[test]
+    #[should_panic]
+    fn unknown_channel_id_fails_closed() {
+        let key = derive_session_key(&random_bytes::<32>(), &random_bytes::<16>());
+        let mut s = SessionCrypto::new(&key);
+        let _ = s.seal_channel(200, b"x");
     }
 }

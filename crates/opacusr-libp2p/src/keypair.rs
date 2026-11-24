@@ -37,16 +37,29 @@ pub fn load_or_create(path: &Path) -> io::Result<Keypair> {
     Ok(kp)
 }
 
-/// Best-effort local IPv4 address of this machine (the route the OS
-/// would take towards the internet — connected UDP socket, no packets
-/// sent). `None` without an IPv4 route.
+/// Best-effort local IPv4 address of this machine. Primary pick: the
+/// route the OS would take towards the internet (connected UDP socket,
+/// no packets sent); if that lands on a habitual virtual adapter (WSL2 /
+/// Hyper-V, 172.16/12) while a plausible LAN address exists, the LAN
+/// candidate wins instead (see `opacusr_proto::netpick`). `None` without
+/// any IPv4 route.
 pub fn lan_ipv4() -> Option<String> {
-    let sock = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
-    sock.connect("8.8.8.8:80").ok()?;
-    match sock.local_addr().ok()?.ip() {
-        std::net::IpAddr::V4(v4) => Some(v4.to_string()),
-        std::net::IpAddr::V6(_) => None,
-    }
+    let outbound = std::net::UdpSocket::bind("0.0.0.0:0")
+        .ok()
+        .and_then(|sock| sock.connect("8.8.8.8:80").map(|_| sock).ok())
+        .and_then(|sock| match sock.local_addr().ok()?.ip() {
+            std::net::IpAddr::V4(v4) => Some(v4),
+            std::net::IpAddr::V6(_) => None,
+        });
+    let candidates = if_addrs::get_if_addrs()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|ifc| match ifc.addr {
+            if_addrs::IfAddr::V4(v4) => Some(v4.ip),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    opacusr_proto::netpick::pick_lan_ipv4(outbound, &candidates).map(|ip| ip.to_string())
 }
 
 #[cfg(test)]

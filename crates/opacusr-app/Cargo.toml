@@ -12,6 +12,7 @@ name = "opacusr"
 path = "src/main.rs"
 
 [dependencies]
+if-addrs = "0.14"
 opacusr-proto = { workspace = true }
 opacusr-crypto = { workspace = true }
 opacusr-transport = { workspace = true }

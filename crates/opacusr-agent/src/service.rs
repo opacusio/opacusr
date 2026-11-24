@@ -9,6 +9,7 @@ use tokio::sync::mpsc;
 
 use opacusr_capture::ScreenCapture;
 use opacusr_input::InputInjector;
+use opacusr_proto::message::{self, ByeReason, Message};
 use opacusr_proto::signal::PeerPayload;
 use opacusr_proto::signal::*;
 use opacusr_proto::Platform;
@@ -592,6 +593,26 @@ impl AgentService {
                     let _ = self
                         .events
                         .send(AgentEvent::Notice(format!("no capture backend: {e}")));
+                    // Do NOT strand the viewer in «Ожидание первого кадра»:
+                    // the session is already accepted, so explain the close
+                    // on the wire before tearing it down. This is the
+                    // PC-viewing-phone case (Android has no capture backend
+                    // yet — the viewer shows the same hint in its UI).
+                    let reason = format!("screen streaming unavailable on this host: {e}");
+                    tokio::spawn(async move {
+                        let mut session = session;
+                        let _ = session
+                            .send_msg(&Message::ChatMessage(message::ChatMessage {
+                                id: 0,
+                                text: reason.clone(),
+                                ts_ms: 0,
+                            }))
+                            .await;
+                        let _ = session
+                            .send_msg(&Message::Bye(ByeReason::Error(reason)))
+                            .await;
+                        session.close().await;
+                    });
                     return;
                 }
             }

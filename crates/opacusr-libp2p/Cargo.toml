@@ -7,6 +7,7 @@ repository.workspace = true
 description = "Phase-1 prototype of the decentralized mode: rust-libp2p (kad + autonat + relay v2 + DCUtR) rendezvous for OpacusR"
 
 [dependencies]
+if-addrs = "0.14"
 libp2p = { version = "0.57", default-features = false, features = [
     "tokio",
     "tcp",
@@ -23,6 +24,7 @@ libp2p = { version = "0.57", default-features = false, features = [
     "cbor",
     "macros",
 ] }
+opacusr-proto = { workspace = true }
 tokio = { workspace = true }
 futures = { workspace = true }
 serde = { workspace = true }

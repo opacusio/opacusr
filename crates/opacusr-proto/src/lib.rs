@@ -11,6 +11,7 @@
 pub mod discovery;
 pub mod framing;
 pub mod message;
+pub mod netpick;
 pub mod signal;
 
 pub use discovery::*;

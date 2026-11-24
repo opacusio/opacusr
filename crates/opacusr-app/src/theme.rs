@@ -282,13 +282,30 @@ pub fn machine_name() -> String {
 /// outbound interface from the routing table WITHOUT sending a packet,
 /// so this is safe offline (it returns `None` on hosts with no IPv4
 /// default route, e.g. airplane mode or an IPv6-only network).
+///
+/// Windows catch: virtual adapters (WSL2/Hyper-V NAT — habitually
+/// 172.16/12) can win the default-route race; when a plausible LAN
+/// candidate (192.168/16 or 10/8) exists among the interface addresses,
+/// it replaces the virtual pick (see `opacusr_proto::netpick` — the
+/// v0.11.24 field report showed `ws://172.22.144.1:8080` on the invite
+/// card, an address nothing on the Wi-Fi can dial).
 pub fn lan_ipv4() -> Option<String> {
-    let sock = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
-    sock.connect("8.8.8.8:80").ok()?;
-    match sock.local_addr().ok()?.ip() {
-        std::net::IpAddr::V4(v4) => Some(v4.to_string()),
-        std::net::IpAddr::V6(_) => None,
-    }
+    let outbound = std::net::UdpSocket::bind("0.0.0.0:0")
+        .ok()
+        .and_then(|sock| sock.connect("8.8.8.8:80").map(|_| sock).ok())
+        .and_then(|sock| match sock.local_addr().ok()?.ip() {
+            std::net::IpAddr::V4(v4) => Some(v4),
+            std::net::IpAddr::V6(_) => None,
+        });
+    let candidates = if_addrs::get_if_addrs()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|ifc| match ifc.addr {
+            if_addrs::IfAddr::V4(v4) => Some(v4.ip),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    opacusr_proto::netpick::pick_lan_ipv4(outbound, &candidates).map(|ip| ip.to_string())
 }
 
 #[cfg(test)]

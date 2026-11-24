@@ -47,13 +47,16 @@ impl SecureSession {
         self.crypto = Some(SessionCrypto::new(&session_key));
     }
 
-    /// Serialize + (optionally) seal + send.
+    /// Serialize + (optionally) seal + send. The message's channel is
+    /// bound into the crypto envelope (nonce + AAD): each channel has its
+    /// own counter space, so the transport's arbitrary cross-channel
+    /// delivery order can never look like a replay (see SessionCrypto).
     pub async fn send_msg(&mut self, msg: &Message) -> Result<()> {
         let channel = msg.channel();
         let raw = encode_message(msg)?;
         match &mut self.crypto {
             Some(crypto) => {
-                let envelope = crypto.seal(&raw);
+                let envelope = crypto.seal_channel(channel as u8, &raw);
                 let bytes = bincode::serde::encode_to_vec(
                     &envelope,
                     opacusr_proto::framing::bincode_config(),
@@ -78,11 +81,10 @@ impl SecureSession {
                 )
                 .map(|(env, _)| env)
                 .map_err(|_| TransportError::Other("invalid crypto envelope on the wire".into()))?;
-                crypto.open(&envelope)?
+                crypto.open_channel(channel as u8, &envelope)?
             }
             None => payload,
         };
-        let _ = channel; // channels are advisory for control-plane logic
         decode_message(&raw).map_err(TransportError::Proto)
     }
 
