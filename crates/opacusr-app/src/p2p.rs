@@ -1,9 +1,11 @@
 //! Experimental decentralized mode (phase 2): the embedded rust-libp2p
 //! node surfaced in the GUI.
 //!
-//! Desktop only — the mobile shells build `opacusr-app` without this
-//! module (the libp2p stack pulls aws-lc-rs, which is not wired for
-//! mobile cross-builds yet). The node publishes this machine's addresses
+//! Desktop AND Android — the libp2p stack adds no new native build on
+//! Android: aws-lc-rs/ring were already in the APK dependency graph via
+//! `opacusr-transport` (webrtc/dtls → rustls). iOS stays without the
+//! module (the app is not built for iOS at all). The node publishes
+//! this machine's addresses
 //! under a stable `PeerId` in the Kademlia DHT, learns its reachability
 //! from AutoNAT, reserves relay circuits from the bootstrap list and
 //! answers control pings. Phase 2 carries the control channel only —
@@ -91,8 +93,17 @@ pub(crate) fn start_node(app: &mut App) {
         publish_interval: Duration::from_secs(120),
     };
 
-    match opacusr_libp2p::spawn(cfg) {
-        Ok((handle, mut evt_rx)) => {
+    // Последний рубеж: паника при старте узла не должна ронять
+    // приложение. Флаг p2p_enabled сохраняется в конфиг, а App::new
+    // вызывает start_node до первого кадра — именно так 0.11.23
+    // «кирпичил» GUI (tokio::spawn вне runtime-контекста; корень
+    // причины теперь исправлен в opacusr-libp2p — там свой
+    // fallback-runtime). Любая остаточная паника превращается в
+    // строку статуса, приложение продолжает работать.
+    let spawned =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| opacusr_libp2p::spawn(cfg)));
+    match spawned {
+        Ok(Ok((handle, mut evt_rx))) => {
             let (tx, rx) = std::sync::mpsc::channel();
             app.rt.spawn(async move {
                 while let Some(ev) = evt_rx.recv().await {
@@ -123,8 +134,16 @@ pub(crate) fn start_node(app: &mut App) {
             });
             app.status_message = "Узел P2P запущен.".into();
         }
-        Err(e) => {
+        Ok(Err(e)) => {
             app.status_message = format!("Узел P2P не запущен: {e}");
+        }
+        Err(panic) => {
+            let msg = panic
+                .downcast_ref::<&str>()
+                .map(|s| (*s).to_string())
+                .or_else(|| panic.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "неизвестная паника".into());
+            app.status_message = format!("Узел P2P не запущен: {msg}");
         }
     }
 }

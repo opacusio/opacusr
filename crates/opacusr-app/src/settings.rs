@@ -686,8 +686,9 @@ fn about_tab(ui: &mut Ui, app: &mut App) {
 }
 
 /// Настройки → Децентрализованный (эксперимент): embedded rust-libp2p
-/// node — connect-by-PeerId without a signaling server.
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+/// node — connect-by-PeerId without a signaling server. Desktop and
+/// Android share this pane (the node runs in-process on both).
+#[cfg(not(target_os = "ios"))]
 fn p2p_tab(ui: &mut Ui, app: &mut App) {
     ui.label(theme::bold("Децентрализованный (эксперимент)").size(18.0));
     ui.add_space(8.0);
@@ -886,14 +887,15 @@ fn p2p_tab(ui: &mut Ui, app: &mut App) {
         });
 }
 
-/// Mobile shells have no embedded node — the tab explains why.
-#[cfg(any(target_os = "android", target_os = "ios"))]
+/// iOS has no embedded node — the app is not even built there; the tab
+/// explains it for future shells.
+#[cfg(target_os = "ios")]
 fn p2p_tab(ui: &mut Ui, _app: &mut App) {
     ui.label(theme::bold("Децентрализованный (эксперимент)").size(18.0));
     ui.add_space(8.0);
     crate::hint(
         ui,
         "на этой платформе узел децентрализованного режима пока не встроен — используйте \
-         настольную версию или прямое LAN-подключение по ip:порт",
+         настольную версию, Android-приложение или прямое LAN-подключение по ip:порт",
     );
 }

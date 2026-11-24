@@ -1,6 +1,6 @@
 <?xml version='1.0' encoding='utf-8'?>
 <?ifndef MsiVersion ?>
-<?define MsiVersion = "0.11.23" ?>
+<?define MsiVersion = "0.11.24" ?>
 <?endif?>
 <!--
   OpacusR Windows MSI (WiX Toolset v3.11 — the same version the Release
@@ -12,8 +12,8 @@
   Build from the repository root on a Windows host:
 
       cargo build (release profile) for opacusr-app, opacusr-agent, opacusr-server
-      candle.exe -arch x64 -dMsiVersion=0.11.23 wix\main.wxs -o build\main.wixobj
-      light.exe -ext WixUIExtension build\main.wixobj -o opacusr-0.11.23-x64.msi
+      candle.exe -arch x64 -dMsiVersion=0.11.24 wix\main.wxs -o build\main.wixobj
+      light.exe -ext WixUIExtension build\main.wixobj -o opacusr-0.11.24-x64.msi
 
   The product version comes from the -dMsiVersion preprocessor variable;
   the Release workflow derives it from the pushed tag (see

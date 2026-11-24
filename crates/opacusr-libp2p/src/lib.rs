@@ -224,8 +224,53 @@ impl Handle {
     }
 }
 
+/// Crate-owned fallback runtime for embedders that call [`spawn`]
+/// outside any tokio context (the egui UI thread of the GUI has none).
+/// Created lazily on first use, lives for the rest of the process.
+static NODE_RT: std::sync::OnceLock<Option<tokio::runtime::Runtime>> = std::sync::OnceLock::new();
+
+/// The runtime the node loop must run on: the caller's when one is
+/// active (the `p2p-node` CLI under `#[tokio::main]`, tests), else the
+/// crate-owned fallback. `Err` only if neither exists.
+fn node_runtime_handle() -> Result<tokio::runtime::Handle, P2pError> {
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        return Ok(handle);
+    }
+    match NODE_RT
+        .get_or_init(|| {
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(1)
+                .thread_name("opacusr-p2p")
+                .enable_all()
+                .build()
+                .ok()
+        })
+        .as_ref()
+    {
+        Some(rt) => Ok(rt.handle().clone()),
+        None => Err(P2pError::Build(
+            "tokio runtime unavailable: spawn must be called from inside a runtime \
+             and the crate-owned fallback runtime failed to start"
+                .into(),
+        )),
+    }
+}
+
 /// Spawn a node. Returns its handle plus the event stream.
+///
+/// Callable from any thread: when the caller is NOT inside a tokio
+/// runtime (the egui UI thread), the node runs on the crate-owned
+/// fallback runtime instead of panicking — 0.11.23 shipped that panic
+/// («must be called from the context of a Tokio 1.x runtime»): the
+/// persisted `p2p_enabled` flag made every GUI start call this from
+/// `App::new` on the UI thread, so enabling the decentralized mode in
+/// the settings bricked the app on Windows until the flag was removed.
 pub fn spawn(cfg: NodeConfig) -> Result<(Handle, mpsc::Receiver<Event>), P2pError> {
+    // Everything below — swarm build, the eager socket binds inside
+    // listen_on, the bootstrap dial and the tokio::spawn of the node
+    // loop — must run inside a runtime context.
+    let _rt_guard = node_runtime_handle()?.enter();
+
     let keypair = cfg
         .keypair
         .clone()
@@ -775,5 +820,85 @@ fn handle_event(
             debug!(?other, "behaviour event");
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    /// Wait (bounded) for the node's first `Listening` event — proof the
+    /// loop actually runs and its sockets are bound.
+    fn wait_listening(events: &mut mpsc::Receiver<Event>, deadline: Duration) -> Option<Multiaddr> {
+        let stop = Instant::now() + deadline;
+        while Instant::now() < stop {
+            match events.try_recv() {
+                Ok(Event::Listening { addr }) => return Some(addr),
+                Ok(_) => continue,
+                Err(_) => std::thread::sleep(Duration::from_millis(50)),
+            }
+        }
+        None
+    }
+
+    /// 0.11.24 regression: the GUI calls `spawn` from the egui UI thread,
+    /// which has NO tokio runtime context — `tokio::spawn` used to panic
+    /// there («must be called from the context of a Tokio 1.x runtime»).
+    /// The enable flag is persisted, so every app start after enabling
+    /// the decentralized mode died before the first frame (0.11.23,
+    /// «включил настройки децентрализованный — не запускается вообще»).
+    /// This test runs on a plain test thread — exactly that context.
+    #[test]
+    fn spawn_works_without_ambient_runtime() {
+        let (handle, mut events) = spawn(NodeConfig::default()).expect("spawn without runtime");
+        assert!(!handle.peer_id().to_string().is_empty());
+
+        let addr = wait_listening(&mut events, Duration::from_secs(15))
+            .expect("node loop bound a listener within 15 s");
+        assert!(
+            addr.to_string().contains("quic-v1") || addr.to_string().contains("tcp"),
+            "unexpected listener addr {addr}"
+        );
+
+        // A clean shutdown ends the loop instead of leaking the node.
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime");
+        rt.block_on(async { handle.shutdown().await })
+            .expect("shutdown ok");
+    }
+
+    /// The other path: callers already inside a runtime (`p2p-node` CLI
+    /// under `#[tokio::main]`) must keep working — sockets and the node
+    /// loop land on THEIR runtime, no fallback is created. A
+    /// current-thread runtime only progresses while `block_on` is
+    /// running, so the whole wait happens inside one `block_on`.
+    #[test]
+    fn spawn_inside_runtime_uses_it() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime");
+        rt.block_on(async {
+            let (handle, mut events) = spawn(NodeConfig::default()).expect("spawn inside runtime");
+            let addr = tokio::time::timeout(Duration::from_secs(15), async {
+                loop {
+                    match events.recv().await {
+                        Some(Event::Listening { addr }) => return addr,
+                        Some(_) => continue,
+                        None => panic!("event channel closed"),
+                    }
+                }
+            })
+            .await
+            .expect("listener within 15 s");
+            assert!(
+                addr.to_string().contains("quic-v1") || addr.to_string().contains("tcp"),
+                "unexpected listener addr {addr}"
+            );
+            handle.shutdown().await.expect("shutdown ok");
+        });
     }
 }

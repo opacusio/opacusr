@@ -278,9 +278,10 @@ pub struct App {
     last_id_refresh_at: Option<std::time::Instant>,
 
     /// Embedded libp2p node for the experimental decentralized mode
-    /// (Настройки → Децентрализованный). Desktop only: the mobile shells
-    /// build the app without the p2p module.
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    /// (Настройки → Децентрализованный). Desktop and Android: the
+    /// libp2p stack adds no new native build on Android (aws-lc-rs/
+    /// ring are already linked via opacusr-transport). iOS: not built.
+    #[cfg(not(target_os = "ios"))]
     pub(crate) p2p: Option<crate::p2p::P2pUi>,
     /// Scratch: PeerId to ping in the decentralized tab.
     pub p2p_ping_input: String,
@@ -397,7 +398,7 @@ impl App {
             svc_state_at: None,
             service_hosts: false,
             last_id_refresh_at: None,
-            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            #[cfg(not(target_os = "ios"))]
             p2p: None,
             p2p_ping_input: String::new(),
             p2p_bootstrap_edit: bootstrap_edit,
@@ -447,7 +448,7 @@ impl App {
 
         // Experimental decentralized mode: bring the node up with the
         // app when it is enabled (Настройки → Децентрализованный).
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        #[cfg(not(target_os = "ios"))]
         if app.config.p2p_enabled {
             crate::p2p::start_node(&mut app);
         }
@@ -1057,7 +1058,7 @@ impl eframe::App for App {
         }
 
         // ---- poll the embedded libp2p node (decentralized mode) ----
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        #[cfg(not(target_os = "ios"))]
         crate::p2p::poll_events(self, ctx);
 
         // ---- poll host events (into a buffer, then apply) ----

@@ -11,10 +11,11 @@ pub mod contacts;
 pub mod discovery;
 pub mod home;
 pub mod host_panel;
-/// Experimental decentralized mode (embedded libp2p node). Desktop
-/// only: aws-lc-rs (rustls backend of the libp2p stack) is not wired
-/// for the mobile cross-builds.
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+/// Experimental decentralized mode (embedded libp2p node). Desktop and
+/// Android: the libp2p stack adds no new native build on Android —
+/// aws-lc-rs/ring are already in the APK graph via opacusr-transport
+/// (webrtc/dtls → rustls). iOS is out: the app is not built for iOS.
+#[cfg(not(target_os = "ios"))]
 pub mod p2p;
 pub mod print;
 #[cfg(windows)]
