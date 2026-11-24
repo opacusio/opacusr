@@ -1,6 +1,6 @@
 <?xml version='1.0' encoding='utf-8'?>
 <?ifndef MsiVersion ?>
-<?define MsiVersion = "0.3.0" ?>
+<?define MsiVersion = "0.11.23" ?>
 <?endif?>
 <!--
   OpacusR Windows MSI (WiX Toolset v3.11 — the same version the Release
@@ -12,8 +12,8 @@
   Build from the repository root on a Windows host:
 
       cargo build (release profile) for opacusr-app, opacusr-agent, opacusr-server
-      candle.exe -arch x64 -dMsiVersion=0.3.0 wix\main.wxs -o build\main.wixobj
-      light.exe -ext WixUIExtension build\main.wixobj -o opacusr-0.3.0-x64.msi
+      candle.exe -arch x64 -dMsiVersion=0.11.23 wix\main.wxs -o build\main.wixobj
+      light.exe -ext WixUIExtension build\main.wixobj -o opacusr-0.11.23-x64.msi
 
   The product version comes from the -dMsiVersion preprocessor variable;
   the Release workflow derives it from the pushed tag (see
@@ -73,6 +73,114 @@
         </UI>
         <CustomAction Id='LaunchGuiAfterInstall' BinaryKey='WixCA' DllEntry='WixShellExec' Impersonate='yes' Return='ignore'/>
         <WixVariable Id='WixUILicenseRtf' Value='assets\license.rtf'/>
+
+        <!-- TeamViewer model, part 3: an update must never end in
+             «The setup was unable to automatically close all requested
+             applications». That Windows Installer notice is shown by
+             the Restart Manager check at InstallValidate, BEFORE the
+             transaction opens — and three things make it unavoidable
+             for us at that point:
+
+             * ServiceControl Stop below only runs once the
+               transaction is open (after InstallInitialize), i.e.
+               after the Restart Manager has already failed;
+             * the per-session agent child is a console process — the
+               Restart Manager has no polite close for console apps;
+             * the GUI hides to the tray (close-to-tray cancels
+               WM_CLOSE), so the RM's polite close of opacusr.exe
+               fails too.
+
+             So the setup closes everything itself, a few actions
+             before InstallValidate: `sc stop OpacusRAgent` lets the
+             supervisor log a graceful exit to
+             C:\ProgramData\OpacusR\service.log, then taskkill /F /T
+             removes whatever is still holding opacusr.exe,
+             opacusr-agent.exe or opacusr-server.exe (the service
+             process, the per-session child, a GUI-spawned agent or a
+             portable copy from another folder — any of them locks the
+             files being replaced). SCM marks the service stopped when
+             its process dies, and the kill-on-close job object reaps
+             the child; nothing restarts the processes here (HKLM Run
+             is logon-triggered, the service has no failure actions).
+             After the files are replaced, ServiceControl
+             re-registers and starts the service and the exit-dialog
+             checkbox relaunches the GUI.
+
+             Mechanics (WiX v3 WixUtilExtension, already linked by the
+             Release workflow):
+
+             * Immediate custom actions scheduled before
+               InstallValidate run under the installing (elevated)
+               user's token — enough to stop the service and kill
+               other users' processes. A DEFERRED action cannot be
+               used here: deferred actions must run inside the
+               transaction (after InstallInitialize), which is past
+               the Restart Manager check (and fails with error 2762
+               when scheduled before it).
+             * WixQuietExec runs each command line without a console
+               window flash. A deferred WixQuietExec reads its command
+               from CustomActionData; the immediate one reads the
+               WixQuietExecCmdLine property and CLEARS it after use
+               (src/ext/ca/wixca/dll/qtexecca.cpp), so each command
+               needs its own setter action immediately before it.
+             * The setter values are formatted fields: [SystemFolder]
+               expands to the 64-bit System32 (candle -arch x64), and
+               the command must START with a quoted path or QuietExec
+               rejects it.
+             * Return='ignore': a fresh install (nothing running) or
+               an already-stopped service must never block setup —
+               taskkill returns 128 and sc stop returns 1062 in that
+               case.
+
+             These actions also make plain uninstall quiet: it used to
+             leave the tray GUI running and ask for a reboot for the
+             same files-in-use reason. -->
+        <CustomAction
+            Id='StopAgentService_Cmd'
+            Property='WixQuietExecCmdLine'
+            Value='&quot;[SystemFolder]sc.exe&quot; stop OpacusRAgent'/>
+        <CustomAction
+            Id='StopAgentService'
+            BinaryKey='WixCA'
+            DllEntry='WixQuietExec'
+            Return='ignore'/>
+        <CustomAction
+            Id='KillViewer_Cmd'
+            Property='WixQuietExecCmdLine'
+            Value='&quot;[SystemFolder]taskkill.exe&quot; /F /T /IM opacusr.exe'/>
+        <CustomAction
+            Id='KillViewer'
+            BinaryKey='WixCA'
+            DllEntry='WixQuietExec'
+            Return='ignore'/>
+        <CustomAction
+            Id='KillAgent_Cmd'
+            Property='WixQuietExecCmdLine'
+            Value='&quot;[SystemFolder]taskkill.exe&quot; /F /T /IM opacusr-agent.exe'/>
+        <CustomAction
+            Id='KillAgent'
+            BinaryKey='WixCA'
+            DllEntry='WixQuietExec'
+            Return='ignore'/>
+        <CustomAction
+            Id='KillServer_Cmd'
+            Property='WixQuietExecCmdLine'
+            Value='&quot;[SystemFolder]taskkill.exe&quot; /F /T /IM opacusr-server.exe'/>
+        <CustomAction
+            Id='KillServer'
+            BinaryKey='WixCA'
+            DllEntry='WixQuietExec'
+            Return='ignore'/>
+        <InstallExecuteSequence>
+            <Custom Action='StopAgentService_Cmd' Before='StopAgentService'/>
+            <Custom Action='StopAgentService' Before='KillViewer_Cmd'/>
+            <Custom Action='KillViewer_Cmd' Before='KillViewer'/>
+            <Custom Action='KillViewer' Before='KillAgent_Cmd'/>
+            <Custom Action='KillAgent_Cmd' Before='KillAgent'/>
+            <Custom Action='KillAgent' Before='KillServer_Cmd'/>
+            <Custom Action='KillServer_Cmd' Before='KillServer'/>
+            <Custom Action='KillServer' Before='InstallValidate'/>
+        </InstallExecuteSequence>
 
         <!-- TeamViewer model, part 1: the MSI registers AND STARTS the
              host-agent Windows service (auto-start on boot) via the
