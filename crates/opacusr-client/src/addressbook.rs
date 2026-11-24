@@ -107,8 +107,15 @@ impl AddressBook {
     /// a broken address book must never block connecting.
     pub fn load_from(path: &Path) -> Self {
         match std::fs::read_to_string(path) {
-            Ok(text) => match toml::from_str(&text) {
-                Ok(book) => book,
+            Ok(text) => match toml::from_str::<AddressBook>(&text) {
+                Ok(mut book) => {
+                    // One-time cleanup for files written by builds that
+                    // stored a row per attempt: collapse to the newest
+                    // row per target. `push_history` keeps the
+                    // invariant afterwards.
+                    book.dedupe_history();
+                    book
+                }
                 Err(e) => {
                     tracing::warn!(
                         "addressbook {}: corrupt, starting empty ({e})",
@@ -242,10 +249,28 @@ impl AddressBook {
         &self.history
     }
 
-    /// Prepend (newest first) and cap at [`HISTORY_CAP`].
+    /// Prepend (newest first) and cap at [`HISTORY_CAP`]. ONE row per
+    /// target: an attempt to a target that is already in the list
+    /// REPLACES the old row — the history shows the LAST attempt per
+    /// id («не задваивать», AnyDesk-style), and a repeat connection
+    /// moves its row to the top. Targets match the same normalization
+    /// as contacts (spaces/dashes ignored, case-insensitive).
     pub fn push_history(&mut self, entry: HistoryEntry) {
+        let norm = normalize_target(&entry.target);
+        self.history.retain(|h| normalize_target(&h.target) != norm);
         self.history.insert(0, entry);
         self.history.truncate(HISTORY_CAP);
+    }
+
+    /// Collapse the stored history to ONE row per target, keeping the
+    /// newest (the list is newest-first, so the first occurrence of
+    /// each normalized target wins). Used at load: files written by
+    /// older builds carry a row per attempt and would otherwise keep
+    /// showing duplicates until every one of them aged out.
+    fn dedupe_history(&mut self) {
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        self.history
+            .retain(|h| seen.insert(normalize_target(&h.target)));
     }
 
     /// Set the outcome of an in-progress attempt (found by ts).
@@ -393,6 +418,64 @@ mod tests {
     }
 
     #[test]
+    fn history_keeps_one_row_per_target() {
+        let mut book = AddressBook::default();
+        let mk = |ts: u64, target: &str, oc: Outcome| HistoryEntry {
+            ts,
+            label: None,
+            target: target.into(),
+            outcome: oc,
+            duration_secs: None,
+        };
+        book.push_history(mk(1, "123456789", Outcome::Unknown));
+        book.push_history(mk(2, "987654321", Outcome::Unknown));
+        // Same id typed with spaces/dashes must count as the same target.
+        book.push_history(mk(3, "123-456 789", Outcome::Connected));
+        assert_eq!(book.history().len(), 2);
+        assert_eq!(book.history()[0].ts, 3);
+        assert_eq!(book.history()[0].outcome, Outcome::Connected);
+        assert_eq!(book.history()[1].ts, 2);
+        // A failed attempt still replaces the old row (last attempt wins).
+        book.push_history(mk(4, "123456789", Outcome::Failed));
+        assert_eq!(book.history().len(), 2);
+        assert_eq!(book.history()[0].ts, 4);
+        assert_eq!(book.history()[0].outcome, Outcome::Failed);
+    }
+
+    #[test]
+    fn load_collapses_stored_duplicate_rows() {
+        let path = tmp_path("dedupe-history");
+        std::fs::write(
+            &path,
+            r#"
+[[history]]
+ts = 1_700_000_000
+target = "123456789"
+outcome = "connected"
+duration_secs = 204
+
+[[history]]
+ts = 1_699_900_000
+target = "123456789"
+outcome = "connected"
+duration_secs = 60
+
+[[history]]
+ts = 1_699_800_000
+target = "987654321"
+outcome = "failed"
+"#,
+        )
+        .unwrap();
+        let loaded = AddressBook::load_from(&path);
+        assert_eq!(loaded.history().len(), 2);
+        // Newest first; the older duplicate row is gone.
+        assert_eq!(loaded.history()[0].ts, 1_700_000_000);
+        assert_eq!(loaded.history()[1].target, "987654321");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
     fn sorted_favorites_first_then_recent() {
         let mut book = AddressBook::default();
         let a = book.upsert("A".into(), "111111111".into(), None);
@@ -411,7 +494,7 @@ mod tests {
             book.push_history(HistoryEntry {
                 ts: i,
                 label: None,
-                target: "x".into(),
+                target: format!("id{i}"),
                 outcome: Outcome::Unknown,
                 duration_secs: None,
             });
@@ -419,6 +502,17 @@ mod tests {
         assert_eq!(book.history().len(), HISTORY_CAP);
         assert_eq!(book.history()[0].ts, HISTORY_CAP as u64 + 49);
         assert_eq!(book.history().last().unwrap().ts, 50);
+        // One row per target: re-pushing an existing target collapses
+        // the list entry instead of growing it (see the dedupe test).
+        book.push_history(HistoryEntry {
+            ts: 99_999,
+            label: None,
+            target: "id50".into(),
+            outcome: Outcome::Unknown,
+            duration_secs: None,
+        });
+        assert_eq!(book.history().len(), HISTORY_CAP);
+        assert_eq!(book.history()[0].ts, 99_999);
     }
 
     #[test]
