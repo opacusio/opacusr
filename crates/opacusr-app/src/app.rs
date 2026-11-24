@@ -205,6 +205,8 @@ pub struct App {
 
     /// Saved contacts + connection history (`addressbook.toml`).
     pub book: AddressBook,
+    /// Brand assets (ghost logo + action icons) decoded once at startup.
+    pub brand: crate::branding::Brand,
     /// mDNS browser for LAN discovery (Phase 3); refreshed on a
     /// background thread for the whole app lifetime.
     pub discovery: crate::discovery::Discovery,
@@ -324,6 +326,9 @@ impl App {
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let ctx = cc.egui_ctx.clone();
+        // Brand textures must be decoded BEFORE ctx moves into Self —
+        // egui::Context is cheap to clone, but one clone is enough here.
+        let brand = crate::branding::Brand::load(&cc.egui_ctx);
         let config = AgentConfig::load();
         // «Имя в сети»: the machine name by default (Rev-3 mockup),
         // editable; a user-customized config name wins.
@@ -358,6 +363,7 @@ impl App {
             host_password_input: String::new(),
             totp_input: String::new(),
             book: AddressBook::load(),
+            brand,
             discovery: crate::discovery::Discovery::start(),
             new_label: String::new(),
             new_target: String::new(),
@@ -1369,12 +1375,8 @@ impl eframe::App for App {
         egui::TopBottomPanel::top("opacusr_top").show(ctx, |ui| {
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new("●")
-                        .strong()
-                        .size(18.0)
-                        .color(theme::ACCENT),
-                );
+                // Brand: the OpacusR ghost (flat tile) instead of a bare dot.
+                crate::branding::icon(ui, &self.brand.logo, 22.0);
                 ui.label(theme::bold("OpacusR").strong().size(18.0));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     // Build marker: lets the user (and support) see which
@@ -1385,6 +1387,17 @@ impl eframe::App for App {
                             .weak()
                             .small(),
                     );
+                    // Android has no window close button (the system
+                    // gesture only backgrounds the activity) — give the
+                    // process a real, discoverable exit.
+                    #[cfg(target_os = "android")]
+                    if ui
+                        .small_button("⏻ Закрыть")
+                        .on_hover_text("Полностью закрыть приложение")
+                        .clicked()
+                    {
+                        std::process::exit(0);
+                    }
                     if self.session.is_some() && ui.button("⏹ Отключиться").clicked() {
                         self.disconnect_clicked();
                     }

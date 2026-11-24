@@ -18,6 +18,9 @@ crate-type = ["cdylib"]
 package = "io.opacusr.app"
 apk_name = "OpacusR"
 build_targets = ["aarch64-linux-android"]
+# Ghost launcher icon: res/mipmap-*/ic_launcher.png (generated from the
+# user's opacus-logos tile variant by scripts/apply_branding.py).
+resource_dir = "res"
 
 # WITHOUT INTERNET Android refuses EVERY socket() — including loopback —
 # so the agent could never register («регистрация на сервере…» forever,
@@ -47,6 +50,7 @@ target_sdk_version = 34
 
 [package.metadata.android.application]
 label = "OpacusR"
+icon = "@mipmap/ic_launcher"
 # The default signaling endpoints are cleartext `ws://` (the embedded
 # loopback listener and LAN `ip:port` servers). Our WebSockets are
 # native Rust sockets, which the platform's cleartext switch does not

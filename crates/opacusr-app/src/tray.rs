@@ -132,30 +132,15 @@ impl Tray {
     }
 }
 
-/// The app icon as RGBA (violet ring + white dot on transparent dark
-/// roundel) — the same mark as the window icon, 32 px for tray DPI.
+/// The app icon as RGBA: the brand ghost (flat tile) decoded from the
+/// embedded PNG — same artwork as the launcher icon.
 fn icon() -> tray_icon::Icon {
-    let size = 32usize;
-    let mut rgba = vec![0u8; size * size * 4];
-    let c = size as f32 / 2.0;
-    for y in 0..size {
-        for x in 0..size {
-            let (dx, dy) = (x as f32 - c, y as f32 - c);
-            let r = (dx * dx + dy * dy).sqrt();
-            let (i, o, bg) = (c * 0.95, c * 0.55, c * 0.98);
-            let px = if r < o {
-                [255, 255, 255, 255] // white core dot
-            } else if r < i {
-                [124u8, 92, 255, 255] // violet ring (#7C5CFC)
-            } else if r < bg {
-                [10, 10, 20, 255] // dark roundel
-            } else {
-                [0, 0, 0, 0] // transparent corner
-            };
-            let idx = (y * size + x) * 4;
-            rgba[idx..idx + 4].copy_from_slice(&px);
-        }
-    }
-    tray_icon::Icon::from_rgba(rgba, size as u32, size as u32)
-        .expect("tray icon rgba is well-formed")
+    // The brand ghost (flat tile, 128px) — the same artwork as the app
+    // icon; decoded once, straight RGBA for tray_icon.
+    const PNG: &[u8] = include_bytes!("../assets/branding/logo.png");
+    let img = image::load_from_memory(PNG)
+        .expect("embedded tray logo is a valid PNG")
+        .to_rgba8();
+    let (w, h) = img.dimensions();
+    tray_icon::Icon::from_rgba(img.into_raw(), w, h).expect("tray icon rgba is well-formed")
 }

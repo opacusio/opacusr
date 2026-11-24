@@ -91,14 +91,21 @@ fn connect_card(ui: &mut Ui, app: &mut App) {
         }
         ui.add_space(10.0);
 
-        // Connect: violet CTA, full width, TeamViewer-style.
+        // Connect: violet CTA, full width, TeamViewer-style — with the
+        // «send» icon from the brand set.
         let connect_w = ui.available_width();
+        let send_img = egui::Image::new(&app.brand.send).fit_to_exact_size(egui::Vec2::splat(20.0));
         let connect_clicked = ui
             .add_sized(
                 [connect_w, 38.0],
-                egui::Button::new(theme::bold("Подключиться").size(17.0).color(Color32::WHITE))
-                    .fill(theme::ACCENT)
-                    .rounding(egui::Rounding::same(10.0)),
+                egui::Button::image_and_text(
+                    send_img,
+                    theme::bold("  Подключиться")
+                        .size(17.0)
+                        .color(Color32::WHITE),
+                )
+                .fill(theme::ACCENT)
+                .rounding(egui::Rounding::same(10.0)),
             )
             .clicked();
         let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
@@ -222,6 +229,7 @@ fn own_machine_strip(ui: &mut Ui, app: &mut App) {
     if app.config.is_unattended() {
         ui.add_space(4.0);
         ui.horizontal(|ui| {
+            crate::branding::icon(ui, &app.brand.stealth, 16.0);
             let shown = app.reveal_password;
             let text = if shown {
                 app.unattended_display.clone().unwrap_or_default()

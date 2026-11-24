@@ -46,25 +46,38 @@ impl SettingsTab {
 /// The «Настройки» drawer (TeamViewer options) — docked to the right
 /// edge, full height, resizable. One tool drawer is open at a time;
 /// Esc or the «✕» button closes it.
+///
+/// Desktop gets the docked 520-820 px drawer; a phone screen (~360-430
+/// egui points) is narrower than the docked minimum, which pushed the
+/// left nav off-screen and made «Безопасность» (password, 2FA)
+/// unreachable — so on narrow screens the drawer takes the FULL width
+/// and the password question «в мобильной версии как задать пароль?»
+/// has the same answer as on the desktop.
 pub fn settings_panel(ctx: &Context, app: &mut App) {
     if !app.show_settings {
         return;
     }
-    egui::SidePanel::right("settings_drawer")
-        .resizable(true)
-        .width_range(520.0..=820.0)
-        .default_width(640.0)
-        .frame(theme::drawer_frame())
-        .show(ctx, |ui| {
-            if theme::drawer_header(ui, "Настройки") {
-                app.show_settings = false;
-            }
-            ui.add_space(6.0);
-            ui.separator();
-            ui.add_space(6.0);
+    let screen_w = ctx.screen_rect().width();
+    let panel = if screen_w >= 560.0 {
+        egui::SidePanel::right("settings_drawer")
+            .resizable(true)
+            .width_range(520.0..=820.0)
+            .default_width(640.0)
+    } else {
+        egui::SidePanel::right("settings_drawer")
+            .exact_width(screen_w)
+            .resizable(false)
+    };
+    panel.frame(theme::drawer_frame()).show(ctx, |ui| {
+        if theme::drawer_header(ui, "Настройки") {
+            app.show_settings = false;
+        }
+        ui.add_space(6.0);
+        ui.separator();
+        ui.add_space(6.0);
+        if screen_w >= 560.0 {
             ui.horizontal(|ui| {
                 // ---- left nav (TeamViewer options list) ----
-                let tab = app.settings_nav;
                 egui::Frame::default()
                     .fill(theme::INSET)
                     .rounding(egui::Rounding::same(10.0))
@@ -72,39 +85,68 @@ pub fn settings_panel(ctx: &Context, app: &mut App) {
                     .show(ui, |ui| {
                         ui.vertical(|ui| {
                             ui.set_min_width(140.0);
-                            for t in SettingsTab::ALL {
-                                let selected = t == tab;
-                                if ui
-                                    .add(egui::SelectableLabel::new(
-                                        selected,
-                                        egui::RichText::new(t.title()).color(if selected {
-                                            theme::TEXT
-                                        } else {
-                                            theme::MUTED
-                                        }),
-                                    ))
-                                    .clicked()
-                                {
-                                    app.settings_nav = t;
-                                }
-                            }
+                            nav_labels(ui, app);
                         });
                     });
                 ui.separator();
                 // ---- right pane ----
-                ui.vertical(|ui| {
-                    ui.set_min_width(ui.available_width() - 8.0);
-                    match app.settings_nav {
-                        SettingsTab::General => general_tab(ui, app),
-                        SettingsTab::Connect => connect_tab(ui, app),
-                        SettingsTab::Security => security_tab(ui, app),
-                        SettingsTab::Host => host_tab(ui, app),
-                        SettingsTab::P2p => p2p_tab(ui, app),
-                        SettingsTab::About => about_tab(ui),
-                    }
-                });
+                settings_pane(ui, app);
             });
-        });
+        } else {
+            // Phone: nav chips wrap across rows, the pane gets the
+            // whole width (the docked left column ate half of it).
+            ui.horizontal_wrapped(|ui| {
+                ui.set_min_width(ui.available_width());
+                nav_labels(ui, app);
+            });
+            ui.add_space(4.0);
+            ui.separator();
+            ui.add_space(4.0);
+            settings_pane(ui, app);
+        }
+    });
+}
+
+/// The left-nav / wrapped-chips tab list (shared by both layouts).
+fn nav_labels(ui: &mut Ui, app: &mut App) {
+    for t in SettingsTab::ALL {
+        let selected = t == app.settings_nav;
+        if ui
+            .add(egui::SelectableLabel::new(
+                selected,
+                egui::RichText::new(t.title()).color(if selected {
+                    theme::TEXT
+                } else {
+                    theme::MUTED
+                }),
+            ))
+            .clicked()
+        {
+            app.settings_nav = t;
+        }
+    }
+}
+
+/// The section pane for the selected tab (shared by both layouts).
+fn settings_pane(ui: &mut Ui, app: &mut App) {
+    ui.vertical(|ui| {
+        ui.set_min_width(ui.available_width() - 8.0);
+        match app.settings_nav {
+            SettingsTab::General => general_tab(ui, app),
+            SettingsTab::Connect => connect_tab(ui, app),
+            SettingsTab::Security => security_tab(ui, app),
+            SettingsTab::Host => host_tab(ui, app),
+            SettingsTab::P2p => p2p_tab(ui, app),
+            SettingsTab::About => about_tab(ui, app),
+        }
+    });
+}
+
+/// Input width that never overflows a narrow pane: the desktop layouts
+/// were sized for the 520-820 px drawer; on a phone the settings pane is
+/// ~200 pt wide, so hard 360 px inputs got clipped mid-character.
+fn field_w(ui: &Ui) -> f32 {
+    360.0_f32.min(ui.available_width() - 12.0)
 }
 
 fn general_tab(ui: &mut Ui, app: &mut App) {
@@ -117,7 +159,7 @@ fn general_tab(ui: &mut Ui, app: &mut App) {
             ui.label("Имя в сети");
             ui.vertical(|ui| {
                 ui.add_sized(
-                    [360.0, 24.0],
+                    [field_w(ui), 24.0],
                     egui::TextEdit::singleline(&mut app.display_name)
                         .hint_text(theme::machine_name()),
                 );
@@ -165,7 +207,7 @@ fn connect_tab(ui: &mut Ui, app: &mut App) {
             ui.label("Сигнальный сервер");
             ui.vertical(|ui| {
                 let url_resp = ui.add_sized(
-                    [360.0, 24.0],
+                    [field_w(ui), 24.0],
                     egui::TextEdit::singleline(&mut app.server_url)
                         .hint_text("ws://IP_компьютера:8080/signal — см. подсказку"),
                 );
@@ -187,7 +229,7 @@ fn connect_tab(ui: &mut Ui, app: &mut App) {
             ui.label("Прокси");
             ui.vertical(|ui| {
                 ui.add_sized(
-                    [360.0, 24.0],
+                    [field_w(ui), 24.0],
                     egui::TextEdit::singleline(&mut app.config.proxy).hint_text(
                         "socks5://user:pass@host:port или http://host:port — пусто = напрямую",
                     ),
@@ -231,7 +273,10 @@ fn security_tab(ui: &mut Ui, app: &mut App) {
         .num_columns(2)
         .spacing([12.0, 8.0])
         .show(ui, |ui| {
-            ui.label("Пароль доступа");
+            ui.horizontal(|ui| {
+                crate::branding::icon(ui, &app.brand.shield, 18.0);
+                ui.label("Пароль доступа");
+            });
             ui.vertical(|ui| {
                 if app.config.is_unattended() {
                     let storage = if app.config.password_in_keychain {
@@ -262,7 +307,7 @@ fn security_tab(ui: &mut Ui, app: &mut App) {
                 } else {
                     ui.horizontal(|ui| {
                         let resp = ui.add_sized(
-                            [180.0, 24.0],
+                            [(180.0_f32).min(field_w(ui)), 24.0],
                             egui::TextEdit::singleline(&mut app.host_password_input)
                                 .password(true)
                                 .hint_text("минимум 4 символа"),
@@ -610,10 +655,15 @@ fn host_service_ui(ui: &mut Ui, app: &mut App) {
     }
 }
 
-fn about_tab(ui: &mut Ui) {
-    ui.label(theme::bold("О программе").size(18.0));
+fn about_tab(ui: &mut Ui, app: &mut App) {
+    ui.horizontal(|ui| {
+        crate::branding::icon(ui, &app.brand.logo, 64.0);
+        ui.vertical(|ui| {
+            ui.label(theme::bold("О программе").size(18.0));
+            ui.label(format!("OpacusR v{}", env!("CARGO_PKG_VERSION")));
+        });
+    });
     ui.add_space(8.0);
-    ui.label(format!("OpacusR v{}", env!("CARGO_PKG_VERSION")));
     ui.label(
         egui::RichText::new(
             "Самостоятельно размещаемый удалённый рабочий стол с открытым кодом \
@@ -750,7 +800,7 @@ fn p2p_tab(ui: &mut Ui, app: &mut App) {
             ui.label("Bootstrap-узлы");
             ui.vertical(|ui| {
                 ui.add_sized(
-                    [360.0, 72.0],
+                    [field_w(ui), 72.0],
                     egui::TextEdit::multiline(&mut app.p2p_bootstrap_edit).hint_text(
                         "по одному multiaddr в строке:\n\
                          /ip4/хост/udp/4001/quic-v1/p2p/12D3KooW…",
@@ -808,7 +858,7 @@ fn p2p_tab(ui: &mut Ui, app: &mut App) {
                 ui.vertical(|ui| {
                     ui.horizontal(|ui| {
                         ui.add_sized(
-                            [360.0, 24.0],
+                            [(360.0_f32).min(ui.available_width() - 70.0), 24.0],
                             egui::TextEdit::singleline(&mut app.p2p_ping_input)
                                 .hint_text("PeerId партнёра: 12D3KooW…"),
                         );
