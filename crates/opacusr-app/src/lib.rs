@@ -2,6 +2,9 @@
 //! remote screen, chat, transfer files, open a remote terminal — and run
 //! the host agent with unattended password / consent dialogs.
 
+/// Android system-bar insets (status/navigation bars render over the
+/// NativeActivity's edge-to-edge window; see the module docs).
+pub mod android_insets;
 pub mod app;
 pub mod branding;
 pub mod contacts;

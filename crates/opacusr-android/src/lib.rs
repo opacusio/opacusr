@@ -43,6 +43,20 @@ fn android_main(android_app: AndroidApp) {
     // endpoints. Best-effort — failures are logged, never fatal.
     android_acquire_multicast_lock(android_app.vm_as_ptr(), android_app.activity_as_ptr());
 
+    // Measure the system status/navigation bar heights ONCE and hand
+    // them to the UI: the NativeActivity window is edge-to-edge and the
+    // ROM draws the status bar straight over our header — the
+    // «⏻ Закрыть» button and the version marker sat underneath the
+    // clock/battery icons (0.11.19 report: «не вижу кнопку закрытия»).
+    // cargo-apk 0.10 drops the manifest `theme` key (the built APK's
+    // AndroidManifest.xml has no theme attribute), so the platform
+    // cannot reserve the safe area for us — the UI reserves it itself.
+    // Best-effort: on failure the heights stay (0, 0) and rendering
+    // matches the old behavior.
+    let (status_px, nav_px) =
+        android_system_bar_heights(android_app.vm_as_ptr(), android_app.activity_as_ptr());
+    opacusr_app::android_insets::set_insets_px(status_px, nav_px);
+
     // The one android-specific bit: hand the NativeActivity handle to
     // winit (eframe exposes the event-loop builder hook for this).
     let options = eframe::NativeOptions {
@@ -217,6 +231,127 @@ fn android_acquire_multicast_lock(
     }
 }
 
+/// Measures the system STATUS bar and NAVIGATION bar heights (device
+/// pixels) via JNI, for the edge-to-edge inset panels the UI reserves
+/// each frame (see `opacusr_app::android_insets`). Sequence:
+/// `Activity.getResources()` → `Resources`,
+/// `Resources.getIdentifier(name, "dimen", "android")` for
+/// "status_bar_height" / "navigation_bar_height",
+/// `Resources.getDimensionPixelSize(id)`. Every call is
+/// exception-checked; any failure returns (0, 0) and the UI renders
+/// exactly like before (no reserved strips). Same raw jni-sys vtable
+/// discipline as the multicast lock above; NOT gated to Android so
+/// the host build type-checks the JNI usage too.
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+fn android_system_bar_heights(
+    vm_raw: *mut core::ffi::c_void,
+    activity_raw: *mut core::ffi::c_void,
+) -> (core::ffi::c_int, core::ffi::c_int) {
+    let fail = |what: &str| {
+        tracing::warn!(target: "opacusr", "system bar heights: {what}");
+        (0, 0)
+    };
+    if vm_raw.is_null() || activity_raw.is_null() {
+        return fail("no JavaVM or activity handle");
+    }
+    unsafe {
+        // Same handle-vs-vtable wiring as the multicast lock: deref the
+        // NDK JavaVM handle ONCE to load the vtable, pass the HANDLE as
+        // the first argument (see the long comment there — this exact
+        // mix-up was the v0.11.15/16 white screen).
+        let vm_handle: *mut jni_sys::JavaVM = vm_raw.cast();
+        let vm: jni_sys::JavaVM = *vm_handle;
+        if vm.is_null() {
+            return fail("JavaVM vtable pointer is null");
+        }
+        let mut env: *mut jni_sys::JNIEnv = std::ptr::null_mut();
+        let res = ((*vm).v1_1.AttachCurrentThread)(
+            vm_handle,
+            (&mut env) as *mut *mut jni_sys::JNIEnv as *mut *mut core::ffi::c_void,
+            std::ptr::null_mut(),
+        );
+        if res != jni_sys::JNI_OK || env.is_null() {
+            return fail(&format!("AttachCurrentThread: {res}"));
+        }
+        let iface: *const jni_sys::JNINativeInterface_ = *env;
+        let version = ((*iface).v1_6.GetVersion)(env);
+        if version < jni_sys::JNI_VERSION_1_6 {
+            return fail(&format!("GetVersion sanity check: {version:#x}"));
+        }
+        macro_rules! clean {
+            () => {
+                if ((*iface).v1_6.ExceptionCheck)(env) {
+                    ((*iface).v1_6.ExceptionClear)(env);
+                    return fail("Java exception during bar height query");
+                }
+            };
+        }
+        let ctx: jni_sys::jobject = activity_raw.cast();
+        let ctx_cls: jni_sys::jclass = ((*iface).v1_6.GetObjectClass)(env, ctx);
+        clean!();
+        let get_res = ((*iface).v1_6.GetMethodID)(
+            env,
+            ctx_cls,
+            c"getResources".as_ptr(),
+            c"()Landroid/content/res/Resources;".as_ptr(),
+        );
+        clean!();
+        let res_obj: jni_sys::jobject = ((*iface).v1_6.CallObjectMethod)(env, ctx, get_res);
+        clean!();
+        if res_obj.is_null() {
+            return fail("Resources unavailable");
+        }
+        let res_cls: jni_sys::jclass = ((*iface).v1_6.GetObjectClass)(env, res_obj);
+        clean!();
+        let get_id = ((*iface).v1_6.GetMethodID)(
+            env,
+            res_cls,
+            c"getIdentifier".as_ptr(),
+            c"(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)I".as_ptr(),
+        );
+        clean!();
+        let get_px = ((*iface).v1_6.GetMethodID)(
+            env,
+            res_cls,
+            c"getDimensionPixelSize".as_ptr(),
+            c"(I)I".as_ptr(),
+        );
+        clean!();
+        let dimen: jni_sys::jstring = ((*iface).v1_6.NewStringUTF)(env, c"dimen".as_ptr());
+        clean!();
+        let android: jni_sys::jstring = ((*iface).v1_6.NewStringUTF)(env, c"android".as_ptr());
+        clean!();
+        let measure = |name: &'static core::ffi::CStr| -> core::ffi::c_int {
+            let name_str: jni_sys::jstring =
+                ((*iface).v1_6.NewStringUTF)(env, name.as_ptr() as *const _);
+            if name_str.is_null() {
+                return 0;
+            }
+            let id = ((*iface).v1_6.CallIntMethod)(env, res_obj, get_id, name_str, dimen, android);
+            ((*iface).v1_6.DeleteLocalRef)(env, name_str);
+            if ((*iface).v1_6.ExceptionCheck)(env) {
+                ((*iface).v1_6.ExceptionClear)(env);
+                return 0;
+            }
+            if id <= 0 {
+                return 0;
+            }
+            let px = ((*iface).v1_6.CallIntMethod)(env, res_obj, get_px, id);
+            if ((*iface).v1_6.ExceptionCheck)(env) {
+                ((*iface).v1_6.ExceptionClear)(env);
+                return 0;
+            }
+            px
+        };
+        let status = measure(c"status_bar_height");
+        let nav = measure(c"navigation_bar_height");
+        for local in [res_obj, ctx_cls, res_cls, dimen, android] {
+            ((*iface).v1_6.DeleteLocalRef)(env, local);
+        }
+        (status, nav)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     /// Host-side compile+run check of the JNI helper: null handles hit
@@ -227,6 +362,16 @@ mod tests {
     fn multicast_lock_helper_degrades_gracefully_on_null_handles() {
         super::android_acquire_multicast_lock(std::ptr::null_mut(), std::ptr::null_mut());
         // No panic, no lock — best-effort semantics preserved.
+    }
+
+    /// Same compile+degrade check for the system-bar height query: null
+    /// handles must return (0, 0) (→ no inset panels, old rendering)
+    /// without touching any JNI function pointer.
+    #[test]
+    fn system_bar_heights_degrade_gracefully_on_null_handles() {
+        let (status, nav) =
+            super::android_system_bar_heights(std::ptr::null_mut(), std::ptr::null_mut());
+        assert_eq!((status, nav), (0, 0));
     }
 
     // ------------------------------------------------------------------

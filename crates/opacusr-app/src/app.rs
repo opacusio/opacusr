@@ -957,6 +957,12 @@ impl eframe::App for App {
         // theme sync would otherwise repaint the UI light on Windows
         // with a light OS theme.
         crate::theme::install_visuals_each_frame(ctx);
+        // Android: reserve the status/navigation bar areas FIRST — the
+        // NativeActivity window is edge-to-edge and the system bars
+        // otherwise render straight over the app header, hiding the
+        // «⏻ Закрыть» button and the version marker (0.11.19 report).
+        // No-op on desktop (no insets measured).
+        crate::android_insets::show_system_bar_insets(ctx);
         // First frame bookkeeping: the window was created hidden
         // (`with_visible(false)` in main.rs) so nothing white can flash
         // before egui paints. Apply the native dark chrome (DWM title
