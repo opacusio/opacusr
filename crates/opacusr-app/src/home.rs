@@ -224,11 +224,15 @@ fn own_machine_strip(ui: &mut Ui, app: &mut App) {
         }
     }
 
-    // Unattended password parity (the old home card showed it): dots +
-    // reveal toggle; changing it lives in Настройки → Безопасность.
+    // Password affordance ON the main screen (the mobile answer to
+    // «не вижу где установить пароль»): without it the only password
+    // place is Настройки → Безопасность, which from the home card is
+    // invisible. When no password is set — a warning plus a direct
+    // jump to the security tab; when one is set — the dots + reveal
+    // row plus a change shortcut to the same tab.
     if app.config.is_unattended() {
         ui.add_space(4.0);
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             crate::branding::icon(ui, &app.brand.stealth, 16.0);
             let shown = app.reveal_password;
             let text = if shown {
@@ -249,7 +253,32 @@ fn own_machine_strip(ui: &mut Ui, app: &mut App) {
                 app.reveal_password = !shown;
             }
             ui.label(theme::dot("доступ без подтверждения", theme::MUTED));
+            if ui
+                .small_button("Изменить…")
+                .on_hover_text("Откроет Настройки → Безопасность")
+                .clicked()
+            {
+                app.settings_nav = crate::settings::SettingsTab::Security;
+                app.show_settings = true;
+            }
         });
+    } else {
+        ui.add_space(4.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.label(theme::dot("пароль доступа не задан", theme::GOLD));
+            if ui
+                .small_button("Задать пароль…")
+                .on_hover_text("Откроет Настройки → Безопасность")
+                .clicked()
+            {
+                app.settings_nav = crate::settings::SettingsTab::Security;
+                app.show_settings = true;
+            }
+        });
+        ui.label(theme::dot(
+            "пока пароля нет, каждое подключение подтверждается вручную",
+            theme::MUTED,
+        ));
     }
 
     // Agent start/stop — only where the service does not host already
