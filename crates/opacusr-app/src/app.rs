@@ -793,6 +793,25 @@ impl App {
         self.session = Some(SessionHandle::new(cmd_tx, ui_events_rx));
     }
 
+    /// «Reconnect» from the history: a tap on a history row prefills
+    /// the connect card with the stored target, restores the password
+    /// saved after the last successful session to it (see
+    /// `viewer_passwords` in the config) and starts the attempt at
+    /// once. Without a stored password the card flow takes over: the
+    /// gold «enter the password» line pops up and the password field
+    /// gets the keyboard focus.
+    pub(crate) fn history_reconnect(&mut self, target: &str, label: Option<String>) {
+        let t = target.replace([' ', '-'], "");
+        self.peer_id_input = t.clone();
+        // The stored password wins over whatever sits in the field: the
+        // tap means «connect to THIS host again» — a leftover password
+        // typed for another host must not poison the attempt.
+        if let Some(pw) = self.config.viewer_passwords.get(&t) {
+            self.password_input = pw.clone();
+        }
+        self.connect_clicked(label);
+    }
+
     fn disconnect_clicked(&mut self) {
         if let Some(s) = self.session.as_mut() {
             let _ = s.commands.send(Command::Disconnect);
@@ -1120,6 +1139,18 @@ impl eframe::App for App {
                         self.book.mark_outcome(ts, Outcome::Connected);
                     }
                     let typed = self.peer_id_input.replace([' ', '-'], "");
+                    // The handshake just proved this password works for
+                    // this target — keep it so the next reconnect from
+                    // history is one tap. Config is 0600 (0.10.7+).
+                    if !self.password_input.is_empty()
+                        && self.config.viewer_passwords.get(&typed).map(String::as_str)
+                            != Some(self.password_input.as_str())
+                    {
+                        self.config
+                            .viewer_passwords
+                            .insert(typed.clone(), self.password_input.clone());
+                        let _ = self.config.save();
+                    }
                     self.book.touch_by_target(&typed);
                     let _ = self.book.save();
                 }

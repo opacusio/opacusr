@@ -9,6 +9,7 @@
 //! be recoverable to verify challenges. OS-keychain storage is a roadmap
 //! item (docs/security.md).
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 
@@ -202,6 +203,16 @@ pub struct AgentConfig {
     /// two machines on one LAN, where the invite address of the first
     /// machine is pasted into the second one's list.
     pub p2p_bootstrap: Vec<String>,
+    /// Saved passwords of the computers THIS device has connected TO as
+    /// a viewer, keyed by the exact target (`123456789` or `ip:port`).
+    /// Written when a session connects, consumed by the one-tap
+    /// «reconnect from history»: a tap on a history row restores the
+    /// target plus the password and starts the attempt. Same storage
+    /// posture as the host `password` fallback — agent.toml is written
+    /// 0600 (or lives in the app-private dir on Android), so the
+    /// exposure is the one the unattended password already accepts.
+    #[serde(default)]
+    pub viewer_passwords: BTreeMap<String, String>,
     /// Schema version of the saved agent.toml. Files written before the
     /// field existed load as version **0** (field-level serde default —
     /// deliberately NOT the struct default, which is the current version)
@@ -284,6 +295,7 @@ impl Default for AgentConfig {
             close_to_tray: true,
             p2p_enabled: false,
             p2p_bootstrap: Vec::new(),
+            viewer_passwords: BTreeMap::new(),
             config_version: CONFIG_VERSION,
         }
     }

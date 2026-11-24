@@ -445,8 +445,14 @@ fn history_card(ui: &mut Ui, app: &mut App) {
                         egui::ScrollArea::vertical()
                             .auto_shrink(false)
                             .show(ui, |ui| {
-                                for h in app.book.history() {
-                                    history_row(ui, h);
+                                // Clone one row at a time: history_row
+                                // takes &mut App (a tap may start a
+                                // session) while the list itself is
+                                // borrowed from the same App.
+                                let n = app.book.history().len();
+                                for i in 0..n {
+                                    let h = app.book.history()[i].clone();
+                                    history_row(ui, app, &h);
                                 }
                             });
                     }
@@ -465,8 +471,10 @@ fn history_card_narrow(ui: &mut Ui, app: &mut App) {
             if app.book.history().is_empty() {
                 empty_note(ui);
             } else {
-                for h in app.book.history() {
-                    history_row(ui, h);
+                let n = app.book.history().len();
+                for i in 0..n {
+                    let h = app.book.history()[i].clone();
+                    history_row(ui, app, &h);
                 }
             }
             ui.add_space(4.0);
@@ -506,36 +514,64 @@ fn empty_note(ui: &mut Ui) {
 }
 
 /// One history row: time, device, result mark, duration (AnyDesk log).
-fn history_row(ui: &mut Ui, h: &opacusr_client::addressbook::HistoryEntry) {
-    ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(fmt_ts(h.ts)).weak().small().monospace());
-        match &h.label {
-            Some(label) => {
-                ui.label(egui::RichText::new(label).strong());
-                ui.label(theme::mono(h.target.clone()).weak().small());
-            }
-            None => {
-                ui.label(theme::mono(h.target.clone()).small());
-            }
-        }
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if let Some(d) = h.duration_secs {
-                ui.label(egui::RichText::new(fmt_duration(d)).weak().small());
-            }
-            let dot = match h.outcome {
-                Outcome::Connected => theme::dot("●", theme::TEAL),
-                Outcome::Failed => theme::dot("●", theme::DANGER),
-                Outcome::Unknown => egui::RichText::new("●").weak(),
-            };
-            let tip = match h.outcome {
-                Outcome::Connected => "подключено",
-                Outcome::Failed => "не удалось",
-                Outcome::Unknown => "в процессе",
-            };
-            ui.label(dot).on_hover_text(tip);
-        });
-    });
-    ui.add_space(2.0);
+/// The whole row is ONE tappable surface — a tap reconnects to that
+/// target (`App::history_reconnect`): the answer to «нельзя из истории
+/// подключиться?». Affordance: card-style inset fill + the violet «↻»
+/// (a phone has no hover, the row must look pressable on its own).
+fn history_row(ui: &mut Ui, app: &mut App, h: &opacusr_client::addressbook::HistoryEntry) {
+    let row = egui::Frame::none()
+        .fill(theme::INSET)
+        .rounding(egui::Rounding::same(8.0))
+        .inner_margin(egui::Margin::symmetric(8.0, 5.0))
+        .show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(fmt_ts(h.ts)).weak().small().monospace());
+                match &h.label {
+                    Some(label) => {
+                        ui.label(egui::RichText::new(label).strong());
+                        ui.label(theme::mono(h.target.clone()).weak().small());
+                    }
+                    None => {
+                        ui.label(theme::mono(h.target.clone()).small());
+                    }
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(egui::RichText::new("↻").strong().color(theme::ACCENT));
+                    if let Some(d) = h.duration_secs {
+                        ui.label(egui::RichText::new(fmt_duration(d)).weak().small());
+                    }
+                    let dot = match h.outcome {
+                        Outcome::Connected => theme::dot("●", theme::TEAL),
+                        Outcome::Failed => theme::dot("●", theme::DANGER),
+                        Outcome::Unknown => egui::RichText::new("●").weak(),
+                    };
+                    let tip = match h.outcome {
+                        Outcome::Connected => "подключено",
+                        Outcome::Failed => "не удалось",
+                        Outcome::Unknown => "в процессе",
+                    };
+                    ui.label(dot).on_hover_text(tip);
+                });
+            });
+        })
+        .response;
+    // The Frame only paints — re-sense its whole rect as one click
+    // target so the tap lands anywhere on the row, not just on a text
+    // fragment. Id carries (ts, target): unique per entry even when two
+    // attempts share a second.
+    let click = ui
+        .interact(
+            row.rect,
+            egui::Id::new(("history_row", h.ts, h.target.as_str())),
+            egui::Sense::click(),
+        )
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text("Нажмите, чтобы подключиться снова");
+    if click.clicked() {
+        app.history_reconnect(&h.target, h.label.clone());
+    }
+    ui.add_space(3.0);
 }
 
 /// 123456789 → «123 456 789» (TeamViewer-style digit grouping).
