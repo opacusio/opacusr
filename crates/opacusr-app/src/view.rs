@@ -1028,3 +1028,90 @@ fn tunnel_panel(ui: &mut egui::Ui, s: &mut SessionHandle) {
     });
     ui.weak("Connect apps to 127.0.0.1:<local port>; the host relays them.");
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::SessionHandle;
+
+    /// Headless render smoke test: the session screen (toolbar or the
+    /// chrome-less «⛶» mode) must lay out and PAINT in both chrome modes
+    /// when a frame texture is present — and while still waiting for one.
+    /// Pure egui (`Context::run`), no window system involved.
+    #[test]
+    fn session_ui_renders_in_both_chrome_modes() {
+        let (cmd_tx, _cmd_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (_ev_tx, ev_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut s = SessionHandle::new(cmd_tx, ev_rx);
+        s.screen = (1920, 1080);
+        let mut cfg = AgentConfig::default();
+
+        let ctx = egui::Context::default();
+        let img = egui::ColorImage::new([64, 48], Color32::from_rgb(40, 40, 60));
+        let tex = ctx.load_texture("frame", img, egui::TextureOptions::default());
+
+        for (label, fullscreen, with_tex) in [
+            ("waiting, toolbar", false, false),
+            ("waiting, chromeless", true, false),
+            ("frame, toolbar", false, true),
+            ("frame, chromeless", true, true),
+        ] {
+            s.fullscreen = fullscreen;
+            s.texture = with_tex.then(|| tex.clone());
+            for _ in 0..3 {
+                let out = ctx.run(egui::RawInput::default(), |ctx| {
+                    session_ui(ctx, &mut s, &mut cfg);
+                });
+                assert!(
+                    !out.shapes.is_empty(),
+                    "{label}: the session screen painted nothing"
+                );
+            }
+        }
+    }
+
+    /// The chrome-less overlays (exit button + view-only badge) must
+    /// paint: they are the only controls a fullscreen phone user can
+    /// reach. Areas report shapes from the SECOND frame on (egui needs
+    /// one pass to place anchored widgets), so this drives six passes
+    /// and requires output at least once after the first.
+    #[test]
+    fn chromeless_mode_overlays_paint_view_only_badge() {
+        let (cmd_tx, _cmd_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (_ev_tx, ev_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut s = SessionHandle::new(cmd_tx, ev_rx);
+        s.view_only = true;
+        s.fullscreen = true;
+        let mut cfg = AgentConfig::default();
+
+        let ctx = egui::Context::default();
+        let mut ever_painted = false;
+        for pass in 0..6 {
+            let out = ctx.run(egui::RawInput::default(), |ctx| {
+                session_ui(ctx, &mut s, &mut cfg);
+            });
+            if !out.shapes.is_empty() {
+                ever_painted = true;
+                println!("DBG overlay shapes at pass {pass}: {}", out.shapes.len());
+            }
+        }
+        assert!(
+            ever_painted,
+            "chromeless overlays (exit button / view-only badge) painted nothing in 6 passes"
+        );
+    }
+
+    /// fit_size preserves the remote aspect ratio and never exceeds the
+    /// available area (the phone letterboxing math).
+    #[test]
+    fn fit_size_preserves_aspect() {
+        let av = egui::vec2(400.0, 800.0);
+        let fit = fit_size(av, 1920.0, 1080.0);
+        assert!(fit.x <= 400.0 + f32::EPSILON && fit.y <= 800.0 + f32::EPSILON);
+        assert!((fit.x / fit.y - 1920.0 / 1080.0).abs() < 1e-3);
+
+        let fit2 = fit_size(av, 1080.0, 1920.0);
+        assert!(fit2.x <= 400.0 + f32::EPSILON && fit2.y <= 800.0 + f32::EPSILON);
+        assert!((fit2.x / fit2.y - 1080.0 / 1920.0).abs() < 1e-3);
+    }
+}

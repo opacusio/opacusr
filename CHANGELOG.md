@@ -4,7 +4,7 @@ All notable changes to OpacusR are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is
 SemVer-ish (breaking protocol changes bump the minor until 1.0).
 
-## [Unreleased]
+## [0.12.1] — 2026-11-25
 
 ### Подключение с ПК к телефону больше не рвётся на гонке data-каналов
 

@@ -88,6 +88,8 @@ tempfile = { workspace = true }
 # no default features: tests must build on hosts without ALSA headers;
 # the e2e test never exercises the audio path itself
 opacusr-client = { workspace = true, default-features = false }
+# the webrtc_session e2e test boots the real signaling server
+opacusr-server = { workspace = true }
 
 [features]
 # Audio streaming (Opus). Default on; opt out for toolchains where the

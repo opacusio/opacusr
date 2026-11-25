@@ -123,7 +123,11 @@ pub struct SessionHandle {
 }
 
 impl SessionHandle {
-    fn new(commands: UnboundedSender<Command>, events: UnboundedReceiver<ClientEvent>) -> Self {
+    /// Crate-visible for the headless render tests in `view.rs`.
+    pub(crate) fn new(
+        commands: UnboundedSender<Command>,
+        events: UnboundedReceiver<ClientEvent>,
+    ) -> Self {
         Self {
             commands,
             events,
