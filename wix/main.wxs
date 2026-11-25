@@ -1,6 +1,6 @@
 <?xml version='1.0' encoding='utf-8'?>
 <?ifndef MsiVersion ?>
-<?define MsiVersion = "0.11.25" ?>
+<?define MsiVersion = "0.12.0" ?>
 <?endif?>
 <!--
   OpacusR Windows MSI (WiX Toolset v3.11 — the same version the Release
@@ -40,7 +40,12 @@
             Description='OpacusR - self-hosted open-source remote desktop'
             Manufacturer='OpacusR contributors'/>
 
-        <MajorUpgrade DowngradeErrorMessage='A newer version of [ProductName] is already installed.'/>
+        <!-- Schedule='afterInstallInitialize' is the transactional upgrade:
+             the old version is removed INSIDE the install transaction, so a
+             failed update rolls back to the previous working build. The
+             default (afterInstallValidate) deleted the old version first —
+             a failed install left the machine WITHOUT OpacusR. -->
+        <MajorUpgrade Schedule='afterInstallInitialize' DowngradeErrorMessage='A newer version of [ProductName] is already installed.'/>
         <MediaTemplate EmbedCab='yes'/>
 
         <Icon Id='opacusr.ico' SourceFile='assets\opacusr.ico'/>

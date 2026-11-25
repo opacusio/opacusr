@@ -343,15 +343,20 @@ async fn run(
 
     // Attended consent: a blocking stdin prompt on a dedicated thread,
     // bridged through a channel (the GUI replaces this with a dialog).
+    // Answers are keyed BY PEER: the old answer-queue (Vec popped by any
+    // waiter) could hand viewer B viewer A's "yes" when two requests
+    // raced — full control granted to the wrong peer.
     let service_run = async {
         let is_unattended = unattended;
         let (req_tx, mut req_rx) = mpsc::unbounded_channel::<(opacusr_proto::PeerId, String)>();
-        let answers: std::sync::Arc<std::sync::Mutex<Vec<SessionDecision>>> = Default::default();
+        let answers: std::sync::Arc<
+            std::sync::Mutex<std::collections::HashMap<opacusr_proto::PeerId, SessionDecision>>,
+        > = Default::default();
         let prompt_answers = answers.clone();
         std::thread::spawn(move || {
             while let Some((id, name)) = req_rx.blocking_recv() {
                 let d = prompt_consent(id, &name).unwrap_or(SessionDecision::Reject);
-                prompt_answers.lock().unwrap().push(d);
+                prompt_answers.lock().unwrap().insert(id, d);
             }
         });
         service
@@ -361,10 +366,13 @@ async fn run(
                         return SessionDecision::Full;
                     }
                     let _ = req_tx.send((id, name.to_string()));
-                    // Wait for the console answer (the prompt thread sets
-                    // it); 60 s timeout → decline.
-                    for _ in 0..600 {
-                        if let Some(v) = answers.lock().unwrap().pop() {
+                    // Wait for THIS peer's console answer (the prompt
+                    // thread sets it); 30 s timeout → decline. 30 s keeps
+                    // the blocking wait inside the 45 s server-side peer
+                    // TTL, so the agent never falls out of the registry
+                    // while the operator thinks (the old 60 s did).
+                    for _ in 0..300 {
+                        if let Some(v) = answers.lock().unwrap().remove(&id) {
                             return v;
                         }
                         std::thread::sleep(std::time::Duration::from_millis(100));

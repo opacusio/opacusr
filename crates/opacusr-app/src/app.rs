@@ -868,8 +868,11 @@ impl App {
                 if consent_tx.send((id, name.to_string(), ans_tx)).is_err() {
                     return SessionDecision::Reject;
                 }
+                // 30 s: must stay inside the 45 s server-side peer TTL, or
+                // a slow answer leaves the host de-registered forever (the
+                // old 60 s did exactly that — «машина пропала с сервера»).
                 ans_rx
-                    .recv_timeout(std::time::Duration::from_secs(60))
+                    .recv_timeout(std::time::Duration::from_secs(30))
                     .unwrap_or(SessionDecision::Reject)
             };
             let _ = service.run(consent, shutdown_rx).await;

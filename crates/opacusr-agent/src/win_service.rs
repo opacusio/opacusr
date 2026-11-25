@@ -558,22 +558,54 @@ mod imp {
         }
         created.context("CreateProcessAsUserW (spawn the per-session agent)")?;
 
+        // The primary thread handle is never used and MUST be closed right
+        // away: this service runs for months — one leaked handle per
+        // session switch adds up. Also: any failure AFTER a successful
+        // CreateProcess used to leak both handles AND leave an unsupervised
+        // agent alive (it would then fight the next spawned child for the
+        // ports). Terminate + close on every error path.
+        let kill_child = |pi: &PROCESS_INFORMATION| unsafe {
+            let _ = TerminateProcess(pi.hProcess, 1);
+            let _ = CloseHandle(pi.hProcess);
+            let _ = CloseHandle(pi.hThread);
+        };
+
         // Kill-on-close job: if the supervisor dies (crash, force-stop),
         // the kernel closes the job handle and reaps the child with it.
-        let job = unsafe { CreateJobObjectW(None, PCWSTR::null()) }.context("CreateJobObjectW")?;
+        let job = match unsafe { CreateJobObjectW(None, PCWSTR::null()) } {
+            Ok(j) => j,
+            Err(e) => {
+                kill_child(&pi);
+                return Err(anyhow::anyhow!("CreateJobObjectW: {e}"));
+            }
+        };
         let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
         limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-        unsafe {
+        if let Err(e) = unsafe {
             SetInformationJobObject(
                 job,
                 JobObjectExtendedLimitInformation,
                 &limits as *const _ as *const core::ffi::c_void,
                 std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
             )
+        } {
+            unsafe {
+                let _ = CloseHandle(job);
+            }
+            kill_child(&pi);
+            return Err(anyhow::anyhow!("SetInformationJobObject: {e}"));
         }
-        .context("SetInformationJobObject")?;
-        unsafe { AssignProcessToJobObject(job, pi.hProcess) }
-            .context("AssignProcessToJobObject")?;
+        if let Err(e) = unsafe { AssignProcessToJobObject(job, pi.hProcess) } {
+            unsafe {
+                let _ = CloseHandle(job);
+            }
+            kill_child(&pi);
+            return Err(anyhow::anyhow!("AssignProcessToJobObject: {e}"));
+        }
+        // The child's primary thread handle is not needed anymore.
+        unsafe {
+            let _ = CloseHandle(pi.hThread);
+        }
 
         Ok(ChildProc {
             process: pi.hProcess,
@@ -622,6 +654,43 @@ mod imp {
             "OpacusR remote-desktop host agent: supervises a per-session agent instance in the active console session.",
         )
         .ok(); // cosmetic; the service works without a description
+
+        // Recovery actions: a crashed supervisor used to leave the machine
+        // silently unreachable until the next reboot (nobody restarts a
+        // dead service at 3 AM). Restart after 5/15/30 s, reset the
+        // counter after a clean day. windows-service 0.8 exposes only a
+        // GETTER for these, so this goes through the raw SCM API.
+        let mut actions = [
+            windows_sys::Win32::System::Services::SC_ACTION {
+                Type: windows_sys::Win32::System::Services::SC_ACTION_RESTART,
+                Delay: 5000,
+            },
+            windows_sys::Win32::System::Services::SC_ACTION {
+                Type: windows_sys::Win32::System::Services::SC_ACTION_RESTART,
+                Delay: 15000,
+            },
+            windows_sys::Win32::System::Services::SC_ACTION {
+                Type: windows_sys::Win32::System::Services::SC_ACTION_RESTART,
+                Delay: 30000,
+            },
+        ];
+        let fa = windows_sys::Win32::System::Services::SERVICE_FAILURE_ACTIONSW {
+            dwResetPeriod: 86_400,
+            lpRebootMsg: std::ptr::null_mut(),
+            lpCommand: std::ptr::null_mut(),
+            cActions: actions.len() as u32,
+            lpsaActions: actions.as_mut_ptr(),
+        };
+        let set_ok = unsafe {
+            windows_sys::Win32::System::Services::ChangeServiceConfig2W(
+                svc.raw_handle(),
+                windows_sys::Win32::System::Services::SERVICE_CONFIG_FAILURE_ACTIONS,
+                &fa as *const _ as *const core::ffi::c_void,
+            )
+        };
+        if set_ok == 0 {
+            svc_log("warning: recovery actions not set (ChangeServiceConfig2W failed)");
+        }
 
         // Start immediately: `service install` must leave the machine
         // reachable, not «after the next reboot» (TeamViewer behavior).

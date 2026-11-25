@@ -68,6 +68,19 @@ pub enum PeerPayload {
     RelayUse { ticket: [u8; 16], port: u16 },
 }
 
+impl PeerPayload {
+    /// Upper bound of the encoded size, for server-side sanity checks.
+    /// `Accept`/`RelayUse` are constant-size; `Reject`/SDP carry one
+    /// string whose UTF-8 length dominates the bincode envelope.
+    pub fn max_len(&self) -> usize {
+        match self {
+            PeerPayload::Accept | PeerPayload::RelayUse { .. } => 64,
+            PeerPayload::Reject { reason } => reason.len(),
+            PeerPayload::SdpOffer { sdp } | PeerPayload::SdpAnswer { sdp } => sdp.len(),
+        }
+    }
+}
+
 /// Both ways: forward `payload` to peer `to` / deliver from peer `from`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PeerSend {

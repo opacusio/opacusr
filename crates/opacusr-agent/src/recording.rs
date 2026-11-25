@@ -112,6 +112,14 @@ impl SessionRecorder {
         Ok(())
     }
 
+    /// Close the current part WITHOUT ending the recording (rotation).
+    fn close_part(&mut self) -> Result<(), String> {
+        if let Some(mut w) = self.writer.take() {
+            w.write_end().map_err(|e| format!("mp4 finalize: {e}"))?;
+        }
+        Ok(())
+    }
+
     fn file_path(&self, part: u32) -> PathBuf {
         if part == 0 {
             self.dir.join(format!("{}.mp4", self.stem))
@@ -126,8 +134,11 @@ impl SessionRecorder {
         }
         if self.configured && self.size != (w, h) {
             // Resolution changed (monitor switch): finalize this file and
-            // rotate into a new `-partN` file for the new geometry.
-            self.finish().map_err(|e| format!("mp4 finalize: {e}"))?;
+            // rotate into a new `-partN` file for the new geometry. Must
+            // NOT go through finish(): that sets `closed = true`, which
+            // silently dropped every frame after the first of the new
+            // part (the rotation was "alive" but recorded one frame).
+            self.close_part()?;
             self.configured = false;
             self.part += 1;
             self.next_start = 0;
@@ -443,6 +454,14 @@ mod tests {
         let mut key2 = key.clone();
         key2.extend_from_slice(&[0x99]);
         assert!(rec.write(t0 + std::time::Duration::from_millis(40), &key2, 640, 400));
+
+        // v0.12.0 regression: the OLD rotation reused finish(), which set
+        // closed = true and silently dropped every frame after the first
+        // of the new part. Both parts must keep accepting frames.
+        let mut delta = Vec::new();
+        delta.extend_from_slice(&sc3());
+        delta.extend_from_slice(&[0x41, 0x9a, 0x02, 0x05]);
+        assert!(rec.write(t0 + std::time::Duration::from_millis(80), &delta, 640, 400));
         assert!(rec.finish().is_ok());
 
         let names: Vec<String> = std::fs::read_dir(dir.path())
@@ -452,9 +471,14 @@ mod tests {
         assert_eq!(names.len(), 2, "expected 2 part files, got {names:?}");
         assert!(names.iter().any(|n| n.ends_with("-part1.mp4")));
         for name in names {
-            let file = std::fs::File::open(dir.path().join(name)).unwrap();
+            let file = std::fs::File::open(dir.path().join(&name)).unwrap();
             let reader = mp4::read_mp4(file).unwrap();
-            assert_eq!(reader.sample_count(1).unwrap(), 1);
+            let expected = if name.ends_with("-part1.mp4") { 2 } else { 1 };
+            assert_eq!(
+                reader.sample_count(1).unwrap(),
+                expected,
+                "part {name} must keep its samples"
+            );
         }
     }
 

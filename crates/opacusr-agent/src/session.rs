@@ -426,6 +426,11 @@ async fn run_session(
 
     let mut paused = false;
     let mut seq: u64 = 0;
+    // Half-open link watchdog: the viewer pings every 5 s. If NOTHING
+    // arrives for 60 s the link is dead (NAT timeout, cable pull) while
+    // `send` keeps "succeeding" into the OS buffer — end the session
+    // instead of streaming into a black hole forever.
+    let mut last_inbound = std::time::Instant::now();
 
     // Cursor overlay state: the shape is pushed once per serial change,
     // the position only when it actually moves (keeps idle links quiet).
@@ -543,6 +548,10 @@ async fn run_session(
                 }
             }
             _ = clip_ticker.tick() => {
+                if last_inbound.elapsed() > std::time::Duration::from_secs(60) {
+                    reason = "viewer silent: connection lost".into();
+                    break;
+                }
                 // Host → viewer clipboard push with echo suppression: skip
                 // content we sent ourselves earlier or applied from the viewer.
                 if let Some(clip) = &mut clipboard {
@@ -645,6 +654,7 @@ async fn run_session(
                 }
             }
             msg = session.recv_msg() => {
+                last_inbound = std::time::Instant::now();
                 match msg? {
                     Message::MouseMove(m) => {
                         if cfg.view_only { continue; }
@@ -887,6 +897,25 @@ async fn run_session(
                         // which ignores tunnel messages.
                         match &other {
                             Message::TunnelOpen(t) => {
+                                // Hard cap per session: an authenticated
+                                // viewer used to be able to open thousands
+                                // of tunnels (each = a socket + a pump
+                                // task) and exhaust the host. 64 is far
+                                // above any legitimate use.
+                                if tunnels.len() >= 64 {
+                                    session
+                                        .send_msg(&Message::TunnelOpened(
+                                            message::TunnelOpened {
+                                                id: t.id,
+                                                ok: false,
+                                                error: Some(
+                                                    "too many open tunnels (64 limit)".into(),
+                                                ),
+                                            },
+                                        ))
+                                        .await?;
+                                    continue;
+                                }
                                 let (reply, conn) = crate::tunnel::TunnelConn::open(
                                     t.id,
                                     &t.host,
@@ -912,7 +941,20 @@ async fn run_session(
                             }
                             Message::TunnelData(t) => {
                                 if let Some(c) = tunnels.get(&t.id) {
-                                    c.send(&t.data);
+                                    if !c.send(&t.data) {
+                                        // Viewer pumped faster than the target
+                                        // consumes: bounded-queue overflow →
+                                        // close the tunnel (see TunnelConn).
+                                        let id = t.id;
+                                        if let Some(c) = tunnels.remove(&id) {
+                                            c.abort();
+                                        }
+                                        session
+                                            .send_msg(&Message::TunnelClose(
+                                                message::TunnelClose { id },
+                                            ))
+                                            .await?;
+                                    }
                                 }
                             }
                             Message::TunnelClose(t) => {

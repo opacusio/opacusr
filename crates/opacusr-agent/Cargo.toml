@@ -75,6 +75,13 @@ windows = { version = "0.59", features = [
     "Win32_System_Variant",
 ] }
 windows-service = { workspace = true }
+# Raw SCM API for the recovery actions (windows-service 0.8 exposes only
+# a getter): ChangeServiceConfig2W/SERVICE_FAILURE_ACTIONSW. Same windows
+# -sys major as windows-service 0.8 uses, so no extra copy lands in the
+# tree.
+[target.'cfg(windows)'.dependencies.windows-sys]
+version = "0.61"
+features = ["Win32_Foundation", "Win32_System_Services"]
 
 [dev-dependencies]
 tempfile = { workspace = true }

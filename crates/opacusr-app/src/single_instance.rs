@@ -74,8 +74,10 @@ pub fn acquire() -> bool {
                 };
                 if r != windows_sys::Win32::Foundation::WAIT_OBJECT_0 {
                     // WAIT_FAILED (handle closed at process teardown) —
-                    // stop busy-looping on it.
-                    std::thread::sleep(Duration::from_secs(1));
+                    // a real failure: sleeping and re-waiting on a dead
+                    // handle used to flip the show flag every second.
+                    // The watcher thread is disposable at this point.
+                    break;
                 }
                 SHOW_REQUESTED.store(true, Ordering::SeqCst);
                 if let Some(f) = SHOW_CALLBACK.get() {

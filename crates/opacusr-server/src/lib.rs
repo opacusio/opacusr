@@ -47,6 +47,9 @@ pub const PEER_TTL: Duration = Duration::from_secs(3 * HEARTBEAT_SECS as u64);
 pub const RELAY_SLOT_TTL: Duration = Duration::from_secs(60);
 /// Preamble size: 16-byte ticket + 1 role byte.
 pub const RELAY_PREAMBLE: usize = 17;
+
+/// How long a relay connection may take to deliver its 17-byte preamble.
+const RELAY_PREAMBLE_TIMEOUT: Duration = Duration::from_secs(10);
 /// Hard cap on outstanding (unpaired) relay tickets per peer.
 pub const MAX_RELAY_TICKETS_PER_PEER: usize = 8;
 /// Hard cap on outstanding relay tickets server-wide.
@@ -64,9 +67,21 @@ pub struct PeerInfo {
 struct PeerHandle {
     #[allow(dead_code)] // surfaced in an admin listing endpoint later
     info: PeerInfo,
-    tx: mpsc::UnboundedSender<SignalMessage>,
+    tx: mpsc::Sender<SignalMessage>,
     last_seen: Arc<std::sync::atomic::AtomicU64>,
 }
+
+/// Per-peer outbound queue depth. A peer that does not drain its queue
+/// (dead websocket, stalled reader) fills this in seconds; after that its
+/// senders get an error instead of the server growing unbounded memory
+/// (a registered peer used to be able to soak gigabytes — remote OOM).
+const PEER_QUEUE_DEPTH: usize = 512;
+
+/// Sanity caps on peer-supplied strings/payloads (server-side defense;
+/// the frame limit is the only other barrier on the wire).
+const MAX_DISPLAY_NAME: usize = 256;
+/// SDP offers are a few KiB at most; anything larger is abuse.
+const MAX_PEER_PAYLOAD: usize = 512 * 1024;
 
 fn now() -> u64 {
     SystemTime::now()
@@ -83,8 +98,18 @@ pub struct Registry {
 
 impl Registry {
     /// Register a peer and return its fresh public id + inbound queue.
-    pub fn register(&self, info: PeerInfo) -> (PeerId, mpsc::UnboundedReceiver<SignalMessage>) {
+    /// `None` when the registry is already at `max_peers` (atomic
+    /// check-and-insert — the old pre-check in `handle_socket` raced
+    /// under concurrent registrations).
+    pub fn register(
+        &self,
+        info: PeerInfo,
+        max_peers: usize,
+    ) -> Option<(PeerId, mpsc::Receiver<SignalMessage>)> {
         let mut peers = self.peers.lock().unwrap();
+        if peers.len() >= max_peers {
+            return None;
+        }
         let mut rng = rand::thread_rng();
         let id = loop {
             let candidate: PeerId =
@@ -93,7 +118,7 @@ impl Registry {
                 break candidate;
             }
         };
-        let (tx, rx) = mpsc::unbounded_channel();
+        let (tx, rx) = mpsc::channel(PEER_QUEUE_DEPTH);
         let last_seen = Arc::new(std::sync::atomic::AtomicU64::new(now()));
         peers.insert(
             id,
@@ -103,7 +128,7 @@ impl Registry {
                 last_seen,
             },
         );
-        (id, rx)
+        Some((id, rx))
     }
 
     pub fn unregister(&self, id: PeerId) -> bool {
@@ -117,18 +142,26 @@ impl Registry {
         }
     }
 
-    /// Queue `msg` for `to`. Errors when the peer is gone.
+    /// Queue `msg` for `to`. Errors when the peer is gone or its queue
+    /// is full (a stalled reader must never backpressure the whole
+    /// server — the sender gets an explicit error instead).
     pub fn send_to(&self, to: PeerId, msg: SignalMessage) -> Result<(), String> {
         let peers = self.peers.lock().unwrap();
         match peers.get(&to) {
-            Some(p) => p.tx.send(msg).map_err(|_| "peer queue closed".to_string()),
+            Some(p) => p.tx.try_send(msg).map_err(|e| match e {
+                mpsc::error::TrySendError::Full(_) => "peer queue full".to_string(),
+                mpsc::error::TrySendError::Closed(_) => "peer queue closed".to_string(),
+            }),
             None => Err(format!("peer {to} is offline")),
         }
     }
 
-    /// Remove peers that have not heartbeat for [`PEER_TTL`].
-    pub fn prune(&self) -> usize {
-        let cutoff = now() - PEER_TTL.as_secs();
+    /// Remove peers that have not heartbeat for [`PEER_TTL`]. Returns
+    /// the removed ids so the janitor can adjust the peers gauge.
+    pub fn prune(&self) -> Vec<PeerId> {
+        // Saturating: a host clock that jumped backwards must not panic
+        // the janitor task (which would then never run again).
+        let cutoff = now().saturating_sub(PEER_TTL.as_secs());
         let mut peers = self.peers.lock().unwrap();
         let stale: Vec<PeerId> = peers
             .iter()
@@ -138,7 +171,7 @@ impl Registry {
         for id in &stale {
             peers.remove(id);
         }
-        stale.len()
+        stale
     }
 
     pub fn len(&self) -> usize {
@@ -206,7 +239,13 @@ impl RelayHub {
     pub async fn accept(&self, stream: TcpStream) -> anyhow::Result<()> {
         let mut stream = stream;
         let mut preamble = [0u8; RELAY_PREAMBLE];
-        tokio::io::AsyncReadExt::read_exact(&mut stream, &mut preamble).await?;
+        // A connection that never sends its 17-byte preamble used to pin
+        // a task + socket forever (slowloris on the relay port).
+        tokio::time::timeout(RELAY_PREAMBLE_TIMEOUT, async {
+            tokio::io::AsyncReadExt::read_exact(&mut stream, &mut preamble).await
+        })
+        .await
+        .map_err(|_| anyhow::anyhow!("relay preamble timeout"))??;
         let ticket: [u8; 16] = preamble[..16].try_into().unwrap();
         let role = preamble[16];
 
@@ -233,10 +272,12 @@ impl RelayHub {
         if piped {
             let mut slots = self.slots.lock().unwrap();
             if let Some(slot) = slots.remove(&ticket) {
-                let (a, b) = (
-                    slot.viewer.expect("both present"),
-                    slot.host.expect("both present"),
-                );
+                // Destructure instead of expect(): a poisoned mutex would
+                // take every future relay pipe down with it.
+                let (a, b) = match (slot.viewer, slot.host) {
+                    (Some(a), Some(b)) => (a, b),
+                    _ => anyhow::bail!("relay slot lost a half"),
+                };
                 drop(slots);
                 // Raw bidirectional pipe with two *independent* directions:
                 // one peer closing must not discard in-flight data for the
@@ -474,8 +515,15 @@ impl AppState {
                 let stale = state.registry.prune();
                 state.relay.prune();
                 state.limiter.prune();
-                if stale > 0 {
-                    tracing::info!(target: "opacusr", "pruned {stale} stale peers");
+                if !stale.is_empty() {
+                    tracing::info!(target: "opacusr", "pruned {} stale peers", stale.len());
+                    // The janitor removed registry entries whose sockets
+                    // may still be draining — keep the peers gauge honest
+                    // (it only decremented on socket close before).
+                    state
+                        .metrics
+                        .peers
+                        .fetch_sub(stale.len() as u64, std::sync::atomic::Ordering::Relaxed);
                 }
             }
         });
@@ -559,7 +607,12 @@ async fn signal_route(
                 .into_response();
         }
     }
-    ws.on_upgrade(move |socket| handle_socket(socket, state))
+    // 1 MiB per frame: SDP offers are KiB-sized; anything larger is abuse
+    // (the tungstenite default is 64 MiB — a registered peer could soak
+    // server memory with oversized frames).
+    ws.max_message_size(1 << 20)
+        .max_frame_size(1 << 20)
+        .on_upgrade(move |socket| handle_socket(socket, state))
 }
 
 /// Time-limited TURN credentials (coturn "TURN REST API" response shape).
@@ -702,9 +755,10 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
         .upgrades
         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let mut socket = socket;
-    // First message must be a Register.
-    let reg = match recv_signal(&mut socket).await {
-        Ok(SignalMessage::Register(reg)) => reg,
+    // First message must be a Register. Time-bounded: a websocket that
+    // never sends one used to pin a task + socket forever (slowloris).
+    let reg = match tokio::time::timeout(Duration::from_secs(10), recv_signal(&mut socket)).await {
+        Ok(Ok(SignalMessage::Register(reg))) => reg,
         _ => {
             let _ = send_signal(
                 &mut socket,
@@ -716,12 +770,14 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
             return;
         }
     };
-    if state.registry.len() >= state.limits.max_peers {
-        tracing::warn!(target: "opacusr", "refusing registration: server is full");
+    // Server-side sanity caps (defense in depth; the frame limit is the
+    // only other barrier). Refuse absurd identities instead of storing
+    // attacker-controlled unbounded strings in the registry.
+    if reg.display_name.chars().count() > MAX_DISPLAY_NAME {
         let _ = send_signal(
             &mut socket,
             SignalMessage::Error {
-                message: "server is full, retry later".into(),
+                message: "display name too long".into(),
             },
         )
         .await;
@@ -734,7 +790,22 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
         unattended: reg.unattended,
     };
     let (my_id, mut inbound) = {
-        let (id, inbound) = state.registry.register(my_info.clone());
+        // Atomic check-and-insert: the old len()-precheck raced under
+        // concurrent registrations and could exceed the cap slightly.
+        let Some((id, inbound)) = state
+            .registry
+            .register(my_info.clone(), state.limits.max_peers)
+        else {
+            tracing::warn!(target: "opacusr", "refusing registration: server is full");
+            let _ = send_signal(
+                &mut socket,
+                SignalMessage::Error {
+                    message: "server is full, retry later".into(),
+                },
+            )
+            .await;
+            return;
+        };
         state
             .metrics
             .registrations
@@ -811,6 +882,15 @@ async fn dispatch(state: &Arc<AppState>, from: PeerId, from_info: &PeerInfo, msg
         SignalMessage::Heartbeat => state.registry.touch(from),
         SignalMessage::RequestSession(RequestSession { peer, display_name }) => {
             // The viewer asks `peer` (a host) for a session.
+            if display_name.chars().count() > MAX_DISPLAY_NAME {
+                let _ = state.registry.send_to(
+                    from,
+                    SignalMessage::Error {
+                        message: "display name too long".into(),
+                    },
+                );
+                return;
+            }
             let incoming = SignalMessage::SessionIncoming(SessionIncoming {
                 from,
                 display_name,
@@ -824,6 +904,15 @@ async fn dispatch(state: &Arc<AppState>, from: PeerId, from_info: &PeerInfo, msg
             }
         }
         SignalMessage::PeerSend(PeerSend { to, payload }) => {
+            if payload.max_len() > MAX_PEER_PAYLOAD {
+                let _ = state.registry.send_to(
+                    from,
+                    SignalMessage::Error {
+                        message: "peer payload too large".into(),
+                    },
+                );
+                return;
+            }
             let fwd = SignalMessage::PeerRecv(PeerRecv { from, payload });
             if let Err(e) = state.registry.send_to(to, fwd) {
                 let _ = state.registry.send_to(

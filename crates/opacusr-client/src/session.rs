@@ -476,11 +476,16 @@ impl SessionClient {
             unattended: false,
         }))
         .await?;
-        let _my_id = match sig.recv().await? {
-            SignalMessage::Welcome(w) => w.id,
-            SignalMessage::Error { message } => return Err(TransportError::Signaling(message)),
-            other => return Err(TransportError::Signaling(format!("unexpected: {other:?}"))),
-        };
+        // Time-bounded registration: a server that accepts the TCP/WS
+        // connection but then goes silent used to hang the UI forever.
+        let _my_id = tokio::time::timeout(std::time::Duration::from_secs(20), sig.recv())
+            .await
+            .map_err(|_| TransportError::Timeout)?
+            .map(|m| match m {
+                SignalMessage::Welcome(w) => Ok(w.id),
+                SignalMessage::Error { message } => Err(TransportError::Signaling(message)),
+                other => Err(TransportError::Signaling(format!("unexpected: {other:?}"))),
+            })?;
 
         sig.send(&SignalMessage::RequestSession(RequestSession {
             peer: host_id,
@@ -488,23 +493,30 @@ impl SessionClient {
         }))
         .await?;
 
-        // Await the host decision.
-        let payload = loop {
-            match sig.recv().await? {
-                SignalMessage::PeerRecv(p) if p.from == host_id => break p.payload,
-                SignalMessage::SessionFailed(f) => {
-                    return Err(TransportError::Signaling(format!(
-                        "host unavailable: {}",
-                        f.reason
-                    )));
+        // Await the host decision. Same deal: bounded, so a dead host
+        // produces «host unavailable» instead of an eternal spinner.
+        let payload = tokio::time::timeout(std::time::Duration::from_secs(20), async {
+            loop {
+                match sig.recv().await? {
+                    SignalMessage::PeerRecv(p) if p.from == host_id => break Ok(p.payload),
+                    SignalMessage::SessionFailed(f) => {
+                        break Err(TransportError::Signaling(format!(
+                            "host unavailable: {}",
+                            f.reason
+                        )));
+                    }
+                    SignalMessage::Error { message } => {
+                        break Err(TransportError::Signaling(message))
+                    }
+                    SignalMessage::PeerGone(_) => {
+                        break Err(TransportError::Signaling("host went offline".into()));
+                    }
+                    _ => {}
                 }
-                SignalMessage::Error { message } => return Err(TransportError::Signaling(message)),
-                SignalMessage::PeerGone(_) => {
-                    return Err(TransportError::Signaling("host went offline".into()));
-                }
-                _ => {}
             }
-        };
+        })
+        .await
+        .map_err(|_| TransportError::Timeout)??;
         match payload {
             PeerPayload::Reject { reason } => {
                 return Err(TransportError::Signaling(format!(
@@ -729,6 +741,18 @@ impl SessionClient {
         let closed: ClientEvent = loop {
             tokio::select! {
                 _ = ping_ticker.tick() => {
+                    // Half-open TCP watchdog (NAT timeout, cable pull, sleep):
+                    // `send` keeps "succeeding" into the OS buffer and `recv`
+                    // never wakes, so without this the UI shows a frozen
+                    // screen forever. An unanswered ping older than 6
+                    // intervals ends the session with an explicit Closed.
+                    if let Some(oldest) = self.ping_times.values().min() {
+                        if oldest.elapsed() > std::time::Duration::from_secs(30) {
+                            break ClientEvent::Closed(
+                                "нет ответа от хоста (соединение умерло)".into(),
+                            );
+                        }
+                    }
                     let n = self.next_ping;
                     self.next_ping += 1;
                     self.ping_times.insert(n, Instant::now());

@@ -104,8 +104,9 @@ fn resolve_target(host: &str, port: u16, policy: TunnelPolicy) -> Result<String,
 /// (removing it from the session's map) closes everything.
 pub struct TunnelConn {
     pub id: u32,
-    /// Bytes from the viewer into the remote TCP socket.
-    writer: mpsc::UnboundedSender<Vec<u8>>,
+    /// Bytes from the viewer into the remote TCP socket (bounded — see
+    /// the overflow policy in `TunnelConn::send`).
+    writer: mpsc::Sender<Vec<u8>>,
 }
 
 impl TunnelConn {
@@ -173,7 +174,13 @@ impl TunnelConn {
             }
         };
 
-        let (writer, mut w_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        // Bounded inbound queue: an authenticated-but-hostile (or just
+        // hung) viewer used to be able to pump TunnelData faster than the
+        // remote target consumes it and grow the host's memory without a
+        // limit. 512 chunks (~8 MiB at 16 KiB) is plenty for interactive
+        // forwarding; a stalled viewer gets its tunnel closed instead of
+        // an OOM on the host.
+        let (writer, mut w_rx) = mpsc::channel::<Vec<u8>>(512);
         let (mut sock_r, mut sock_w) = sock.into_split();
         let out = out_tx.clone();
         tokio::spawn(async move {
@@ -233,14 +240,18 @@ impl TunnelConn {
     }
 
     /// Push bytes from the viewer into the remote socket (never blocks).
-    pub fn send(&self, data: &[u8]) {
-        let _ = self.writer.send(data.to_vec());
+    /// `false` = the queue is full: the viewer is pumping faster than the
+    /// target consumes — the CALLER closes the tunnel (protects the host
+    /// memory; dropping data silently would corrupt the forwarded stream
+    /// anyway).
+    pub fn send(&self, data: &[u8]) -> bool {
+        self.writer.try_send(data.to_vec()).is_ok()
     }
 
     /// Abort the connection: closes the remote socket; the session loop
     /// removes the conn from its map right after.
     pub fn abort(&self) {
-        let _ = self.writer.send(Vec::new());
+        let _ = self.writer.try_send(Vec::new());
     }
 }
 

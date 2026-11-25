@@ -240,8 +240,47 @@ impl AgentService {
             .checked_add(1)
             .ok_or_else(|| anyhow::anyhow!("relay port overflow"))?;
         let relay_addr: std::net::SocketAddr = format!("0.0.0.0:{relay_port}").parse()?;
-        let http = tokio::net::TcpListener::bind(http_addr).await?;
-        let relay = tokio::net::TcpListener::bind(relay_addr).await?;
+        // The bind is retried with a short backoff: after a fast session
+        // switch the supervisor kills the previous child (TerminateProcess
+        // is asynchronous) and spawns the new one immediately — the old
+        // process can still own the ports for a moment. Without retries
+        // the new child lost the embedded listener FOREVER and then
+        // registered on a dead loopback endpoint: the machine went
+        // silently offline despite the healthy service.
+        const BIND_ATTEMPTS: u32 = 8;
+        const BIND_BACKOFF: std::time::Duration = std::time::Duration::from_millis(750);
+        let mut http = None;
+        let mut relay = None;
+        for attempt in 1..=BIND_ATTEMPTS {
+            match (
+                tokio::net::TcpListener::bind(http_addr).await,
+                tokio::net::TcpListener::bind(relay_addr).await,
+            ) {
+                (Ok(h), Ok(r)) => {
+                    http = Some(h);
+                    relay = Some(r);
+                    if attempt > 1 {
+                        tracing::info!(target: "opacusr", "embedded signaling bound on attempt {attempt}");
+                    }
+                    break;
+                }
+                (h, r) => {
+                    // Do not leak the half that did bind.
+                    drop(h);
+                    drop(r);
+                    if attempt == BIND_ATTEMPTS {
+                        let _ = self.events.send(AgentEvent::Notice(format!(
+                            "embedded signaling bind to {} failed after {BIND_ATTEMPTS} attempts (port busy?)",
+                            http_addr
+                        )));
+                        anyhow::bail!("embedded signaling bind: ports busy");
+                    }
+                    tokio::time::sleep(BIND_BACKOFF).await;
+                }
+            }
+        }
+        let http = http.expect("loop exits with both sockets bound");
+        let relay = relay.expect("loop exits with both sockets bound");
         let state = Arc::new(AppState::with_options(
             relay_port,
             Limits::from_env(),
@@ -285,14 +324,13 @@ impl AgentService {
                 // the service child — the GUI never hosts its own agent
                 // while the service runs, so otherwise it would never
                 // learn the ID (the «регистрация на сервере…» report).
-                // Read-modify-write: only last_peer_id changes, nothing
-                // else the user may have edited while we ran.
                 if primary {
-                    let mut disk = crate::config::AgentConfig::load();
-                    if disk.last_peer_id != Some(w.id) {
-                        disk.last_peer_id = Some(w.id);
-                        let _ = disk.save();
-                    }
+                    // Merge-only disk update: a full load-modify-save from
+                    // this process' start-of-run snapshot used to roll
+                    // back settings the user changed in the GUI meanwhile
+                    // (password included). set_last_peer_id re-reads the
+                    // file and touches that one field.
+                    crate::config::AgentConfig::set_last_peer_id(w.id);
                 }
                 let _ = self.events.send(AgentEvent::Registered {
                     id: w.id,
@@ -367,27 +405,68 @@ impl AgentService {
                         SignalMessage::PeerRecv(PeerRecv { from, payload }) => {
                             match payload {
                                 PeerPayload::SdpOffer { sdp } => {
-                                    let view_only = decisions.get(&from)
-                                        .copied()
-                                        .unwrap_or(SessionDecision::Full)
-                                        == SessionDecision::ViewOnly;
-                                    self.start_webrtc_session(
-                                        &mut sig,
-                                        from,
-                                        &sdp,
-                                        view_only,
-                                        gate,
-                                        turn,
-                                    )
-                                    .await?;
+                                    // Only peers that went through
+                                    // SessionIncoming → Accept may start a
+                                    // transport. The old default (Full) let
+                                    // any password-knowing viewer bypass the
+                                    // consent dialog / ACL by sending a raw
+                                    // SdpOffer straight after registration.
+                                    match decisions.get(&from).copied() {
+                                        Some(d) => {
+                                            let view_only = d == SessionDecision::ViewOnly;
+                                            self.start_webrtc_session(
+                                                &mut sig,
+                                                from,
+                                                &sdp,
+                                                view_only,
+                                                gate,
+                                                turn,
+                                            )
+                                            .await?;
+                                        }
+                                        None => {
+                                            let _ = self.events.send(AgentEvent::Notice(
+                                                format!("session from {from} refused: no accepted request"),
+                                            ));
+                                            let _ = sig
+                                                .send(&SignalMessage::PeerSend(PeerSend {
+                                                    to: from,
+                                                    payload: PeerPayload::Reject {
+                                                        reason: "session not negotiated (send a request first)".into(),
+                                                    },
+                                                }))
+                                                .await;
+                                        }
+                                    }
                                 }
                                 PeerPayload::RelayUse { ticket, port } => {
-                                    let view_only = decisions.get(&from)
-                                        .copied()
-                                        .unwrap_or(SessionDecision::Full)
-                                        == SessionDecision::ViewOnly;
-                                    self.start_relay_session(url, from, ticket, port, view_only, gate)
-                                        .await?;
+                                    match decisions.get(&from).copied() {
+                                        Some(d) => {
+                                            let view_only = d == SessionDecision::ViewOnly;
+                                            self.start_relay_session(
+                                                url,
+                                                from,
+                                                ticket,
+                                                port,
+                                                view_only,
+                                                gate,
+                                            )
+                                            .await?;
+                                        }
+                                        None => {
+                                            let _ = self.events.send(AgentEvent::Notice(
+                                                format!("relay use from {from} refused: no accepted request"),
+                                            ));
+                                            let _ = sig
+                                                .send(&SignalMessage::PeerSend(PeerSend {
+                                                    to: from,
+                                                    payload: PeerPayload::Reject {
+                                                        reason: "session not negotiated (send a request first)".into(),
+                                                    },
+                                                }))
+                                                .await;
+                                        }
+                                    }
                                 }
                                 _ => {}
                             }

@@ -13,6 +13,11 @@ use crate::{Result, Transport, TransportError};
 
 const READ_BUF: usize = 16 * 1024;
 
+/// Hard cap on the dial itself. Without it a firewalled/black-holed
+/// address hangs on the OS connect timeout (up to ~130 s on Linux,
+/// longer through some proxies) while the UI shows «Подключение…».
+const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 pub struct TcpTransport {
     stream: TcpStream,
     decoder: FrameDecoder,
@@ -28,10 +33,13 @@ impl TcpTransport {
     /// (see [`crate::proxy`]; LAN/direct use keeps `None`).
     pub async fn connect_via(addr: &str, proxy: Option<&Proxy>) -> Result<Self> {
         let stream = match proxy {
-            None => TcpStream::connect(addr).await?,
-            Some(p) => p
-                .connect(addr)
+            None => tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(addr))
                 .await
+                .map_err(|_| TransportError::Other(format!("connect to {addr} timed out")))?
+                .map_err(TransportError::Io)?,
+            Some(p) => tokio::time::timeout(CONNECT_TIMEOUT, p.connect(addr))
+                .await
+                .map_err(|_| TransportError::Other(format!("connect to {addr} timed out")))?
                 .map_err(|e| TransportError::Other(format!("proxy connect to {addr}: {e}")))?,
         };
         stream.set_nodelay(true).ok();

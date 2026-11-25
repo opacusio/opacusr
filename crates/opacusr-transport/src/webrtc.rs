@@ -330,22 +330,39 @@ impl Transport for WebRtcTransport {
     }
 
     async fn recv(&mut self) -> Result<(Channel, Vec<u8>)> {
-        tokio::select! {
-            msg = self.rx_ctl.recv() => {
-                let msg = msg.ok_or(TransportError::Closed)?;
-                if let Some(payload) = self.ctl_re.feed(&msg)? {
-                    return Ok((Channel::Control, payload));
+        loop {
+            tokio::select! {
+                msg = self.rx_ctl.recv() => {
+                    let msg = msg.ok_or(TransportError::Closed)?;
+                    if let Some(payload) = self.ctl_re.feed(&msg)? {
+                        return Ok((Channel::Control, payload));
+                    }
+                    // Incomplete chunk stream — keep reading (channels are
+                    // ordered, so reassembly terminates).
                 }
-                // Incomplete chunk stream — recurse (channels are ordered,
-                // so this terminates).
-                self.recv().await
-            }
-            msg = self.rx_media.recv() => {
-                let msg = msg.ok_or(TransportError::Closed)?;
-                if let Some(payload) = self.med_re.feed(&msg)? {
-                    return Ok((Channel::Media, payload));
+                msg = self.rx_media.recv() => {
+                    let msg = msg.ok_or(TransportError::Closed)?;
+                    if let Some(payload) = self.med_re.feed(&msg)? {
+                        return Ok((Channel::Media, payload));
+                    }
                 }
-                self.recv().await
+                // Death guard. When the peer connection dies the
+                // data-channel message callbacks keep the rx senders
+                // alive, so rx.recv() alone would block forever and the
+                // session froze with no error (a «замерзший экран» with
+                // no way out). Every 2 s without traffic the state is
+                // checked; an active stream simply never hits this arm.
+                _ = tokio::time::sleep(Duration::from_secs(2)) => {
+                    match self.pc.connection_state() {
+                        RTCPeerConnectionState::Connected
+                        | RTCPeerConnectionState::Connecting => {}
+                        other => {
+                            return Err(TransportError::WebRtc(format!(
+                                "peer connection died: {other:?}"
+                            )));
+                        }
+                    }
+                }
             }
         }
     }

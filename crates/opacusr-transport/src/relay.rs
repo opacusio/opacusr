@@ -18,6 +18,10 @@ use crate::{Result, Transport, TransportError};
 
 const READ_BUF: usize = 16 * 1024;
 
+/// Same dial cap as the TCP transport (see tcp.rs): a black-holed relay
+/// address used to hang on the OS connect timeout.
+const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// Role marker sent right after the ticket so the server can pair peers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RelayRole {
@@ -48,10 +52,13 @@ impl RelayTransport {
         proxy: Option<&Proxy>,
     ) -> Result<Self> {
         let mut stream = match proxy {
-            None => TcpStream::connect(server).await?,
-            Some(p) => p
-                .connect(server)
+            None => tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(server))
                 .await
+                .map_err(|_| TransportError::Other(format!("connect to {server} timed out")))?
+                .map_err(TransportError::Io)?,
+            Some(p) => tokio::time::timeout(CONNECT_TIMEOUT, p.connect(server))
+                .await
+                .map_err(|_| TransportError::Other(format!("connect to {server} timed out")))?
                 .map_err(|e| TransportError::Other(format!("proxy connect to {server}: {e}")))?,
         };
         stream.set_nodelay(true).ok();

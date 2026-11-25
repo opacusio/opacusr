@@ -631,7 +631,13 @@ fn host_service_ui(ui: &mut Ui, app: &mut App) {
     {
         match crate::service_ctl::install_elevated() {
             Ok(()) => {
-                app.status_message = "Служба OpacusRAgent установлена и запущена.".into();
+                // The service supervisor spawns its own per-session agent
+                // within ~5 s. Letting THIS GUI keep its in-process agent
+                // meant two agents on one machine fighting for the
+                // signaling/relay ports and two IDs in the address book.
+                // Stop the GUI agent first — the service child takes over.
+                app.host_stop_clicked();
+                app.status_message = "Служба OpacusRAgent установлена и запущена; встроенный агент OpacusR остановлен (его заменяет служба).".into();
                 app.svc_state_refresh();
             }
             Err(e) => {

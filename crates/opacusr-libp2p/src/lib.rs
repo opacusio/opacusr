@@ -285,9 +285,14 @@ pub fn spawn(cfg: NodeConfig) -> Result<(Handle, mpsc::Receiver<Event>), P2pErro
             .map_err(|e| P2pError::Build(format!("listen {addr}: {e}")))?;
     }
     for b in &cfg.bootstrap {
-        swarm
-            .dial(b.clone())
-            .map_err(|e| P2pError::Build(format!("dial bootstrap {b}: {e}")))?;
+        // A malformed/duplicate bootstrap address must NOT prevent the node
+        // from starting: dial errors for unreachable hosts arrive
+        // asynchronously anyway (OutgoingConnectionError), and a bad
+        // address is a user typo that the UI can show while the node still
+        // listens and answers pings. The old code refused the whole spawn.
+        if let Err(e) = swarm.dial(b.clone()) {
+            tracing::warn!(%b, %e, "bootstrap dial rejected at spawn (continuing)");
+        }
     }
 
     let (cmd_tx, cmd_rx) = mpsc::channel(64);
@@ -383,9 +388,6 @@ struct NodeState {
     my_circuit: Option<Multiaddr>,
     my_observed: Option<Multiaddr>,
     pending_lookups: HashMap<kad::QueryId, PeerId>,
-    /// Lookups whose DHT query came back without a record — retried on the
-    /// next established connection (the record may appear at any moment).
-    deferred_lookups: Vec<PeerId>,
     pending_publishes: HashSet<kad::QueryId>,
     pending_controls: HashMap<request_response::OutboundRequestId, PeerId>,
     kad_bootstrapped: bool,
@@ -408,7 +410,6 @@ async fn run(
         my_circuit: None,
         my_observed: None,
         pending_lookups: HashMap::new(),
-        deferred_lookups: Vec::new(),
         pending_publishes: HashSet::new(),
         pending_controls: HashMap::new(),
         kad_bootstrapped: false,
@@ -599,10 +600,6 @@ fn handle_event(
             }
             let addr = endpoint.get_remote_address().clone();
             swarm.behaviour_mut().kademlia.add_address(&peer_id, addr);
-            let deferred: Vec<PeerId> = std::mem::take(&mut state.deferred_lookups);
-            for peer in deferred {
-                lookup_peer(swarm, state, peer, evt_tx);
-            }
             if state.bootstrap_addrs.contains_key(&peer_id) && !state.kad_bootstrapped {
                 state.kad_bootstrapped = swarm.behaviour_mut().kademlia.bootstrap().is_ok();
                 if state.kad_bootstrapped {
@@ -677,6 +674,11 @@ fn handle_event(
             }
             kad::QueryResult::Bootstrap(Err(e)) => {
                 debug!(?e, "kad bootstrap failed");
+                // Allow a retry on the next established connection: without
+                // this the flag stayed true after a failed bootstrap and
+                // the DHT never came up (peer lookups kept failing) until
+                // the app restarted.
+                state.kad_bootstrapped = false;
             }
             kad::QueryResult::PutRecord(Ok(kad::PutRecordOk { .. })) => {
                 if state.pending_publishes.remove(&id) {
@@ -706,12 +708,22 @@ fn handle_event(
             kad::QueryResult::GetRecord(Ok(kad::GetRecordOk::FinishedWithNoAdditionalRecord {
                 ..
             })) => {
-                // quorum reached without further records
+                // The query finished without a record: the peer is not in
+                // the DHT (offline, or the two sides bootstrap from
+                // different seeds). Report the failure — the GUI used to
+                // hang in «поиск в DHT…» until the 60 s ping timeout.
+                if let Some(peer) = state.pending_lookups.remove(&id) {
+                    let _ = evt_tx.try_send(Event::LookupFailed { peer });
+                }
             }
             kad::QueryResult::GetRecord(Err(e)) => {
                 debug!(?e, "kad get_record failed");
-                for (_, peer) in state.pending_lookups.drain() {
-                    state.deferred_lookups.push(peer);
+                // Same as above: this query id is over. The old code
+                // drained ALL pending lookups into a deferred list whose
+                // only retry trigger was a new connection — a failed lookup
+                // silently froze the UI until the ping timeout.
+                if let Some(peer) = state.pending_lookups.remove(&id) {
+                    let _ = evt_tx.try_send(Event::LookupFailed { peer });
                 }
             }
             other => {

@@ -54,8 +54,13 @@ pub struct AclRule {
 }
 
 /// Agent settings.
+///
+/// NOTE: deliberately NOT `deny_unknown_fields` — a config written by a
+/// NEWER build (e.g. after a downgrade via `<exe>.opacusr-old`) must load
+/// with its unknown fields ignored, not silently reset to defaults (a
+/// reset followed by any save() used to wipe the unattended password).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct AgentConfig {
     /// Signaling server URL, e.g. `ws://relay.example.com:8080/signal`.
     pub server_url: String,
@@ -348,7 +353,16 @@ impl AgentConfig {
     pub fn load_from(path: &PathBuf) -> Self {
         let mut cfg = match fs::read_to_string(path) {
             Ok(text) => toml::from_str(&text).unwrap_or_else(|e| {
-                tracing::warn!(target: "opacusr", "config {path:?} invalid ({e}); using defaults");
+                // A corrupted agent.toml must not vanish silently: keep
+                // the original bytes next to it. The next save() writes
+                // defaults over the broken file — recoverable from the
+                // .bad copy (the old behavior lost the password for good).
+                let bad = path.with_extension("toml.bad");
+                if fs::write(&bad, &text).is_ok() {
+                    tracing::warn!(target: "opacusr", "config {path:?} invalid ({e}); original saved to {}", bad.display());
+                } else {
+                    tracing::warn!(target: "opacusr", "config {path:?} invalid ({e}); using defaults");
+                }
                 Self::default()
             }),
             Err(_) => Self::default(),
@@ -385,13 +399,39 @@ impl AgentConfig {
             fs::create_dir_all(parent)?;
         }
         let text = toml::to_string_pretty(self).map_err(std::io::Error::other)?;
-        fs::write(path, &text)?;
+        // Atomic write: the old in-place fs::write could truncate the
+        // file (power loss / crash mid-write) — a half-written agent.toml
+        // parses to defaults on the next start, and the first save then
+        // WIPED the real config (password, ACL, viewer passwords).
+        // temp file + rename is atomic per POSIX and best-effort-safe on
+        // Windows (rename replaces).
+        let tmp = path.with_extension("toml.tmp");
+        fs::write(&tmp, &text)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600))?;
+        }
+        fs::rename(&tmp, path)?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
         }
         Ok(path.clone())
+    }
+
+    /// Update ONLY `last_peer_id` on disk, merging with whatever is in
+    /// the file right now. The service child used to do load → modify →
+    /// save() with its whole start-of-process snapshot, silently rolling
+    /// back every setting the user (or the GUI) changed while it ran —
+    /// including the unattended password.
+    pub fn set_last_peer_id(id: u64) {
+        let mut disk = Self::load();
+        if disk.last_peer_id != Some(id) {
+            disk.last_peer_id = Some(id);
+            let _ = disk.save();
+        }
     }
 
     /// The password the unattended mode actually verifies against:

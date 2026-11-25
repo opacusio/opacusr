@@ -155,14 +155,17 @@ async fn relay_pairs_two_connections() {
 #[tokio::test]
 async fn registry_prune_keeps_fresh_peers() {
     let registry = opacusr_server::Registry::default();
-    let _ = registry.register(PeerInfo {
-        platform: Platform::Linux,
-        display_name: "fresh".into(),
-        is_agent: true,
-        unattended: false,
-    });
+    let _ = registry.register(
+        PeerInfo {
+            platform: Platform::Linux,
+            display_name: "fresh".into(),
+            is_agent: true,
+            unattended: false,
+        },
+        usize::MAX,
+    );
     assert_eq!(registry.len(), 1);
     let removed = registry.prune();
-    assert_eq!(removed, 0);
+    assert!(removed.is_empty());
     assert_eq!(registry.len(), 1);
 }
