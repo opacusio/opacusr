@@ -109,6 +109,13 @@ pub struct Hello {
     pub display_name: String,
     /// `true` = host agent, `false` = viewer.
     pub is_agent: bool,
+    /// Host → viewer only: the host's assigned 9-digit ID. Lets the
+    /// viewer bind a direct-LAN address to an ID (reconnect by ID
+    /// without any discovery) and verify it dialed the right machine.
+    /// `None` from older hosts and from viewers — the field is new, so
+    /// serde defaults keep the wire shape compatible in both directions.
+    #[serde(default)]
+    pub host_id: Option<crate::PeerId>,
 }
 
 /// Host → viewer: prove you know the password.

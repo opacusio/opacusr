@@ -165,6 +165,12 @@ pub struct AgentConfig {
     /// server URL (Phase 3, docs/serverless.md). Best-effort; turn off
     /// with `--no-mdns`.
     pub mdns_advertise: bool,
+    /// Announce the agent over UDP subnet broadcast (the robust sibling
+    /// of mDNS — survives multicast-filtering APs and missing mDNS
+    /// firewall exceptions). Carries the assigned ID, so «connect by
+    /// ID» resolves on plain LAN. Best-effort; turn off with
+    /// `--no-beacon`.
+    pub beacon_advertise: bool,
     /// Optional RFC 6238 secret for the second factor (base32, no
     /// padding). When set, viewers must present a valid TOTP code in
     /// addition to the unattended password. Generate via the Host tab
@@ -291,6 +297,7 @@ impl Default for AgentConfig {
             lock_input: false,
             privacy_mode: false,
             mdns_advertise: true,
+            beacon_advertise: true,
             totp_secret: None,
             record: false,
             record_dir: crate::config::data_root().join("OpacusR-Recordings"),

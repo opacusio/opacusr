@@ -2,6 +2,7 @@
 //! requests and consent, negotiates WebRTC/relay, and spawns
 //! [`SessionHost`]s. Optionally also listens for direct LAN sessions.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -83,6 +84,16 @@ pub struct AgentService {
     /// Auto-accept incoming sessions (unattended mode). When `false`, a
     /// consent callback is used.
     pub unattended: bool,
+    /// This agent's assigned ID, stored by the PRIMARY endpoint loop as
+    /// soon as its `Welcome` arrives. Read by the beacon task (the UDP
+    /// announcement carries it) and by `spawn_host` (the handshake
+    /// `Hello.host_id` tells the viewer whom it reached). `0` = not
+    /// registered yet.
+    pub my_id: Arc<AtomicU64>,
+    /// The live mDNS advertisement, when multicast worked at startup.
+    /// The primary endpoint loop calls `set_id` once its ID is known so
+    /// viewers can resolve «connect by ID» straight onto this host.
+    pub mdns: Option<Arc<crate::discovery::AdvertiseGuard>>,
 }
 
 impl AgentService {
@@ -130,17 +141,36 @@ impl AgentService {
             }
         }
 
-        // LAN discovery (Phase 3): announce the signaling endpoint over
-        // mDNS while running. Best-effort — no multicast, no problem.
-        // When `allow_lan` is set the advertisement also carries the
-        // direct-LAN `lan` port, so viewers on this network can connect
-        // to `ip:port` without any signaling server.
-        let _mdns_guard = if self.cfg.mdns_advertise {
+        // LAN discovery, two channels (both best-effort):
+        // * mDNS — fine-grained, but multicast (blocked by some Wi-Fi
+        //   APs and by Windows Firewall for unknown executables);
+        // * UDP subnet broadcast beacon — survives both. Carries the
+        //   assigned ID as soon as the primary endpoint mints it, so
+        //   «connect by ID» resolves on plain LAN without any server
+        //   URL typed anywhere.
+        let my_id = Arc::new(AtomicU64::new(0));
+        if self.cfg.beacon_advertise {
+            let signal_port = if self.cfg.signal_listen {
+                self.cfg.signal_listen_port
+            } else {
+                0
+            };
+            crate::beacon::spawn(
+                my_id.clone(),
+                self.cfg.name.clone(),
+                signal_port,
+                self.cfg.allow_lan.then_some(self.cfg.lan_port),
+                shutdown.clone(),
+            );
+        }
+        let mdns = if self.cfg.mdns_advertise {
             crate::discovery::advertise(
                 &self.cfg.name,
                 self.cfg.signal_listen_port,
                 self.cfg.allow_lan.then_some(self.cfg.lan_port),
+                None,
             )
+            .map(Arc::new)
         } else {
             None
         };
@@ -153,6 +183,8 @@ impl AgentService {
                 events: self.events.clone(),
                 demo: self.demo,
                 unattended: self.unattended,
+                my_id: my_id.clone(),
+                mdns: mdns.clone(),
             };
             let consent = consent.clone();
             let gate = gate.clone();
@@ -331,6 +363,14 @@ impl AgentService {
                     // (password included). set_last_peer_id re-reads the
                     // file and touches that one field.
                     crate::config::AgentConfig::set_last_peer_id(w.id);
+                    // Publish to the discovery channels: the UDP beacon
+                    // starts carrying the ID and the mDNS TXT gains the
+                    // `id` record — viewers can now resolve «connect by
+                    // ID» straight onto this host's endpoints.
+                    self.my_id.store(w.id, Ordering::Relaxed);
+                    if let Some(mdns) = &self.mdns {
+                        mdns.set_id(w.id);
+                    }
                 }
                 let _ = self.events.send(AgentEvent::Registered {
                     id: w.id,
@@ -629,6 +669,16 @@ impl AgentService {
             // an empty password must never become the session secret.
             password: self.cfg.effective_password(),
             display_name: self.cfg.name.clone(),
+            // The handshake `Hello.host_id` — the viewer verifies it
+            // dialed the right machine on direct-LAN attempts and
+            // remembers `ID → ip:port` for reconnects. `None` until the
+            // primary endpoint has minted one (session requests can
+            // only arrive after registration, so this is always set by
+            // the time a session starts — keep the guard anyway).
+            host_id: {
+                let id = self.my_id.load(Ordering::Relaxed);
+                (id != 0).then_some(id)
+            },
             fps: self.cfg.fps,
             jpeg_quality: self.cfg.jpeg_quality,
             scale_percent: self.cfg.scale_percent,

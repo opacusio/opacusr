@@ -231,6 +231,17 @@ fn session_toolbar(ui: &mut egui::Ui, s: &mut SessionHandle, cfg: &mut AgentConf
         {
             set_chromeless(s, true);
         }
+        // Disconnect — lives here since the desktop lost its egui top
+        // bar (the native title row is the only header now); the flag
+        // is picked up by App::update right after session_ui returns.
+        // Ctrl+Shift+D still works.
+        if ui
+            .button("⏹")
+            .on_hover_text("Отключиться (Ctrl+Shift+D)")
+            .clicked()
+        {
+            s.disconnect_requested = true;
+        }
         // Phones have no hardware keyboard — summon the soft one
         // for chat/terminal/typing into the remote screen.
         #[cfg(target_os = "android")]

@@ -13,6 +13,7 @@ use opacusr_client::session::{
 };
 use opacusr_proto::message::CodecId;
 use opacusr_proto::PeerId;
+use opacusr_transport::TransportError;
 
 use crate::{contacts, home, host_panel, settings, spawn_runtime, theme, view};
 
@@ -123,6 +124,12 @@ pub struct SessionHandle {
     /// Per-session frame counter for the periodic sticky-immersive
     /// reassert on Android (bars sometimes reappear after focus gain).
     pub(crate) sysui_tick: u32,
+    /// Set by the session-toolbar «⏹» — `App::update` polls it after
+    /// `session_ui` and tears the session down. The desktop has no
+    /// top-bar «⏹ Отключиться» anymore (the egui header row was merged
+    /// away: the native title row is the only chrome), so the toolbar
+    /// carries the disconnect instead; Ctrl+Shift+D still works.
+    pub disconnect_requested: bool,
 }
 
 impl SessionHandle {
@@ -173,6 +180,7 @@ impl SessionHandle {
             stats_win: std::collections::VecDeque::new(),
             quality_tier: None,
             quality_params: None,
+            disconnect_requested: false,
             quality_adaptive: false,
             cursor_shapes: std::collections::HashMap::new(),
             cursor_pos: None,
@@ -473,6 +481,26 @@ impl App {
             app.tray_action_rx = Some(rx);
         }
 
+        // Seed the beacon self-filter from the persisted ID: until the
+        // first `Registered` event arrives, the looped-back own agent
+        // would otherwise be listed as a foreign host.
+        if let Some(id) = app.config.last_peer_id {
+            app.discovery
+                .own_id
+                .store(id, std::sync::atomic::Ordering::Relaxed);
+        }
+
+        // Firewall exceptions for a non-MSI install (zip / portable):
+        // without them Windows silently drops inbound mDNS answers and
+        // UDP beacons — LAN discovery finds nothing and «connect by
+        // ID» degrades to the loopback server. Best-effort in a
+        // background thread (netsh needs admin; it just fails quietly).
+        #[cfg(windows)]
+        std::thread::Builder::new()
+            .name("opacusr-fw".into())
+            .spawn(crate::service_ctl::ensure_firewall_rules)
+            .ok();
+
         // TeamViewer model: the agent starts with the app unless the
         // user turned the autostart off (Настройки → Хост) — or the
         // Windows service is already hosting (see above).
@@ -718,10 +746,22 @@ impl App {
                     return;
                 }
             };
-            // Connection ladder over the configured signaling endpoints:
-            // the agent may register on several (fan-out — see
-            // docs/serverless.md), so the viewer tries each URL in order
-            // and the first endpoint that completes the handshake wins.
+            // Route plan for «connect by ID». In zero-infra mode every
+            // peer registers with its OWN signaling server, so the
+            // viewer must find THAT server — or better, skip signaling
+            // entirely and dial the host's direct-LAN listener. Routes
+            // in order:
+            //   1. direct `ip:port` targets learned for this exact ID
+            //      (remembered sessions, UDP beacons, mDNS `id` TXT);
+            //   2. signaling endpoints of hosts discovered on this
+            //      network (their registry may know the ID);
+            //   3. the configured endpoints + this machine's own server.
+            // Each route is time-limited; the first handshake wins. The
+            // handshake also VERIFIES direct dials: the address is only
+            // accepted when the host reports the dialed ID (or no ID at
+            // all — an older build), so a stale history entry pointing
+            // at another machine can never start a wrong session.
+            let mut direct: Vec<String> = self.book.lan_hosts_for(&host_id.to_string());
             let mut urls = if self.config.signaling_urls.is_empty() {
                 vec![self.server_url.clone()]
             } else {
@@ -731,40 +771,62 @@ impl App {
                 }
                 u
             };
-            // mDNS-discovered LAN signaling endpoints join the ladder
+            // mDNS + UDP-broadcast discovered hosts join the ladder
             // automatically: on one Wi-Fi the plain 9-digit ID then works
             // even when BOTH devices keep their loopback defaults — each
             // discovered endpoint carries its own registry, and the one
-            // that knows the ID completes the handshake. No manual
-            // «укажите адрес сервера» step anymore.
+            // that knows the ID completes the handshake. A beacon/mDNS
+            // entry that carries the dialed ID also donates its
+            // direct-LAN target, tried before any signaling.
             for host in self.discovery.snapshot() {
-                if !urls.contains(&host.signal_url) {
-                    urls.push(host.signal_url);
+                if host.peer_id == Some(host_id) {
+                    if let Some(target) = &host.lan_target {
+                        if !direct.contains(target) {
+                            direct.push(target.clone());
+                        }
+                    }
+                }
+                if let Some(url) = &host.signal_url {
+                    if !urls.contains(url) {
+                        urls.push(url.clone());
+                    }
                 }
             }
             urls.dedup();
+
+            enum Route {
+                /// Direct-LAN `ip:port` — no signaling, validated against
+                /// the host's handshake-reported ID.
+                Direct(String),
+                /// A signaling endpoint; its registry resolves the ID.
+                Signal(String),
+            }
+            let mut routes: Vec<Route> = direct.into_iter().map(Route::Direct).collect();
+            routes.extend(urls.into_iter().map(Route::Signal));
+            let total = routes.len();
             let choice = self.transport_choice;
             let turn_api = self.config.turn_api;
-            self.status_message = format!(
-                "Запрос сессии к хосту {host_id} через {} сервер(ов)…",
-                urls.len()
-            );
+            self.status_message = format!("Поиск хоста {host_id}: проверяю {total} путь(ей)…");
             self.status_is_error = false;
             self.rt.spawn(async move {
                 let mut cmd_rx = Some(cmd_rx);
-                let mut last_err = String::from("no endpoints configured");
-                for (i, url) in urls.iter().enumerate() {
+                let mut last_err = String::from("no routes available");
+                for (i, route) in routes.iter().enumerate() {
+                    let (target, direct) = match route {
+                        Route::Direct(addr) => (addr.clone(), true),
+                        Route::Signal(url) => (url.clone(), false),
+                    };
                     let _ = ui_events_tx.send(ClientEvent::Notice(format!(
-                        "endpoint {}/{}: {url}",
-                        i + 1,
-                        urls.len()
+                        "путь {}/{total}: {target}",
+                        i + 1
                     )));
                     // Time-limited TURN credentials from THIS endpoint's
                     // `GET /turn` (coturn REST API), when it mints them;
                     // any failure just leaves the STUN-only configuration.
+                    // Direct dials never need TURN.
                     let mut turn = None;
-                    if turn_api {
-                        if let Some(endpoint) = opacusr_transport::turn::turn_endpoint_of(url) {
+                    if turn_api && !direct {
+                        if let Some(endpoint) = opacusr_transport::turn::turn_endpoint_of(&target) {
                             let fetched = tokio::task::spawn_blocking(move || {
                                 opacusr_transport::turn::fetch_turn_credentials(&endpoint)
                             })
@@ -776,13 +838,47 @@ impl App {
                         }
                     }
                     let settings = make_settings(turn);
-                    match tokio::time::timeout(
-                        std::time::Duration::from_secs(25),
-                        SessionClient::connect_via_server(url, host_id, settings, choice),
-                    )
-                    .await
-                    {
+                    type ConnectOk = (
+                        SessionClient,
+                        tokio::sync::mpsc::UnboundedReceiver<ClientEvent>,
+                    );
+                    let attempt: std::pin::Pin<
+                        Box<
+                            dyn std::future::Future<Output = Result<ConnectOk, TransportError>>
+                                + Send,
+                        >,
+                    > = if direct {
+                        Box::pin(SessionClient::connect_direct(&target, settings))
+                    } else {
+                        Box::pin(SessionClient::connect_via_server(
+                            &target, host_id, settings, choice,
+                        ))
+                    };
+                    match tokio::time::timeout(std::time::Duration::from_secs(25), attempt).await {
                         Ok(Ok((client, mut events))) => {
+                            // Direct dials are validated against the ID
+                            // the host reports in its handshake: another
+                            // machine may hold the same address today
+                            // (DHCP churn, a stale history entry). A
+                            // host that reports no ID (older build) is
+                            // accepted as-is.
+                            if direct {
+                                if let Some(hid) = client.host_id {
+                                    if hid != host_id {
+                                        last_err = format!("{target}: другой узел (id {hid})");
+                                        let _ = ui_events_tx.send(ClientEvent::Notice(
+                                            "по этому адресу другой узел, пробую следующий путь…"
+                                                .into(),
+                                        ));
+                                        continue;
+                                    }
+                                    let _ = ui_events_tx.send(ClientEvent::SessionRoute {
+                                        peer_id: host_id.to_string(),
+                                        target: target.clone(),
+                                        direct: true,
+                                    });
+                                }
+                            }
                             ctx.request_repaint();
                             if let Some(cmd_rx) = cmd_rx.take() {
                                 let run_task = tokio::spawn(client.run(cmd_rx));
@@ -792,15 +888,15 @@ impl App {
                             return;
                         }
                         Ok(Err(e)) => {
-                            last_err = format!("{url}: {e}");
+                            last_err = format!("{target}: {e}");
                             let _ = ui_events_tx.send(ClientEvent::Notice(
-                                "endpoint failed, trying the next one…".into(),
+                                "путь не сработал, пробую следующий…".into(),
                             ));
                         }
                         Err(_) => {
-                            last_err = format!("{url}: timed out");
+                            last_err = format!("{target}: timed out");
                             let _ = ui_events_tx.send(ClientEvent::Notice(
-                                "endpoint timed out, trying the next one…".into(),
+                                "путь не ответил, пробую следующий…".into(),
                             ));
                         }
                     }
@@ -913,6 +1009,8 @@ impl App {
             events: tx,
             demo: false,
             unattended,
+            my_id: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            mdns: None,
         };
         self.rt.spawn(async move {
             let consent = move |id: PeerId, name: &str, _platform| -> SessionDecision {
@@ -1126,6 +1224,12 @@ impl eframe::App for App {
                 match ev {
                     AgentEvent::Registered { id, .. } => {
                         h.my_id = Some(id);
+                        // Publish to discovery: beacons carrying this ID
+                        // are the machine's own agent looped back over
+                        // broadcast — the listener must skip them.
+                        self.discovery
+                            .own_id
+                            .store(id, std::sync::atomic::Ordering::Relaxed);
                         // Persist the server-assigned ID so the home
                         // card can keep showing it while offline.
                         if self.config.last_peer_id != Some(id) {
@@ -1159,6 +1263,21 @@ impl eframe::App for App {
             crate::TryPoll::poll_all(&mut sess.events, |ev| sess_evs.push(ev));
         }
         for ev in sess_evs {
+            // Route learning touches only the address book — do it
+            // before the session borrow so it survives even if the
+            // session is dropped right away.
+            if let ClientEvent::SessionRoute {
+                peer_id,
+                target,
+                direct,
+            } = &ev
+            {
+                if *direct {
+                    self.book.learn_lan_host(peer_id, target.clone());
+                    let _ = self.book.save();
+                }
+                continue;
+            }
             let Some(sess) = &mut self.session else {
                 return;
             };
@@ -1375,6 +1494,10 @@ impl eframe::App for App {
                     sess.quality_tier = if enabled { Some(tier) } else { None };
                     sess.quality_params = Some((fps, jpeg_quality, scale_percent));
                 }
+                ClientEvent::SessionRoute { .. } => {
+                    // Handled before the session borrow (the address
+                    // book must survive a dropped session).
+                }
                 ClientEvent::Notice(t) => sess.status = t,
                 ClientEvent::Closed(reason) => {
                     sess.status = format!("closed: {reason}");
@@ -1490,8 +1613,17 @@ impl eframe::App for App {
             }
         }
 
-        // ---- top bar (TeamViewer-style toolbar: logo left, window
-        // opener icons right; no settings on the home screen itself) ----
+        // ---- Android app bar. Desktop: the egui top bar is GONE — the
+        // native window title row (ghost + «OpacusR» + —/□/✕) is the
+        // only header now. The old layout showed the ghost and the
+        // tools twice (title row + this egui row — the user read the
+        // duplicated logo and its black tile as two separate bugs:
+        // «верхние строки дублируются» + «чёрное поле»). The drawer
+        // buttons and the version moved into the home actions row
+        // (home.rs); the session disconnect moved into the session
+        // toolbar (view.rs). Android keeps a real app bar: there is
+        // no native title row on a phone.
+        #[cfg(target_os = "android")]
         egui::TopBottomPanel::top("opacusr_top").show(ctx, |ui| {
             ui.add_space(6.0);
             ui.horizontal(|ui| {
@@ -1571,8 +1703,13 @@ impl eframe::App for App {
         #[cfg(any(windows, target_os = "macos"))]
         self.auto_show_for_consent(ctx);
 
-        if let Some(session) = self.session.as_mut() {
+        if self.session.is_some() {
+            let session = self.session.as_mut().expect("checked above");
             view::session_ui(ctx, session, &mut self.config);
+            let disconnect = std::mem::take(&mut session.disconnect_requested);
+            if disconnect {
+                self.disconnect_clicked();
+            }
             return;
         }
 
@@ -1591,8 +1728,10 @@ impl App {
 }
 
 /// Top-bar drawer button: the label turns violet while its drawer is
-/// open, mirroring the panel state on the button itself.
-fn tool_button(ui: &mut egui::Ui, label: &str, open: bool) -> egui::Response {
+/// open, mirroring the panel state on the button itself. Also used by
+/// the home actions row (home.rs) after the desktop top bar merged
+/// away.
+pub(crate) fn tool_button(ui: &mut egui::Ui, label: &str, open: bool) -> egui::Response {
     let text = if open {
         egui::RichText::new(label).color(theme::ACCENT)
     } else {

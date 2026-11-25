@@ -43,6 +43,8 @@ pub async fn viewer_handshake(
             platform: opacusr_proto::Platform::current(),
             display_name: display_name.into(),
             is_agent: false,
+            // Only hosts carry an assigned ID.
+            host_id: None,
         };
         session.send_msg(&Message::Hello(hello)).await?;
 
@@ -123,6 +125,11 @@ pub struct HostAuth {
 /// the session outright (no unattended password configured; an empty
 /// string is *not* accepted either — pass `None` when nothing is set).
 ///
+/// `host_id: Option<PeerId>` — this host's assigned 9-digit ID, sent to
+/// the viewer inside the `Hello` (new field; older viewers ignore it).
+/// It lets the viewer verify it dialed the right machine on direct-LAN
+/// attempts and remember `ID → ip:port` for reconnects.
+///
 /// `gate: Option<&AuthGate>` — shared auth-failure limiter. When set, the
 /// handshake is refused before any challenge material is sent while the
 /// gate is locked, and wrong proofs are recorded (a wrong proof is the
@@ -137,6 +144,7 @@ pub async fn host_handshake(
     password: Option<&str>,
     totp_secret: Option<&str>,
     display_name: &str,
+    host_id: Option<opacusr_proto::PeerId>,
     gate: Option<&AuthGate>,
 ) -> std::result::Result<HostAuth, TransportError> {
     tokio::time::timeout(HANDSHAKE_TIMEOUT, async {
@@ -192,6 +200,7 @@ pub async fn host_handshake(
             platform: opacusr_proto::Platform::current(),
             display_name: display_name.into(),
             is_agent: true,
+            host_id,
         };
         session.send_msg(&Message::Hello(hello)).await?;
 

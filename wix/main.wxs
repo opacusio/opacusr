@@ -1,6 +1,6 @@
 <?xml version='1.0' encoding='utf-8'?>
 <?ifndef MsiVersion ?>
-<?define MsiVersion = "0.12.1" ?>
+<?define MsiVersion = "0.13.1" ?>
 <?endif?>
 <!--
   OpacusR Windows MSI (WiX Toolset v3.11 — the same version the Release

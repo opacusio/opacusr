@@ -28,9 +28,42 @@ const STACK_BELOW: f32 = 860.0;
 const CARD_W: f32 = 400.0;
 
 /// The main layout: the connect card and the history list, both always
-/// visible — the window opens straight onto the history.
+/// visible — the window opens straight onto the history. Desktop: the
+/// egui top bar is merged away (the native title row is the only
+/// header — the ghost/tools were shown twice before), so the drawer
+/// buttons + version live in a right-aligned actions row above the
+/// cards. Android keeps its app bar and needs no actions row.
 pub fn home_ui(ctx: &egui::Context, app: &mut App) {
     egui::CentralPanel::default().show(ctx, |ui| {
+        #[cfg(not(target_os = "android"))]
+        {
+            ui.horizontal(|ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    // Build marker: lets the user (and support) see which
+                    // binary actually runs — e.g. after an MSI upgrade
+                    // that left an old copy around.
+                    ui.label(
+                        egui::RichText::new(concat!("v", env!("CARGO_PKG_VERSION")))
+                            .weak()
+                            .small(),
+                    );
+                    if crate::app::tool_button(ui, "⚙ Настройки", app.show_settings)
+                        .on_hover_text("Настройки — боковая панель")
+                        .clicked()
+                    {
+                        app.toggle_drawer(crate::app::ToolDrawer::Settings);
+                    }
+                    if crate::app::tool_button(ui, "👥 Контакты", app.show_contacts)
+                        .on_hover_text("Контакты и устройства в сети (AnyDesk-стиль)")
+                        .clicked()
+                    {
+                        app.toggle_drawer(crate::app::ToolDrawer::Contacts);
+                    }
+                });
+            });
+            ui.add_space(2.0);
+        }
+
         if ui.available_width() >= STACK_BELOW {
             // Wide: card top-left, the history fills the rest.
             ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP), |ui| {
@@ -466,6 +499,11 @@ fn history_card(ui: &mut Ui, app: &mut App) {
         // left-to-right layout (header and rows on one line).
         ui.vertical(|ui| {
             ui.set_min_width(ui.available_width());
+            // Cap the card at the window height: a Frame grows with its
+            // content, so without the cap a long history would push the
+            // card past the window bottom and the inner ScrollArea (its
+            // allocation grows along) never actually scrolled.
+            ui.set_max_height(ui.available_height());
             history_header(ui, app);
             ui.add_space(4.0);
 

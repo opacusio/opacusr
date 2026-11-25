@@ -70,6 +70,45 @@ pub fn agent_exe_path() -> Option<PathBuf> {
     agent.is_file().then_some(agent)
 }
 
+/// Best-effort inbound firewall exception for the GUI binary (TCP +
+/// UDP, every profile). The MSI authors the same rules, but a zip/CLI
+/// install leaves `opacusr.exe` firewall-blind: Windows silently drops
+/// inbound mDNS answers and UDP beacons, so LAN discovery finds
+/// nothing and «connect by ID» degrades to the loopback server. Runs
+/// at GUI startup; without admin rights `netsh` simply fails and the
+/// app continues (the MSI path is unaffected).
+#[cfg(windows)]
+pub fn ensure_firewall_rules() {
+    let exe = match std::env::current_exe() {
+        Ok(p) => p.to_string_lossy().into_owned(),
+        Err(_) => return,
+    };
+    let _ = std::process::Command::new("netsh")
+        .args(["advfirewall", "firewall", "delete", "rule", "name=OpacusR"])
+        .status();
+    for proto in ["tcp", "udp"] {
+        let _ = std::process::Command::new("netsh")
+            .args([
+                "advfirewall",
+                "firewall",
+                "add",
+                "rule",
+                "name=OpacusR",
+                "dir=in",
+                "action=allow",
+                "enable=yes",
+                "profile=any",
+            ])
+            .arg(format!("program={exe}"))
+            .arg(format!("protocol={proto}"))
+            .status();
+    }
+}
+
+/// Non-Windows builds have nothing to do (no firewall rules needed).
+#[cfg(not(windows))]
+pub fn ensure_firewall_rules() {}
+
 /// Install the service with a UAC prompt: launches the elevated
 /// `opacusr-agent.exe service install`, which registers the auto-start
 /// service and starts it immediately. Blocks until the elevated process

@@ -42,6 +42,10 @@ enum Cmd {
         /// Disable mDNS LAN discovery (overrides config `mdns_advertise`).
         #[arg(long)]
         no_mdns: bool,
+        /// Disable the UDP-broadcast LAN beacon (overrides config
+        /// `beacon_advertise`).
+        #[arg(long)]
+        no_beacon: bool,
         /// Lock this machine's keyboard/mouse while a viewer has full
         /// control (overrides config; view-only sessions never lock).
         #[arg(long)]
@@ -157,6 +161,7 @@ async fn main() -> anyhow::Result<()> {
             signal_listen,
             capture,
             no_mdns,
+            no_beacon,
             lock_input,
             privacy,
             record,
@@ -171,6 +176,7 @@ async fn main() -> anyhow::Result<()> {
                 signal_listen,
                 capture,
                 no_mdns,
+                no_beacon,
                 lock_input,
                 privacy,
                 record,
@@ -194,8 +200,8 @@ async fn main() -> anyhow::Result<()> {
                     // console session: run the plain agent (config-only).
                     eprintln!("OpacusR agent (service session instance)");
                     run(
-                        None, None, false, false, false, None, false, false, false, false, None,
-                        None,
+                        None, None, false, false, false, None, false, false, false, false, false,
+                        None, None,
                     )
                     .await
                 } else {
@@ -226,6 +232,7 @@ async fn run(
     signal_listen: bool,
     capture: Option<String>,
     no_mdns: bool,
+    no_beacon: bool,
     lock_input: bool,
     privacy: bool,
     record: bool,
@@ -241,6 +248,9 @@ async fn run(
     }
     if no_mdns {
         cfg.mdns_advertise = false;
+    }
+    if no_beacon {
+        cfg.beacon_advertise = false;
     }
     if lock_input {
         cfg.lock_input = true;
@@ -318,6 +328,8 @@ async fn run(
         events: tx,
         demo,
         unattended,
+        my_id: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        mdns: None,
     };
 
     // Console UI: event log.
@@ -391,6 +403,8 @@ async fn run(
                 events: mpsc::unbounded_channel().0,
                 demo,
                 unattended: true, // LAN still requires the password
+                my_id: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+                mdns: None,
             };
             lan_service
                 .serve_lan(cfg.lan_port, shutdown_rx.clone())
@@ -559,6 +573,11 @@ fn config_info() -> anyhow::Result<()> {
     println!(
         "mdns:        {}",
         if cfg.mdns_advertise { "on" } else { "off" }
+    );
+    println!(
+        "beacon:      {} (udp {})",
+        if cfg.beacon_advertise { "on" } else { "off" },
+        opacusr_proto::beacon::BEACON_PORT
     );
     println!(
         "lan:         {} (port {})",

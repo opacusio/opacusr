@@ -8,6 +8,7 @@
 //! The protocol is intentionally simple: `serde` + `bincode`, explicit
 //! versioning via [`PROTO_VERSION`], and small fixed-size crypto fields.
 
+pub mod beacon;
 pub mod discovery;
 pub mod framing;
 pub mod message;

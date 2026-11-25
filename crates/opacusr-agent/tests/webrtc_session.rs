@@ -68,6 +68,8 @@ async fn full_session_over_webrtc_via_signaling() {
         events: ev_tx,
         demo: true,
         unattended: true,
+        my_id: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        mdns: None,
     };
     tokio::spawn(svc.run(|_, _, _| SessionDecision::Full, shutdown_rx));
 

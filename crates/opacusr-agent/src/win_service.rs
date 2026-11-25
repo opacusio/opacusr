@@ -271,6 +271,54 @@ mod imp {
     use anyhow::{bail, Context};
     use std::ffi::OsString;
     use std::time::Duration;
+
+    /// Best-effort inbound firewall exceptions for `exe` (TCP + UDP,
+    /// every profile). Program-scoped — any port the app opens is
+    /// covered, exactly like the MSI-authored rules. `netsh` needs an
+    /// elevated shell; a failure is logged and otherwise ignored.
+    pub(crate) fn ensure_firewall_rules(exe: &str) {
+        // Refresh: re-adding an existing name duplicates the rule, so
+        // delete ours first (a missing rule deletes "successfully").
+        let _ = std::process::Command::new("netsh")
+            .args([
+                "advfirewall",
+                "firewall",
+                "delete",
+                "rule",
+                "name=OpacusR Agent",
+            ])
+            .status();
+        for proto in ["tcp", "udp"] {
+            let ok = std::process::Command::new("netsh")
+                .args([
+                    "advfirewall",
+                    "firewall",
+                    "add",
+                    "rule",
+                    "name=OpacusR Agent",
+                    "dir=in",
+                    "action=allow",
+                    "enable=yes",
+                    "profile=any",
+                ])
+                .arg(format!("program={exe}"))
+                .arg(format!("protocol={proto}"))
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
+            if ok {
+                svc_log(&format!(
+                    "firewall: inbound {proto} exception added for {exe}"
+                ));
+            } else {
+                svc_log(&format!(
+                    "firewall: could not add the inbound {proto} exception (needs admin); \
+                     LAN discovery/sessions may be blocked"
+                ));
+            }
+        }
+    }
+
     use windows::core::{PCWSTR, PWSTR};
     use windows::Win32::Foundation::{
         CloseHandle, ERROR_NO_TOKEN, HANDLE, WAIT_TIMEOUT, WIN32_ERROR,
@@ -691,6 +739,16 @@ mod imp {
         if set_ok == 0 {
             svc_log("warning: recovery actions not set (ChangeServiceConfig2W failed)");
         }
+
+        // Inbound firewall exceptions for the agent binary. The MSI
+        // authors the same exceptions (wix/main.wxs), but a CLI/zip
+        // install leaves the agent firewall-blind: Windows silently
+        // drops the first inbound packet from a phone — signaling,
+        // direct-LAN sessions, mDNS answers and the UDP beacon all die
+        // while everything on localhost works. Best-effort: without
+        // admin rights netsh fails and the installer moves on (the
+        // service itself still runs).
+        ensure_firewall_rules(&exe.to_string_lossy());
 
         // Start immediately: `service install` must leave the machine
         // reachable, not «after the next reboot» (TeamViewer behavior).

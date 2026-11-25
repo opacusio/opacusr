@@ -6,6 +6,7 @@
 //! types on connect.
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -80,9 +81,35 @@ pub struct HistoryEntry {
 pub struct AddressBook {
     contacts: Vec<Contact>,
     history: Vec<HistoryEntry>,
+    /// Learned `ID → direct-LAN target` map: whenever a session lands on
+    /// a host whose handshake reported its 9-digit ID at an `ip:port`
+    /// address, the pair is stored here. The next «connect by ID» tries
+    /// the remembered address FIRST — no signaling server, no discovery,
+    /// just the working TCP path from last time. Persisted so the map
+    /// survives app restarts (TOML table; keys are digits).
+    lan_hosts: HashMap<String, String>,
 }
 
 impl AddressBook {
+    /// Direct-LAN targets last seen serving THIS peer ID (most recent
+    /// learning first — the map keeps one target per ID, so at most one).
+    pub fn lan_hosts_for(&self, peer_id: &str) -> Vec<String> {
+        self.lan_hosts
+            .get(peer_id)
+            .map(|t| vec![t.clone()])
+            .unwrap_or_default()
+    }
+
+    /// Remember that `peer_id` answered at the direct-LAN `target`.
+    /// Never deletes: a stale address simply fails the next dial and
+    /// the signaling ladder takes over.
+    pub fn learn_lan_host(&mut self, peer_id: &str, target: String) {
+        if peer_id.is_empty() || target.is_empty() {
+            return;
+        }
+        self.lan_hosts.insert(peer_id.to_string(), target);
+    }
+
     /// Default storage path: `<config_dir>/opacusr/addressbook.toml`.
     /// The base is `$OPACUSR_CONFIG_DIR` when set (Android's internal
     /// files dir — `dirs::config_dir()` is `None` there and history/
@@ -377,6 +404,35 @@ mod tests {
         ));
         let _ = std::fs::remove_file(&p);
         p
+    }
+
+    #[test]
+    fn lan_hosts_learn_persist_and_lookup() {
+        let path = tmp_path("lanhosts");
+        let mut book = AddressBook::default();
+        assert!(book.lan_hosts_for("691721284").is_empty());
+        book.learn_lan_host("691721284", "192.168.2.26:54000".into());
+        // Re-learning the same ID overwrites (newest wins).
+        book.learn_lan_host("691721284", "192.168.2.99:54000".into());
+        book.learn_lan_host("", "10.0.0.1:54000".into()); // ignored
+        assert_eq!(
+            book.lan_hosts_for("691721284"),
+            vec!["192.168.2.99:54000".to_string()]
+        );
+        // Survives save/load.
+        book.save_to(&path).unwrap();
+        let reloaded = AddressBook::load_from(&path);
+        assert_eq!(
+            reloaded.lan_hosts_for("691721284"),
+            vec!["192.168.2.99:54000".to_string()]
+        );
+        // A book written without the table (older build) loads empty.
+        let legacy = "[[contacts]]\nid = \"1\"\nlabel = \"x\"\ntarget = \"1\"\n\n[[history]]\nts = 1\ntarget = \"1\"\n";
+        std::fs::write(&path, legacy).unwrap();
+        assert!(AddressBook::load_from(&path)
+            .lan_hosts_for("691721284")
+            .is_empty());
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

@@ -116,7 +116,7 @@ pub fn contacts_panel(ctx: &Context, app: &mut App) {
                                 .filter(|h| {
                                     q.is_empty()
                                         || h.label.to_lowercase().contains(&q)
-                                        || h.signal_url.to_lowercase().contains(&q)
+                                        || h.signal_url.as_deref().unwrap_or("").to_lowercase().contains(&q)
                                 })
                                 .collect();
                             section_header(ui, "Найденные в этой сети", hosts.len());
@@ -219,31 +219,63 @@ fn lan_row(ui: &mut Ui, app: &mut App, host: &crate::discovery::DiscoveredHost) 
             let resp = ui
                 .vertical(|ui| {
                     ui.label(egui::RichText::new(&host.label).strong());
-                    ui.label(theme::mono(host.signal_url.clone()).weak().small());
+                    let subtitle = match (&host.signal_url, &host.lan_target) {
+                        (Some(url), _) => url.clone(),
+                        (None, Some(t)) => t.clone(),
+                        (None, None) => String::new(),
+                    };
+                    if !subtitle.is_empty() {
+                        ui.label(theme::mono(subtitle).weak().small());
+                    }
+                    // The assigned ID when discovery knows it — a tap on
+                    // the row fills it too, so «connect by ID» starts
+                    // using the direct-first ladder immediately.
+                    if let Some(id) = host.peer_id {
+                        ui.label(theme::mono(id.to_string()).weak().small());
+                    }
                 })
                 .response;
             if resp.clicked() {
-                app.server_url = host.signal_url.clone();
+                if let Some(url) = &host.signal_url {
+                    app.server_url = url.clone();
+                }
                 if app.peer_id_input.trim().is_empty() {
-                    if let Some(target) = &host.lan_target {
-                        app.peer_id_input = target.clone();
+                    match &host.lan_target {
+                        Some(target) => app.peer_id_input = target.clone(),
+                        None => {
+                            if let Some(id) = host.peer_id {
+                                app.peer_id_input = id.to_string();
+                            }
+                        }
                     }
                 }
                 app.status_message = format!("Выбран найденный хост {}.", host.label);
             }
             if resp.double_clicked() {
-                app.server_url = host.signal_url.clone();
-                if let Some(target) = &host.lan_target {
-                    app.peer_id_input = target.clone();
+                if let Some(url) = &host.signal_url {
+                    app.server_url = url.clone();
+                }
+                // The ID is the best target: the connect ladder resolves
+                // it to direct-LAN + signaling routes automatically.
+                match (&host.peer_id, &host.lan_target) {
+                    (Some(id), _) => app.peer_id_input = id.to_string(),
+                    (None, Some(target)) => app.peer_id_input = target.clone(),
+                    (None, None) => {}
                 }
                 app.connect_clicked(Some(host.label.clone()));
             }
         });
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if ui.button("▶").on_hover_text("Подключиться").clicked() {
-                app.server_url = host.signal_url.clone();
-                if let Some(target) = &host.lan_target {
-                    app.peer_id_input = target.clone();
+                if let Some(url) = &host.signal_url {
+                    app.server_url = url.clone();
+                }
+                // Same preference as the double click: the ID wins —
+                // the ladder resolves it to direct + signaling routes.
+                match (&host.peer_id, &host.lan_target) {
+                    (Some(id), _) => app.peer_id_input = id.to_string(),
+                    (None, Some(target)) => app.peer_id_input = target.clone(),
+                    (None, None) => {}
                 }
                 app.connect_clicked(Some(host.label.clone()));
             }

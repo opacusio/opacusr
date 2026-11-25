@@ -4,6 +4,7 @@
 pub mod adaptive;
 #[cfg(feature = "audio")]
 pub mod audio;
+pub mod beacon;
 pub mod config;
 pub mod discovery;
 pub mod keychain;

@@ -114,6 +114,7 @@ async fn full_session_over_tcp() {
             record_dir: std::env::temp_dir(),
             tunnel: TunnelPolicy::Loopback,
             auth_gate: Some(Arc::new(AuthGate::new(AuthGateConfig::default()))),
+            host_id: None,
         };
         let session = SecureSession::new(Box::new(TcpTransport::from_stream(sock)), None);
         let injector = SharedInjector::new(host_input_log);
@@ -445,6 +446,7 @@ async fn totp_second_factor_is_enforced() {
                 record_dir: std::env::temp_dir(),
                 tunnel: TunnelPolicy::Off,
                 auth_gate: None,
+                host_id: None,
             };
             let (ev_tx, _ev_rx) = mpsc::unbounded_channel();
             let (_cmd_tx, cmd_rx) = mpsc::unbounded_channel();
@@ -545,6 +547,7 @@ async fn clipboard_image_garbage_is_dropped_gracefully() {
             record_dir: std::env::temp_dir(),
             tunnel: TunnelPolicy::Off,
             auth_gate: None,
+            host_id: None,
         };
         let (_cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let session = SecureSession::new(Box::new(TcpTransport::from_stream(sock)), None);
@@ -646,6 +649,7 @@ async fn session_recording_writes_mp4() {
             record_dir: dir_for_host,
             tunnel: TunnelPolicy::Off,
             auth_gate: None,
+            host_id: None,
         };
         let (ev_tx, mut ev_rx) = mpsc::unbounded_channel();
         let (_cmd_tx, cmd_rx) = mpsc::unbounded_channel();
@@ -796,6 +800,7 @@ async fn tcp_tunnel_echo_roundtrip() {
             record_dir: std::env::temp_dir(),
             tunnel: TunnelPolicy::Loopback,
             auth_gate: None,
+            host_id: None,
         };
         let (ev_tx, _ev_rx) = mpsc::unbounded_channel();
         let (_cmd_tx, cmd_rx) = mpsc::unbounded_channel();
@@ -948,6 +953,7 @@ async fn tunnel_refused_in_view_only() {
             record_dir: std::env::temp_dir(),
             tunnel: TunnelPolicy::Loopback,
             auth_gate: None,
+            host_id: None,
         };
         let (ev_tx, _ev_rx) = mpsc::unbounded_channel();
         let (_cmd_tx, cmd_rx) = mpsc::unbounded_channel();
@@ -1060,6 +1066,7 @@ async fn adaptive_tier_and_chunked_clipboard_over_tcp() {
             record_dir: std::env::temp_dir(),
             tunnel: TunnelPolicy::Off,
             auth_gate: None,
+            host_id: None,
         };
         let session = SecureSession::new(Box::new(TcpTransport::from_stream(sock)), None);
         SessionHost {

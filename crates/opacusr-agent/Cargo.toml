@@ -23,6 +23,7 @@ opacusr-capture = { workspace = true }
 opacusr-codec = { workspace = true }
 opacusr-input = { workspace = true }
 tokio = { workspace = true }
+if-addrs = "0.14"
 futures = { workspace = true }
 async-trait = { workspace = true }
 anyhow = { workspace = true }

@@ -1,18 +1,25 @@
-//! mDNS browser for the viewer: watches `_opacusr._tcp.local.` on a
-//! background thread and keeps a deduplicated snapshot of the OpacusR
-//! hosts on this network.
+//! LAN discovery for the viewer: mDNS browsing **plus** a UDP-broadcast
+//! beacon listener (see `opacusr_proto::beacon`), both feeding one
+//! deduplicated snapshot of the OpacusR hosts on this network.
 //!
-//! The thread is best-effort, like the agent's advertiser: no multicast
-//! socket or no daemon simply means an empty list. Hosts running a
-//! foreign protocol version are filtered out — their entries would only
-//! produce handshake failures (see `PROTO_VERSION`).
+//! Two channels on purpose: mDNS rides on IP multicast, which is exactly
+//! what cheap Wi-Fi APs filter and what Windows Firewall blocks for
+//! unknown executables; plain subnet broadcast survives both. Either
+//! channel alone is enough — the snapshot merges whatever arrives.
+//!
+//! Both threads are best-effort, like the agent's advertisers: no
+//! multicast socket or no daemon simply means an empty list. Hosts
+//! running a foreign protocol version are filtered out — their entries
+//! would only produce handshake failures (see `PROTO_VERSION`).
 
 use std::collections::HashMap;
 use std::net::IpAddr;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
+use opacusr_proto::beacon;
 use opacusr_proto::discovery;
 
 /// How long an unrefreshed entry stays listed after the last
@@ -22,20 +29,32 @@ const HOST_TTL: Duration = Duration::from_secs(60);
 /// One discovered host, as the connect tab shows it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DiscoveredHost {
-    /// Full mDNS name (dedup key), e.g. `officepc._opacusr._tcp.local.`.
+    /// Full mDNS name (dedup key), e.g. `officepc._opacusr._tcp.local.`;
+    /// beacon entries use a synthetic `beacon://<ip>/<id>` key.
     pub fullname: String,
-    /// Human label: the instance part of `fullname`.
+    /// Human label: the instance part of `fullname`, or the beacon's
+    /// display name.
     pub label: String,
-    /// Signaling endpoint: `ws://<ip>:<port><path>`.
-    pub signal_url: String,
+    /// Signaling endpoint: `ws://<ip>:<port><path>`; `None` when the
+    /// host runs no local signaling server (a beacon host with
+    /// `signal_port = 0` — only its direct-LAN target is usable).
+    pub signal_url: Option<String>,
     /// Direct-LAN target `ip:port` when the host accepts LAN sessions.
     pub lan_target: Option<String>,
+    /// The host's assigned 9-digit ID when known — from the mDNS `id`
+    /// TXT record or the beacon payload. The connect ladder uses it to
+    /// resolve «connect by ID» straight onto this host's endpoints.
+    pub peer_id: Option<u64>,
 }
 
 /// Background browser with a polled snapshot. Kept alive by the app for
 /// the whole session; dropping it stops the daemon.
 pub struct Discovery {
     hosts: Arc<Mutex<HashMap<String, (DiscoveredHost, Instant)>>>,
+    /// This app's own ID: beacons carrying it are the machine's own
+    /// agent looped back over broadcast — skip them so the host never
+    /// lists itself. Written by the UI when the ID becomes known.
+    pub own_id: Arc<AtomicU64>,
     _daemon: Option<ServiceDaemon>,
 }
 
@@ -44,12 +63,15 @@ impl Discovery {
     pub fn start() -> Self {
         let hosts: Arc<Mutex<HashMap<String, (DiscoveredHost, Instant)>>> =
             Arc::new(Mutex::new(HashMap::new()));
+        let own_id = Arc::new(AtomicU64::new(0));
         let daemon = match ServiceDaemon::new() {
             Ok(d) => d,
             Err(e) => {
                 tracing::debug!(target: "opacusr", "mDNS discovery unavailable: {e}");
+                start_beacon_listener(hosts.clone(), own_id.clone());
                 return Self {
                     hosts,
+                    own_id,
                     _daemon: None,
                 };
             }
@@ -68,8 +90,10 @@ impl Discovery {
                 tracing::debug!(target: "opacusr", "mDNS browse failed: {e}");
             }
         }
+        start_beacon_listener(hosts.clone(), own_id.clone());
         Self {
             hosts,
+            own_id,
             _daemon: Some(daemon),
         }
     }
@@ -78,11 +102,91 @@ impl Discovery {
     /// sorted case-insensitively by label.
     pub fn snapshot(&self) -> Vec<DiscoveredHost> {
         let mut hosts = self.hosts.lock().unwrap();
-        hosts.retain(|_, (_, seen)| seen.elapsed() < HOST_TTL);
+        hosts.retain(|key, (_, seen)| {
+            if key.starts_with("beacon://") {
+                seen.elapsed() < beacon::BEACON_TTL
+            } else {
+                seen.elapsed() < HOST_TTL
+            }
+        });
         let mut out: Vec<DiscoveredHost> = hosts.values().map(|(h, _)| h.clone()).collect();
         out.sort_by_key(|h| h.label.to_lowercase());
         out
     }
+}
+
+/// Bind the UDP beacon listener and spawn its thread. Best-effort: a
+/// bound socket on the shared discovery port may fail (another OpacusR
+/// instance already holds it — with SO_REUSEADDR this is rare; on some
+/// Android builds the port is restricted), and losing one channel never
+/// blocks the other.
+fn start_beacon_listener(
+    store: Arc<Mutex<HashMap<String, (DiscoveredHost, Instant)>>>,
+    own_id: Arc<AtomicU64>,
+) {
+    let spawned = std::thread::Builder::new()
+        .name("opacusr-beacon".into())
+        .spawn(move || {
+            let socket = std::net::UdpSocket::bind(("0.0.0.0", beacon::BEACON_PORT));
+            let socket = match socket {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::debug!(target: "opacusr",
+                        "beacon listener unavailable on udp {}: {e}",
+                        beacon::BEACON_PORT);
+                    return;
+                }
+            };
+            let mut buf = [0u8; 256];
+            loop {
+                match socket.recv_from(&mut buf) {
+                    Ok((n, src)) => {
+                        if let Some(host) = beacon_host(&buf[..n], src.ip()) {
+                            // The machine's own agent looped back over
+                            // broadcast — never list ourselves.
+                            if host.peer_id != Some(own_id.load(Ordering::Relaxed)) {
+                                store
+                                    .lock()
+                                    .unwrap()
+                                    .insert(host.fullname.clone(), (host, Instant::now()));
+                            }
+                        }
+                    }
+                    Err(_) => return,
+                }
+            }
+        });
+    if spawned.is_err() {
+        tracing::debug!(target: "opacusr", "beacon listener thread failed to spawn");
+    }
+}
+
+/// Build a [`DiscoveredHost`] from a received beacon packet. `None` for
+/// foreign-protocol or unregistered senders.
+fn beacon_host(buf: &[u8], src: IpAddr) -> Option<DiscoveredHost> {
+    let b = beacon::parse(buf)?;
+    if b.proto != opacusr_proto::PROTO_VERSION || b.peer_id == 0 {
+        return None;
+    }
+    let ip_str = host_str(src);
+    let label = if b.name.trim().is_empty() {
+        b.peer_id.to_string()
+    } else {
+        b.name.trim().to_string()
+    };
+    let host = DiscoveredHost {
+        fullname: format!("beacon://{ip_str}/{}", b.peer_id),
+        label,
+        signal_url: (b.signal_port != 0)
+            .then(|| discovery::signal_url(src, b.signal_port, "/signal")),
+        lan_target: (b.lan_port != 0).then(|| format!("{ip_str}:{}", b.lan_port)),
+        peer_id: Some(b.peer_id),
+    };
+    // A beacon with neither endpoint usable carries no resolution at all.
+    if host.signal_url.is_none() && host.lan_target.is_none() {
+        return None;
+    }
+    Some(host)
 }
 
 /// Long-lived browse loop: resolve events refresh entries, removal
@@ -147,8 +251,9 @@ fn host_from_parts(
     Some(DiscoveredHost {
         fullname: fullname.to_string(),
         label,
-        signal_url: discovery::signal_url(ip, port, &txt.path),
+        signal_url: Some(discovery::signal_url(ip, port, &txt.path)),
         lan_target,
+        peer_id: txt.peer_id,
     })
 }
 
@@ -213,7 +318,7 @@ mod tests {
 
     #[test]
     fn host_from_parts_builds_url_label_and_lan_target() {
-        let props = discovery::txt_properties("/signal", Some(54000));
+        let props = discovery::txt_properties("/signal", Some(54000), Some(691721284));
         let host = host_from_parts(
             &["192.168.1.7".parse().unwrap()],
             8080,
@@ -222,11 +327,15 @@ mod tests {
         )
         .expect("valid host");
         assert_eq!(host.label, "officepc");
-        assert_eq!(host.signal_url, "ws://192.168.1.7:8080/signal");
+        assert_eq!(
+            host.signal_url.as_deref(),
+            Some("ws://192.168.1.7:8080/signal")
+        );
         assert_eq!(host.lan_target.as_deref(), Some("192.168.1.7:54000"));
+        assert_eq!(host.peer_id, Some(691721284));
 
         // Without the `lan` record there is no direct target.
-        let props = discovery::txt_properties("/signal", None);
+        let props = discovery::txt_properties("/signal", None, None);
         let host = host_from_parts(
             &["192.168.1.7".parse().unwrap()],
             8080,
@@ -242,7 +351,7 @@ mod tests {
 
     #[test]
     fn foreign_proto_is_filtered() {
-        let mut props = discovery::txt_properties("/signal", None);
+        let mut props = discovery::txt_properties("/signal", None, None);
         // Rewrite the proto record to a foreign version.
         for p in props.iter_mut() {
             if p.0 == discovery::TXT_PROTO {
@@ -269,5 +378,56 @@ mod tests {
             &no_proto
         )
         .is_none());
+    }
+
+    #[test]
+    fn beacon_packet_becomes_host_entry() {
+        let ip: IpAddr = "192.168.2.25".parse().unwrap();
+        let pkt = beacon::encode(&beacon::Beacon {
+            proto: opacusr_proto::PROTO_VERSION,
+            peer_id: 950_239_493,
+            name: "Телефон".into(),
+            signal_port: 8080,
+            lan_port: 54000,
+        });
+        let host = beacon_host(&pkt, ip).expect("valid beacon");
+        assert_eq!(host.fullname, "beacon://192.168.2.25/950239493");
+        assert_eq!(host.label, "Телефон");
+        assert_eq!(
+            host.signal_url.as_deref(),
+            Some("ws://192.168.2.25:8080/signal")
+        );
+        assert_eq!(host.lan_target.as_deref(), Some("192.168.2.25:54000"));
+        assert_eq!(host.peer_id, Some(950_239_493));
+
+        // No ports at all → nothing usable, not listed.
+        let pkt = beacon::encode(&beacon::Beacon {
+            proto: opacusr_proto::PROTO_VERSION,
+            peer_id: 950_239_493,
+            name: "x".into(),
+            signal_port: 0,
+            lan_port: 0,
+        });
+        assert!(beacon_host(&pkt, ip).is_none());
+
+        // Foreign protocol version → filtered.
+        let pkt = beacon::encode(&beacon::Beacon {
+            proto: opacusr_proto::PROTO_VERSION - 1,
+            peer_id: 950_239_493,
+            name: "x".into(),
+            signal_port: 8080,
+            lan_port: 0,
+        });
+        assert!(beacon_host(&pkt, ip).is_none());
+
+        // Unregistered sender (id = 0) → filtered.
+        let pkt = beacon::encode(&beacon::Beacon {
+            proto: opacusr_proto::PROTO_VERSION,
+            peer_id: 0,
+            name: "x".into(),
+            signal_port: 8080,
+            lan_port: 0,
+        });
+        assert!(beacon_host(&pkt, ip).is_none());
     }
 }

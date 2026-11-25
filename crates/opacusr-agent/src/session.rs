@@ -80,6 +80,11 @@ pub struct SessionConfig {
     /// Shared auth-failure limiter (rate limiting + lockout). One instance
     /// per accept path (signaling / LAN), shared by all its sessions.
     pub auth_gate: Option<Arc<AuthGate>>,
+    /// This host's assigned 9-digit ID, sent to the viewer inside the
+    /// handshake `Hello` (`None` = unknown — older behavior). The viewer
+    /// uses it to verify direct-LAN dials and remember
+    /// `ID → ip:port` for reconnects.
+    pub host_id: Option<opacusr_proto::PeerId>,
 }
 
 /// Preferred video codec for outgoing streams (from `agent.toml` `codec`).
@@ -330,6 +335,7 @@ async fn run_session(
         cfg.password.as_deref(),
         cfg.totp_secret.as_deref(),
         &cfg.display_name,
+        cfg.host_id,
         cfg.auth_gate.as_deref(),
     )
     .await?;

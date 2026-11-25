@@ -231,6 +231,16 @@ pub enum ClientEvent {
         enabled: bool,
     },
     Notice(String),
+    /// The connection ladder locked onto one route: `peer_id` is the
+    /// host's handshake-reported ID, `target` the address it was
+    /// reached at. `direct == true` targets are remembered by the UI as
+    /// `ID → ip:port` so the next «connect by ID» can bypass every
+    /// signaling server (see `AddressBook::learn_lan_host`).
+    SessionRoute {
+        peer_id: String,
+        target: String,
+        direct: bool,
+    },
     Closed(String),
 }
 
@@ -398,6 +408,11 @@ async fn tunnel_accept_loop(
 /// A connected viewer session.
 pub struct SessionClient {
     session: SecureSession,
+    /// The host's handshake-reported ID (`Hello.host_id`); `None` from
+    /// older hosts. Lets the ladder validate direct-LAN dials (another
+    /// machine may hold the address from a stale history entry) and
+    /// feeds `ClientEvent::SessionRoute`.
+    pub host_id: Option<opacusr_proto::PeerId>,
     decoder: Box<dyn VideoDecoder>,
     settings: SessionSettings,
     events: mpsc::UnboundedSender<ClientEvent>,
@@ -692,6 +707,7 @@ impl SessionClient {
         let (tun_local_tx, tun_local_rx) = mpsc::unbounded_channel::<TunLocal>();
         let client = Self {
             session,
+            host_id: handshake.host_hello.host_id,
             decoder,
             settings,
             events,

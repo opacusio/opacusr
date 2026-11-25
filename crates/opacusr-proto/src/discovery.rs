@@ -7,7 +7,11 @@
 //! * `path`  — URL path of the signaling endpoint (`/signal`);
 //! * `proto` — the advertising peer's [`PROTO_VERSION`];
 //! * `lan`   — the direct-LAN TCP port (`ip:port` sessions), present only
-//!   when the host accepts them (`--allow-lan`).
+//!   when the host accepts them (`--allow-lan`);
+//! * `id`    — the advertising peer's 9-digit ID, once the signaling
+//!   server has assigned one. Lets a viewer resolve «connect by ID»
+//!   straight onto this host's endpoints instead of asking every
+//!   discovered signaling server about a stranger.
 //!
 //! Only the pure pieces live here — service name, TXT keys and the
 //! helpers both sides share — so the byte-shape of a discovery record has
@@ -28,6 +32,10 @@ pub const TXT_PROTO: &str = "proto";
 /// TXT key: direct-LAN TCP port (decimal string) when the host accepts
 /// `ip:port` sessions.
 pub const TXT_LAN: &str = "lan";
+
+/// TXT key: the advertising peer's assigned 9-digit ID (decimal
+/// string), present once the signaling server has minted one.
+pub const TXT_ID: &str = "id";
 
 /// Longest instance name we advertise (RFC 6763 §6 keeps single labels
 /// practical; DNS labels cap at 63 bytes — stay comfortably inside).
@@ -65,17 +73,27 @@ pub struct ServiceTxt {
     pub proto: u32,
     /// Direct-LAN TCP port when the host accepts `ip:port` sessions.
     pub lan_port: Option<u16>,
+    /// The advertising peer's assigned ID, when known.
+    pub peer_id: Option<crate::PeerId>,
 }
 
 /// Build the TXT properties for an advertiser. `lan_port` is `None`
-/// unless the host also accepts direct LAN sessions.
-pub fn txt_properties(path: &str, lan_port: Option<u16>) -> Vec<(String, String)> {
+/// unless the host also accepts direct LAN sessions; `peer_id` is
+/// `None` until the signaling server has assigned an ID.
+pub fn txt_properties(
+    path: &str,
+    lan_port: Option<u16>,
+    peer_id: Option<crate::PeerId>,
+) -> Vec<(String, String)> {
     let mut props = vec![
         (TXT_PATH.to_string(), path.to_string()),
         (TXT_PROTO.to_string(), PROTO_VERSION.to_string()),
     ];
     if let Some(port) = lan_port {
         props.push((TXT_LAN.to_string(), port.to_string()));
+    }
+    if let Some(id) = peer_id {
+        props.push((TXT_ID.to_string(), id.to_string()));
     }
     props
 }
@@ -86,11 +104,13 @@ pub fn parse_txt(props: &[(String, String)]) -> Option<ServiceTxt> {
     let mut path = None;
     let mut proto = None;
     let mut lan = None;
+    let mut id = None;
     for (k, v) in props {
         match k.as_str() {
             TXT_PATH => path = Some(v.trim().to_string()),
             TXT_PROTO => proto = v.trim().parse().ok(),
             TXT_LAN => lan = v.trim().parse().ok(),
+            TXT_ID => id = v.trim().parse().ok(),
             _ => {}
         }
     }
@@ -103,6 +123,7 @@ pub fn parse_txt(props: &[(String, String)]) -> Option<ServiceTxt> {
         path,
         proto,
         lan_port: lan,
+        peer_id: id,
     })
 }
 
@@ -138,15 +159,27 @@ mod tests {
 
     #[test]
     fn txt_and_url_round_trip() {
-        let props = txt_properties("/signal", Some(54000));
+        let props = txt_properties("/signal", Some(54000), Some(691721284));
         let txt = parse_txt(&props).expect("valid payload");
         assert_eq!(txt.path, "/signal");
         assert_eq!(txt.proto, PROTO_VERSION);
         assert_eq!(txt.lan_port, Some(54000));
+        assert_eq!(txt.peer_id, Some(691721284));
 
         // No `lan` record → direct LAN is not offered.
-        let no_lan = parse_txt(&txt_properties("/signal", None)).unwrap();
+        let no_lan = parse_txt(&txt_properties("/signal", None, None)).unwrap();
         assert_eq!(no_lan.lan_port, None);
+        assert_eq!(no_lan.peer_id, None);
+
+        // A malformed `id` record is ignored (older peers never send it).
+        let props = txt_properties("/signal", None, None);
+        let props = [
+            props.as_slice(),
+            &[(TXT_ID.to_string(), "not-a-number".to_string())],
+        ]
+        .concat();
+        let txt = parse_txt(&props).unwrap();
+        assert_eq!(txt.peer_id, None);
 
         // Malformed or foreign payloads are rejected by the parser.
         assert!(parse_txt(&[]).is_none());
