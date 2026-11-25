@@ -34,7 +34,7 @@ public class CaptureService extends android.app.Service {
         }
         startWithNotification();
         if (data == null) {
-            nativeProjectionFailed();
+            CaptureActivity.nativeProjectionFailed();
             stopSelf();
             return START_NOT_STICKY;
         }
@@ -44,7 +44,7 @@ public class CaptureService extends android.app.Service {
                     (android.media.projection.MediaProjectionManager) o;
             mp = mpm.getMediaProjection(code, data);
             if (mp == null) {
-                nativeProjectionFailed();
+                CaptureActivity.nativeProjectionFailed();
                 stopSelf();
                 return START_NOT_STICKY;
             }
@@ -68,7 +68,7 @@ public class CaptureService extends android.app.Service {
                     reader.getSurface(), null, null);
             nativeProjectionStarted(w, h, dpi, reader, mp);
         } catch (Exception e) {
-            nativeProjectionFailed();
+            CaptureActivity.nativeProjectionFailed();
             stopSelf();
             return START_NOT_STICKY;
         }
