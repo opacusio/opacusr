@@ -57,6 +57,26 @@ fn android_main(android_app: AndroidApp) {
         android_system_bar_heights(android_app.vm_as_ptr(), android_app.activity_as_ptr());
     opacusr_app::android_insets::set_insets_px(status_px, nav_px);
 
+    // Runtime system-UI hooks for the session UI: landscape rotation
+    // while a viewer session is live, sticky-immersive bars for the
+    // chrome-less mode, soft keyboard for typing. The raw activity
+    // handle from android-activity is a LOCAL ref valid only inside
+    // android_main — the hooks fire later, so keep a GLOBAL ref (leaked
+    // on purpose, like the multicast lock) alongside the VM handle.
+    if let Some(activity_global) =
+        android_new_global_ref(android_app.vm_as_ptr(), android_app.activity_as_ptr())
+    {
+        let _ = SYSUI_CONTEXT.set((android_app.vm_as_ptr() as usize, activity_global as usize));
+        opacusr_app::android_sysui::set_hooks(
+            hook_set_landscape,
+            hook_set_immersive,
+            hook_set_keyboard,
+        );
+        tracing::info!(target: "opacusr", "system-UI hooks registered");
+    } else {
+        tracing::warn!(target: "opacusr", "system-UI hooks unavailable (no global ref)");
+    }
+
     // The one android-specific bit: hand the NativeActivity handle to
     // winit (eframe exposes the event-loop builder hook for this).
     let options = eframe::NativeOptions {
@@ -72,6 +92,318 @@ fn android_main(android_app: AndroidApp) {
         Ok(Box::new(opacusr_app::App::new(cc)) as Box<dyn eframe::App>)
     };
     eframe::run_native("OpacusR", options, Box::new(app_creator)).expect("OpacusR UI failed");
+}
+
+// ---------------------------------------------------------------------
+// Runtime system-UI hooks (registered into opacusr_app::android_sysui
+// above): landscape rotation / sticky-immersive bars / soft keyboard.
+// Same raw jni-sys vtable discipline as the multicast lock — every
+// call exception-checked, every failure degrades to a log line.
+// NOT gated to Android so the host build type-checks the wiring too.
+// ---------------------------------------------------------------------
+
+/// (NDK JavaVM handle, activity GLOBAL ref) stashed by android_main.
+/// Both stored as plain addresses; they live for the whole process.
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+static SYSUI_CONTEXT: std::sync::OnceLock<(usize, usize)> = std::sync::OnceLock::new();
+
+/// Attached thread context for a best-effort UI hook call.
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+struct UiJni {
+    env: *mut jni_sys::JNIEnv,
+    iface: *const jni_sys::JNINativeInterface_,
+    activity: jni_sys::jobject,
+}
+
+impl UiJni {
+    /// Attach the calling thread and fetch the vtable. The egui/winit
+    /// UI thread IS the android_main thread (already attached by the
+    /// android-activity glue), so AttachCurrentThread just returns the
+    /// existing JNIEnv. `None` = hooks unavailable (desktop, or JNI
+    /// broken — logged, never fatal).
+    fn attach() -> Option<Self> {
+        let (vm_handle, activity): (usize, usize) = *SYSUI_CONTEXT.get()?;
+        unsafe {
+            let vm: jni_sys::JavaVM = *(vm_handle as *mut jni_sys::JavaVM);
+            if vm.is_null() {
+                tracing::warn!(target: "opacusr", "sysui: JavaVM vtable pointer is null");
+                return None;
+            }
+            let mut env: *mut jni_sys::JNIEnv = std::ptr::null_mut();
+            let res = ((*vm).v1_1.AttachCurrentThread)(
+                vm_handle as *mut jni_sys::JavaVM,
+                (&mut env) as *mut *mut jni_sys::JNIEnv as *mut *mut core::ffi::c_void,
+                std::ptr::null_mut(),
+            );
+            if res != jni_sys::JNI_OK || env.is_null() {
+                tracing::warn!(target: "opacusr", "sysui: AttachCurrentThread failed ({res})");
+                return None;
+            }
+            let iface: *const jni_sys::JNINativeInterface_ = *env;
+            let version = ((*iface).v1_6.GetVersion)(env);
+            if version < jni_sys::JNI_VERSION_1_6 {
+                tracing::warn!(target: "opacusr", "sysui: JNI sanity check {version:#x}");
+                return None;
+            }
+            Some(Self {
+                env,
+                iface,
+                activity: activity as jni_sys::jobject,
+            })
+        }
+    }
+
+    /// Exception check + clear; `false` = a Java exception occurred.
+    fn check(&self, what: &str) -> bool {
+        unsafe {
+            if ((*self.iface).v1_6.ExceptionCheck)(self.env) {
+                ((*self.iface).v1_6.ExceptionClear)(self.env);
+                tracing::warn!(target: "opacusr", "sysui: Java exception during {what}");
+                return false;
+            }
+        }
+        true
+    }
+}
+
+/// Creates a global ref of the activity for the runtime hooks (the
+/// android_main-scope handle is a local ref). Returns the address as a
+/// usize, or None on failure. The ref is intentionally never deleted.
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+fn android_new_global_ref(
+    vm_raw: *mut core::ffi::c_void,
+    activity_raw: *mut core::ffi::c_void,
+) -> Option<usize> {
+    if vm_raw.is_null() || activity_raw.is_null() {
+        return None;
+    }
+    unsafe {
+        let vm_handle: *mut jni_sys::JavaVM = vm_raw.cast();
+        let vm: jni_sys::JavaVM = *vm_handle;
+        if vm.is_null() {
+            return None;
+        }
+        let mut env: *mut jni_sys::JNIEnv = std::ptr::null_mut();
+        let res = ((*vm).v1_1.AttachCurrentThread)(
+            vm_handle,
+            (&mut env) as *mut *mut jni_sys::JNIEnv as *mut *mut core::ffi::c_void,
+            std::ptr::null_mut(),
+        );
+        if res != jni_sys::JNI_OK || env.is_null() {
+            return None;
+        }
+        let iface: *const jni_sys::JNINativeInterface_ = *env;
+        let global = ((*iface).v1_6.NewGlobalRef)(env, activity_raw.cast());
+        if global.is_null() {
+            ((*iface).v1_6.ExceptionClear)(env);
+            return None;
+        }
+        Some(global as usize)
+    }
+}
+
+/// UI-thread hook: sensor-landscape while a session is live, full-sensor
+/// otherwise (Activity.setRequestedOrientation: SENSOR_LANDSCAPE = 13,
+/// FULL_SENSOR = 10 — full sensor allows BOTH orientations again).
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+fn hook_set_landscape(on: bool) {
+    let Some(j) = UiJni::attach() else { return };
+    unsafe {
+        let cls: jni_sys::jclass = ((*j.iface).v1_6.GetObjectClass)(j.env, j.activity);
+        if !j.check("landscape: GetObjectClass") {
+            return;
+        }
+        let mid = ((*j.iface).v1_6.GetMethodID)(
+            j.env,
+            cls,
+            c"setRequestedOrientation".as_ptr(),
+            c"(I)V".as_ptr(),
+        );
+        if j.check("landscape: GetMethodID") {
+            let orientation: core::ffi::c_int = if on { 13 } else { 10 };
+            ((*j.iface).v1_6.CallVoidMethod)(j.env, j.activity, mid, orientation);
+            j.check("landscape: call");
+        }
+        ((*j.iface).v1_6.DeleteLocalRef)(j.env, cls);
+    }
+}
+
+/// UI-thread hook: sticky-immersive system bars (chrome-less fullscreen)
+/// or back to the edge-to-edge state the insets module compensates for.
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+fn hook_set_immersive(on: bool) {
+    let Some(j) = UiJni::attach() else { return };
+    unsafe {
+        // Activity.getWindow() → Window.getDecorView() → View.
+        let act_cls: jni_sys::jclass = ((*j.iface).v1_6.GetObjectClass)(j.env, j.activity);
+        if !j.check("immersive: activity class") {
+            return;
+        }
+        let get_window = ((*j.iface).v1_6.GetMethodID)(
+            j.env,
+            act_cls,
+            c"getWindow".as_ptr(),
+            c"()Landroid/view/Window;".as_ptr(),
+        );
+        let mut window: jni_sys::jobject = std::ptr::null_mut();
+        if j.check("immersive: getWindow") {
+            window = ((*j.iface).v1_6.CallObjectMethod)(j.env, j.activity, get_window);
+            j.check("immersive: window");
+        }
+        ((*j.iface).v1_6.DeleteLocalRef)(j.env, act_cls);
+        if window.is_null() {
+            return;
+        }
+        let win_cls: jni_sys::jclass = ((*j.iface).v1_6.GetObjectClass)(j.env, window);
+        let get_decor = ((*j.iface).v1_6.GetMethodID)(
+            j.env,
+            win_cls,
+            c"getDecorView".as_ptr(),
+            c"()Landroid/view/View;".as_ptr(),
+        );
+        let mut decor: jni_sys::jobject = std::ptr::null_mut();
+        if j.check("immersive: getDecorView") {
+            decor = ((*j.iface).v1_6.CallObjectMethod)(j.env, window, get_decor);
+            j.check("immersive: decor");
+        }
+        ((*j.iface).v1_6.DeleteLocalRef)(j.env, window);
+        ((*j.iface).v1_6.DeleteLocalRef)(j.env, win_cls);
+        if decor.is_null() {
+            return;
+        }
+        let view_cls: jni_sys::jclass = ((*j.iface).v1_6.GetObjectClass)(j.env, decor);
+        let set_vis = ((*j.iface).v1_6.GetMethodID)(
+            j.env,
+            view_cls,
+            c"setSystemUiVisibility".as_ptr(),
+            c"(I)V".as_ptr(),
+        );
+        if j.check("immersive: setSystemUiVisibility") {
+            // SYSTEM_UI_FLAG_LAYOUT_STABLE | LAYOUT_HIDE_NAVIGATION |
+            // LAYOUT_FULLSCREEN | HIDE_NAVIGATION | FULLSCREEN |
+            // IMMERSIVE_STICKY = 0x1706 (deprecated since API 30 but
+            // still honored; NativeActivity has no WindowInsets API).
+            let flags: core::ffi::c_int = if on { 0x1706 } else { 0 };
+            ((*j.iface).v1_6.CallVoidMethod)(j.env, decor, set_vis, flags);
+            j.check("immersive: call");
+        }
+        ((*j.iface).v1_6.DeleteLocalRef)(j.env, view_cls);
+        ((*j.iface).v1_6.DeleteLocalRef)(j.env, decor);
+    }
+}
+
+/// UI-thread hook: soft keyboard. Show via InputMethodManager
+/// toggleSoftInput(SHOW_FORCED, 0); hide via
+/// hideSoftInputFromWindow(decorView token) — more reliable than a
+/// second toggle if something else opened the keyboard meanwhile.
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+fn hook_set_keyboard(on: bool) {
+    let Some(j) = UiJni::attach() else { return };
+    unsafe {
+        let act_cls: jni_sys::jclass = ((*j.iface).v1_6.GetObjectClass)(j.env, j.activity);
+        if !j.check("keyboard: activity class") {
+            return;
+        }
+        let get_service = ((*j.iface).v1_6.GetMethodID)(
+            j.env,
+            act_cls,
+            c"getSystemService".as_ptr(),
+            c"(Ljava/lang/String;)Ljava/lang/Object;".as_ptr(),
+        );
+        let name: jni_sys::jstring =
+            ((*j.iface).v1_6.NewStringUTF)(j.env, c"input_method".as_ptr());
+        let mut imm: jni_sys::jobject = std::ptr::null_mut();
+        if j.check("keyboard: getSystemService") {
+            imm = ((*j.iface).v1_6.CallObjectMethod)(j.env, j.activity, get_service, name);
+            j.check("keyboard: imm");
+        }
+        ((*j.iface).v1_6.DeleteLocalRef)(j.env, name);
+        if imm.is_null() {
+            ((*j.iface).v1_6.DeleteLocalRef)(j.env, act_cls);
+            return;
+        }
+        let imm_cls: jni_sys::jclass = ((*j.iface).v1_6.GetObjectClass)(j.env, imm);
+        if on {
+            let toggle = ((*j.iface).v1_6.GetMethodID)(
+                j.env,
+                imm_cls,
+                c"toggleSoftInput".as_ptr(),
+                c"(II)V".as_ptr(),
+            );
+            if j.check("keyboard: toggleSoftInput") {
+                // SHOW_FORCED = 2, hideFlags = 0.
+                ((*j.iface).v1_6.CallVoidMethod)(j.env, imm, toggle, 2, 0);
+                j.check("keyboard: show");
+            }
+        } else {
+            // Decor view's window token for hideSoftInputFromWindow.
+            let act_get_window = ((*j.iface).v1_6.GetMethodID)(
+                j.env,
+                act_cls,
+                c"getWindow".as_ptr(),
+                c"()Landroid/view/Window;".as_ptr(),
+            );
+            let mut window: jni_sys::jobject = std::ptr::null_mut();
+            if j.check("keyboard: getWindow") {
+                window = ((*j.iface).v1_6.CallObjectMethod)(j.env, j.activity, act_get_window);
+                j.check("keyboard: window");
+            }
+            if !window.is_null() {
+                let win_cls: jni_sys::jclass = ((*j.iface).v1_6.GetObjectClass)(j.env, window);
+                let get_decor = ((*j.iface).v1_6.GetMethodID)(
+                    j.env,
+                    win_cls,
+                    c"getDecorView".as_ptr(),
+                    c"()Landroid/view/View;".as_ptr(),
+                );
+                let mut decor: jni_sys::jobject = std::ptr::null_mut();
+                if j.check("keyboard: getDecorView") {
+                    decor = ((*j.iface).v1_6.CallObjectMethod)(j.env, window, get_decor);
+                    j.check("keyboard: decor");
+                }
+                ((*j.iface).v1_6.DeleteLocalRef)(j.env, win_cls);
+                if !decor.is_null() {
+                    let decor_cls: jni_sys::jclass = ((*j.iface).v1_6.GetObjectClass)(j.env, decor);
+                    let get_token = ((*j.iface).v1_6.GetMethodID)(
+                        j.env,
+                        decor_cls,
+                        c"getWindowToken".as_ptr(),
+                        c"()Landroid/os/IBinder;".as_ptr(),
+                    );
+                    let mut token: jni_sys::jobject = std::ptr::null_mut();
+                    if j.check("keyboard: getWindowToken") {
+                        token = ((*j.iface).v1_6.CallObjectMethod)(j.env, decor, get_token);
+                        j.check("keyboard: token");
+                    }
+                    ((*j.iface).v1_6.DeleteLocalRef)(j.env, decor_cls);
+                    ((*j.iface).v1_6.DeleteLocalRef)(j.env, decor);
+                    if !token.is_null() {
+                        let hide = ((*j.iface).v1_6.GetMethodID)(
+                            j.env,
+                            imm_cls,
+                            c"hideSoftInputFromWindow".as_ptr(),
+                            c"(Landroid/os/IBinder;I)Z".as_ptr(),
+                        );
+                        if j.check("keyboard: hideSoftInputFromWindow") {
+                            ((*j.iface).v1_6.CallBooleanMethod)(
+                                j.env,
+                                imm,
+                                hide,
+                                token,
+                                0 as core::ffi::c_int,
+                            );
+                            j.check("keyboard: hide");
+                        }
+                    }
+                    ((*j.iface).v1_6.DeleteLocalRef)(j.env, token);
+                }
+            }
+            ((*j.iface).v1_6.DeleteLocalRef)(j.env, window);
+        }
+        ((*j.iface).v1_6.DeleteLocalRef)(j.env, imm_cls);
+        ((*j.iface).v1_6.DeleteLocalRef)(j.env, imm);
+        ((*j.iface).v1_6.DeleteLocalRef)(j.env, act_cls);
+    }
 }
 
 /// The acquired MulticastLock global ref, stored as an address and
@@ -372,6 +704,28 @@ mod tests {
         let (status, nav) =
             super::android_system_bar_heights(std::ptr::null_mut(), std::ptr::null_mut());
         assert_eq!((status, nav), (0, 0));
+    }
+
+    /// The runtime system-UI hooks must be safe no-ops when android_main
+    /// never stashed the (VM, activity) context — i.e. on desktop. They
+    /// are compiled here so the host build type-checks the JNI wiring.
+    #[test]
+    fn sysui_hooks_degrade_gracefully_without_context() {
+        super::hook_set_landscape(true);
+        super::hook_set_landscape(false);
+        super::hook_set_immersive(true);
+        super::hook_set_immersive(false);
+        super::hook_set_keyboard(true);
+        super::hook_set_keyboard(false);
+    }
+
+    /// The global-ref helper must reject null handles (same contract as
+    /// the other JNI helpers) instead of crashing.
+    #[test]
+    fn global_ref_helper_rejects_null_handles() {
+        assert!(
+            super::android_new_global_ref(std::ptr::null_mut(), std::ptr::null_mut()).is_none()
+        );
     }
 
     // ------------------------------------------------------------------

@@ -20,6 +20,7 @@
 //! Desktop/other targets: the statics stay empty and the helper is a
 //! no-op, so the same call runs everywhere.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 
 /// Device-pixel heights of (status bar, navigation bar), set once by
@@ -27,6 +28,12 @@ use std::sync::OnceLock;
 /// «unknown» — no panels are added and rendering matches the old
 /// edge-to-edge behavior.
 static BAR_PX: OnceLock<(i32, i32)> = OnceLock::new();
+
+/// Sticky-immersive mode is active (the viewer hides its chrome in
+/// fullscreen): the system bars are HIDDEN by the glue, so the inset
+/// compensation panels must disappear too — reserving space for bars
+/// that are not there would shrink the remote view for nothing.
+static IMMERSIVE: AtomicBool = AtomicBool::new(false);
 
 /// Called by the Android glue with the measured system bar heights in
 /// DEVICE PIXELS (Resources#getDimensionPixelSize). Best-effort: the
@@ -40,6 +47,18 @@ fn clamp_pair(status_px: i32, nav_px: i32) -> (i32, i32) {
     (status_px.max(0), nav_px.max(0))
 }
 
+/// Called by [`crate::android_sysui::set_immersive`] whenever the
+/// viewer enters/leaves fullscreen chrome-less mode. Desktop: the
+/// flag flips but the panel helper still no-ops (no measured insets).
+pub fn set_immersive(on: bool) {
+    IMMERSIVE.store(on, Ordering::SeqCst);
+}
+
+/// Whether sticky-immersive fullscreen is currently active.
+pub fn immersive() -> bool {
+    IMMERSIVE.load(Ordering::SeqCst)
+}
+
 /// Measured (status, navigation) heights in device pixels; (0, 0)
 /// before the Android glue ran (desktop) or when the JNI query failed.
 pub fn insets_px() -> (i32, i32) {
@@ -49,8 +68,12 @@ pub fn insets_px() -> (i32, i32) {
 /// Reserve the system-bar areas as top/bottom spacer panels. Must be
 /// called at the very start of the frame, BEFORE any other panel, so
 /// the home top bar, session toolbar, settings drawer and central
-/// content all stay clear of the system bars.
+/// content all stay clear of the system bars. Skipped while immersive
+/// fullscreen hides those bars (the bars would only shrink the view).
 pub fn show_system_bar_insets(ctx: &egui::Context) {
+    if IMMERSIVE.load(Ordering::SeqCst) {
+        return;
+    }
     let (status_px, nav_px) = insets_px();
     if status_px <= 0 && nav_px <= 0 {
         return;

@@ -12,152 +12,22 @@ use crate::theme;
 use opacusr_agent::config::AgentConfig;
 
 /// Session screen: central remote view + toggleable right sidebar.
+/// The chrome-less «⛶» mode hides the toolbar and the sidebar so the
+/// remote view fills the whole window; on Android it also hides the
+/// system bars (sticky immersive) and the session holds landscape
+/// rotation (see `android_sysui`).
 pub fn session_ui(ctx: &Context, s: &mut SessionHandle, cfg: &mut AgentConfig) {
     // ---- toolbar ---------------------------------------------------------
-    egui::TopBottomPanel::top("session_toolbar").show(ctx, |ui| {
-        ui.horizontal(|ui| {
-            if s.view_only {
-                ui.label(
-                    egui::RichText::new("👁 view only")
-                        .color(Color32::from_rgb(255, 170, 60))
-                        .strong(),
-                );
-                ui.separator();
-            }
-            ui.label(egui::RichText::new(&s.status).weak().small());
-            ui.separator();
-            if ui
-                .button(if s.paused { "▶ Resume" } else { "⏸ Pause" })
-                .clicked()
-            {
-                s.paused = !s.paused;
-                let _ = s.commands.send(Command::Pause(s.paused));
-            }
-            // Screen selector (multi-monitor hosts).
-            if s.screens.len() > 1 {
-                ui.separator();
-                let current = s
-                    .screens
-                    .iter()
-                    .find(|sc| sc.id == s.selected_screen)
-                    .cloned()
-                    .unwrap_or_else(|| s.screens[0].clone());
-                egui::ComboBox::from_id_salt("screen_select")
-                    .selected_text(format!("🖥 {} ({}×{})", current.name, current.w, current.h))
-                    .show_ui(ui, |ui| {
-                        for sc in &s.screens {
-                            ui.selectable_value(
-                                &mut s.selected_screen,
-                                sc.id,
-                                format!("{} ({}×{})", sc.name, sc.w, sc.h),
-                            );
-                        }
-                    });
-                if s.selected_screen != current.id {
-                    let _ = s.commands.send(Command::SelectScreen(s.selected_screen));
-                }
-            }
-            ui.separator();
-            if ui.toggle_value(&mut s.clipboard_sync, "📋 sync").changed() {
-                let _ = s.commands.send(Command::ClipboardSync(s.clipboard_sync));
-            }
-            if ui
-                .button("🖨")
-                .on_hover_text("Print the current remote frame on your local printer")
-                .clicked()
-            {
-                match &s.last_frame {
-                    Some((w, h, rgba)) => {
-                        let secs = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .map(|d| d.as_secs())
-                            .unwrap_or(0);
-                        match crate::print::print_png(*w, *h, rgba, secs) {
-                            Ok(path) => {
-                                s.status = format!("printed: {}", path.display());
-                            }
-                            Err(e) => {
-                                s.status = format!("print failed: {e}");
-                            }
-                        }
-                    }
-                    None => {
-                        s.status = "Печать: кадр ещё не получен".into();
-                    }
-                }
-            }
-            if s.audio_available && ui.toggle_value(&mut s.audio_on, "🔊").changed() {
-                let _ = s.commands.send(Command::Audio(s.audio_on));
-            }
-            ui.separator();
-            let mut fps = cfg.fps as f32;
-            let mut q = cfg.jpeg_quality as f32;
-            let mut sc = cfg.scale_percent as f32;
-            let mut changed = false;
-            changed |= ui
-                .add(egui::Slider::new(&mut fps, 1.0..=60.0).text("fps"))
-                .changed();
-            changed |= ui
-                .add(egui::Slider::new(&mut q, 20.0..=95.0).text("jpeg"))
-                .changed();
-            changed |= ui
-                .add(egui::Slider::new(&mut sc, 25.0..=100.0).text("scale %"))
-                .changed();
-            if changed {
-                cfg.fps = fps as u8;
-                cfg.jpeg_quality = q as u8;
-                cfg.scale_percent = sc as u16;
-                let _ = s.commands.send(Command::Quality {
-                    fps: cfg.fps,
-                    jpeg_quality: cfg.jpeg_quality,
-                    scale_percent: cfg.scale_percent,
-                });
-            }
-            ui.separator();
-            ui.label(format!("RTT {} ms", s.rtt));
-            // Adaptive-quality tier: what the host's controller is currently
-            // streaming at (hidden while a manual quality setting is in
-            // force — the sliders above are authoritative then).
-            if s.quality_adaptive {
-                if let Some(tier) = s.quality_tier {
-                    ui.separator();
-                    let (text, color) = tier_badge(tier);
-                    ui.label(egui::RichText::new(text).color(color).strong())
-                        .on_hover_text(match s.quality_params {
-                            Some((fps, q, sc)) => format!(
-                                "Adaptive quality tier {tier}/3 — streaming at \
-                                 {fps} fps, JPEG {q}, scale {sc}%"
-                            ),
-                            None => format!("Adaptive quality tier {tier}/3"),
-                        });
-                }
-            }
-            if s.recording {
-                ui.separator();
-                ui.label(
-                    egui::RichText::new("● REC")
-                        .color(egui::Color32::from_rgb(230, 80, 80))
-                        .strong(),
-                )
-                .on_hover_text("The host records this session to a video file.");
-            }
-            ui.separator();
-            ui.toggle_value(&mut s.panel_chat, "💬");
-            ui.toggle_value(&mut s.panel_files, "📁");
-            ui.toggle_value(&mut s.panel_term, "⌨");
-            ui.toggle_value(&mut s.panel_stats, "📊");
-            let mut tunnel_btn = ui
-                .toggle_value(&mut s.panel_tunnel, "🔗")
-                .on_hover_text("TCP tunnels (SSH-style port forwarding)");
-            tunnel_btn.enabled = s.tunnel_available;
-            if s.panel_tunnel && !s.tunnel_available {
-                s.panel_tunnel = false;
-            }
+    if !s.fullscreen {
+        egui::TopBottomPanel::top("session_toolbar").show(ctx, |ui| {
+            session_toolbar(ui, s, cfg);
         });
-    });
+    }
 
-    // ---- right sidebar ---------------------------------------------------
-    if s.panel_chat || s.panel_files || s.panel_term || s.panel_stats || s.panel_tunnel {
+    // ---- right sidebar (part of the hidden chrome) ------------------------
+    let sidebar_open =
+        s.panel_chat || s.panel_files || s.panel_term || s.panel_stats || s.panel_tunnel;
+    if !s.fullscreen && sidebar_open {
         egui::SidePanel::right("session_sidebar")
             .min_width(280.0)
             .default_width(320.0)
@@ -186,88 +56,325 @@ pub fn session_ui(ctx: &Context, s: &mut SessionHandle, cfg: &mut AgentConfig) {
 
     // ---- remote view -----------------------------------------------------
     egui::CentralPanel::default().show(ctx, |ui| {
-        let available = ui.available_size();
-        let Some(tex) = &s.texture else {
-            // Still no frame: say what we ARE doing and give the two
-            // known causes after a grace period (Android host = capture
-            // not implemented yet; locked Windows screen = blank frames).
-            ui.centered_and_justified(|ui| {
-                ui.vertical_centered(|ui| {
-                    ui.add_space(24.0);
-                    ui.label(
-                        egui::RichText::new("Ожидание первого кадра…")
-                            .weak()
-                            .size(16.0),
-                    );
-                    if !s.status.is_empty() {
-                        ui.add_space(4.0);
-                        ui.label(theme::mono(s.status.clone()).weak().small());
-                    }
-                    let waiting = s.opened_at.elapsed().as_secs();
-                    if waiting >= 10 {
-                        ui.add_space(12.0);
-                        ui.label(
-                            egui::RichText::new(
-                                "Если хост — телефон: трансляция экрана телефона ещё в разработке.\n\
-                                 Если хост — компьютер: проверьте, что на нём экран разблокирован\n\
-                                 и OpacusR работает.",
-                            )
-                            .weak()
-                            .small(),
+        session_view(ui, s);
+    });
+
+    // Chrome-less mode: floating controls over the video — an exit
+    // button and a view-only badge (the toolbar badge is hidden with
+    // the rest of the chrome, but the user MUST still see that input
+    // is off, otherwise taps look broken).
+    if s.fullscreen {
+        fullscreen_overlays(ctx, s);
+    }
+}
+
+/// Toolbar row of the session screen (hidden by the «⛶» mode).
+fn session_toolbar(ui: &mut egui::Ui, s: &mut SessionHandle, cfg: &mut AgentConfig) {
+    // Wrapped, not plain horizontal: on a phone the row is wider than
+    // the screen and `horizontal` silently clipped half the buttons
+    // off-screen — unreachable and untappable.
+    ui.horizontal_wrapped(|ui| {
+        if s.view_only {
+            ui.label(
+                egui::RichText::new("👁 view only")
+                    .color(Color32::from_rgb(255, 170, 60))
+                    .strong(),
+            );
+            ui.separator();
+        }
+        ui.label(egui::RichText::new(&s.status).weak().small());
+        ui.separator();
+        if ui
+            .button(if s.paused { "▶ Resume" } else { "⏸ Pause" })
+            .clicked()
+        {
+            s.paused = !s.paused;
+            let _ = s.commands.send(Command::Pause(s.paused));
+        }
+        // Screen selector (multi-monitor hosts).
+        if s.screens.len() > 1 {
+            ui.separator();
+            let current = s
+                .screens
+                .iter()
+                .find(|sc| sc.id == s.selected_screen)
+                .cloned()
+                .unwrap_or_else(|| s.screens[0].clone());
+            egui::ComboBox::from_id_salt("screen_select")
+                .selected_text(format!("🖥 {} ({}×{})", current.name, current.w, current.h))
+                .show_ui(ui, |ui| {
+                    for sc in &s.screens {
+                        ui.selectable_value(
+                            &mut s.selected_screen,
+                            sc.id,
+                            format!("{} ({}×{})", sc.name, sc.w, sc.h),
                         );
                     }
                 });
-            });
-            return;
-        };
-        let (rw, rh) = (s.screen.0 as f32, s.screen.1 as f32);
-        let fit = fit_size(available, rw, rh);
-        let (rect, response) = ui.allocate_exact_size(fit, Sense::click_and_drag());
-        response.request_focus();
-        ui.painter().image(
-            tex.id(),
-            rect,
-            egui::Rect::from_min_max(egui::Pos2::ZERO, egui::Pos2::new(1.0, 1.0)),
-            Color32::WHITE,
-        );
-        // Frame border for clarity.
-        ui.painter().rect_stroke(
-            rect,
-            2.0,
-            egui::Stroke::new(1.0_f32, Color32::from_gray(90)),
-        );
-
-        // Remote cursor overlay: the host's pointer, drawn on top of the
-        // video (capture APIs drop the cursor, so it travels separately).
-        // The hotspot sits exactly on the reported position; the overlay
-        // is hidden while the pointer is outside the streamed monitor or
-        // logically hidden on the host.
-        if let Some((cx, cy, visible, shape_id)) = s.cursor_pos {
-            if visible && rw > 0.0 {
-                if let Some(cur) = s.cursor_shapes.get(&shape_id) {
-                    let scale = rect.width() / rw;
-                    let top_left = egui::pos2(
-                        rect.min.x + cx as f32 * scale - cur.hotspot.0 * scale,
-                        rect.min.y + cy as f32 * scale - cur.hotspot.1 * scale,
-                    );
-                    let crect = egui::Rect::from_min_size(
-                        top_left,
-                        egui::vec2(cur.size.0 * scale, cur.size.1 * scale),
-                    );
-                    if crect.intersects(rect) {
-                        ui.painter().image(
-                            cur.texture.id(),
-                            crect,
-                            egui::Rect::from_min_max(egui::Pos2::ZERO, egui::Pos2::new(1.0, 1.0)),
-                            Color32::WHITE,
-                        );
+            if s.selected_screen != current.id {
+                let _ = s.commands.send(Command::SelectScreen(s.selected_screen));
+            }
+        }
+        ui.separator();
+        if ui.toggle_value(&mut s.clipboard_sync, "📋 sync").changed() {
+            let _ = s.commands.send(Command::ClipboardSync(s.clipboard_sync));
+        }
+        if ui
+            .button("🖨")
+            .on_hover_text("Print the current remote frame on your local printer")
+            .clicked()
+        {
+            match &s.last_frame {
+                Some((w, h, rgba)) => {
+                    let secs = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0);
+                    match crate::print::print_png(*w, *h, rgba, secs) {
+                        Ok(path) => {
+                            s.status = format!("printed: {}", path.display());
+                        }
+                        Err(e) => {
+                            s.status = format!("print failed: {e}");
+                        }
                     }
+                }
+                None => {
+                    s.status = "Печать: кадр ещё не получен".into();
                 }
             }
         }
-
-        capture_input(ui, &response, rect, s);
+        if s.audio_available && ui.toggle_value(&mut s.audio_on, "🔊").changed() {
+            let _ = s.commands.send(Command::Audio(s.audio_on));
+        }
+        ui.separator();
+        // Quality sliders need desktop screen estate: on a phone
+        // they filled the wrapped toolbar and pushed the real
+        // controls off-screen; the adaptive tier badge below still
+        // reports what the host streams at.
+        #[cfg(not(target_os = "android"))]
+        {
+            let mut fps = cfg.fps as f32;
+            let mut q = cfg.jpeg_quality as f32;
+            let mut sc = cfg.scale_percent as f32;
+            let mut changed = false;
+            changed |= ui
+                .add(egui::Slider::new(&mut fps, 1.0..=60.0).text("fps"))
+                .changed();
+            changed |= ui
+                .add(egui::Slider::new(&mut q, 20.0..=95.0).text("jpeg"))
+                .changed();
+            changed |= ui
+                .add(egui::Slider::new(&mut sc, 25.0..=100.0).text("scale %"))
+                .changed();
+            if changed {
+                cfg.fps = fps as u8;
+                cfg.jpeg_quality = q as u8;
+                cfg.scale_percent = sc as u16;
+                let _ = s.commands.send(Command::Quality {
+                    fps: cfg.fps,
+                    jpeg_quality: cfg.jpeg_quality,
+                    scale_percent: cfg.scale_percent,
+                });
+            }
+        }
+        #[cfg(target_os = "android")]
+        {
+            let _ = cfg;
+        }
+        ui.separator();
+        ui.label(format!("RTT {} ms", s.rtt));
+        // Adaptive-quality tier: what the host's controller is currently
+        // streaming at (hidden while a manual quality setting is in
+        // force — the sliders above are authoritative then).
+        if s.quality_adaptive {
+            if let Some(tier) = s.quality_tier {
+                ui.separator();
+                let (text, color) = tier_badge(tier);
+                ui.label(egui::RichText::new(text).color(color).strong())
+                    .on_hover_text(match s.quality_params {
+                        Some((fps, q, sc)) => format!(
+                            "Adaptive quality tier {tier}/3 — streaming at \
+                                 {fps} fps, JPEG {q}, scale {sc}%"
+                        ),
+                        None => format!("Adaptive quality tier {tier}/3"),
+                    });
+            }
+        }
+        if s.recording {
+            ui.separator();
+            ui.label(
+                egui::RichText::new("● REC")
+                    .color(egui::Color32::from_rgb(230, 80, 80))
+                    .strong(),
+            )
+            .on_hover_text("The host records this session to a video file.");
+        }
+        ui.separator();
+        ui.toggle_value(&mut s.panel_chat, "💬");
+        ui.toggle_value(&mut s.panel_files, "📁");
+        ui.toggle_value(&mut s.panel_term, "⌨");
+        ui.toggle_value(&mut s.panel_stats, "📊");
+        let mut tunnel_btn = ui
+            .toggle_value(&mut s.panel_tunnel, "🔗")
+            .on_hover_text("TCP tunnels (SSH-style port forwarding)");
+        tunnel_btn.enabled = s.tunnel_available;
+        if s.panel_tunnel && !s.tunnel_available {
+            s.panel_tunnel = false;
+        }
+        // Chrome-less fullscreen: hide toolbar + sidebar so the
+        // remote view fills the window (Android: system bars too).
+        if ui
+            .button("⛶")
+            .on_hover_text("Во весь экран (F11 / ⛶ — вернуться)")
+            .clicked()
+        {
+            set_chromeless(s, true);
+        }
+        // Phones have no hardware keyboard — summon the soft one
+        // for chat/terminal/typing into the remote screen.
+        #[cfg(target_os = "android")]
+        if ui
+            .button(if s.soft_keyboard_on { "⌨ ✓" } else { "⌨" })
+            .on_hover_text("Экранная клавиатура")
+            .clicked()
+        {
+            s.soft_keyboard_on = !s.soft_keyboard_on;
+            crate::android_sysui::set_keyboard(s.soft_keyboard_on);
+        }
     });
+}
+
+/// Floating controls over the video in chrome-less mode: an exit
+/// button and a view-only badge (the toolbar badge is hidden with the
+/// rest of the chrome, but the user MUST still see that input is off,
+/// otherwise taps look broken).
+fn fullscreen_overlays(ctx: &Context, s: &mut SessionHandle) {
+    egui::Area::new(egui::Id::new("session_fs_badge"))
+        .anchor(egui::Align2::LEFT_TOP, [8.0, 8.0])
+        .order(egui::Order::Foreground)
+        .show(ctx, |ui| {
+            if s.view_only {
+                ui.label(
+                    egui::RichText::new("👁 view only")
+                        .color(Color32::from_rgb(255, 170, 60))
+                        .strong(),
+                );
+            }
+        });
+    egui::Area::new(egui::Id::new("session_fs_exit"))
+        .anchor(egui::Align2::RIGHT_TOP, [-8.0, 8.0])
+        .order(egui::Order::Foreground)
+        .show(ctx, |ui| {
+            if ui
+                .button("⛶")
+                .on_hover_text("Выйти из полноэкранного режима (F11)")
+                .clicked()
+            {
+                set_chromeless(s, false);
+            }
+        });
+}
+
+/// Toggle the chrome-less viewer mode. On Android this also hides the
+/// system bars (sticky immersive); leaving the mode hides the soft
+/// keyboard along with everything else.
+fn set_chromeless(s: &mut SessionHandle, on: bool) {
+    if s.fullscreen == on {
+        return;
+    }
+    s.fullscreen = on;
+    if !on && s.soft_keyboard_on {
+        s.soft_keyboard_on = false;
+        crate::android_sysui::set_keyboard(false);
+    }
+    crate::android_sysui::set_immersive(on);
+}
+
+/// The central remote view: the fitted video, the cursor overlay and
+/// the input capture (toolbar/sidebar are laid out around it).
+fn session_view(ui: &mut egui::Ui, s: &mut SessionHandle) {
+    let available = ui.available_size();
+    let Some(tex) = &s.texture else {
+        // Still no frame: say what we ARE doing and give the two
+        // known causes after a grace period (Android host = capture
+        // not implemented yet; locked Windows screen = blank frames).
+        ui.centered_and_justified(|ui| {
+            ui.vertical_centered(|ui| {
+                ui.add_space(24.0);
+                ui.label(
+                    egui::RichText::new("Ожидание первого кадра…")
+                        .weak()
+                        .size(16.0),
+                );
+                if !s.status.is_empty() {
+                    ui.add_space(4.0);
+                    ui.label(theme::mono(s.status.clone()).weak().small());
+                }
+                let waiting = s.opened_at.elapsed().as_secs();
+                if waiting >= 10 {
+                    ui.add_space(12.0);
+                    ui.label(
+                        egui::RichText::new(
+                            "Если хост — телефон: трансляция экрана телефона ещё в разработке.\n\
+                                 Если хост — компьютер: проверьте, что на нём экран разблокирован\n\
+                                 и OpacusR работает.",
+                        )
+                        .weak()
+                        .small(),
+                    );
+                }
+            });
+        });
+        return;
+    };
+    let (rw, rh) = (s.screen.0 as f32, s.screen.1 as f32);
+    let fit = fit_size(available, rw, rh);
+    let (rect, response) = ui.allocate_exact_size(fit, Sense::click_and_drag());
+    response.request_focus();
+    ui.painter().image(
+        tex.id(),
+        rect,
+        egui::Rect::from_min_max(egui::Pos2::ZERO, egui::Pos2::new(1.0, 1.0)),
+        Color32::WHITE,
+    );
+    // Frame border for clarity.
+    ui.painter().rect_stroke(
+        rect,
+        2.0,
+        egui::Stroke::new(1.0_f32, Color32::from_gray(90)),
+    );
+
+    // Remote cursor overlay: the host's pointer, drawn on top of the
+    // video (capture APIs drop the cursor, so it travels separately).
+    // The hotspot sits exactly on the reported position; the overlay
+    // is hidden while the pointer is outside the streamed monitor or
+    // logically hidden on the host.
+    if let Some((cx, cy, visible, shape_id)) = s.cursor_pos {
+        if visible && rw > 0.0 {
+            if let Some(cur) = s.cursor_shapes.get(&shape_id) {
+                let scale = rect.width() / rw;
+                let top_left = egui::pos2(
+                    rect.min.x + cx as f32 * scale - cur.hotspot.0 * scale,
+                    rect.min.y + cy as f32 * scale - cur.hotspot.1 * scale,
+                );
+                let crect = egui::Rect::from_min_size(
+                    top_left,
+                    egui::vec2(cur.size.0 * scale, cur.size.1 * scale),
+                );
+                if crect.intersects(rect) {
+                    ui.painter().image(
+                        cur.texture.id(),
+                        crect,
+                        egui::Rect::from_min_max(egui::Pos2::ZERO, egui::Pos2::new(1.0, 1.0)),
+                        Color32::WHITE,
+                    );
+                }
+            }
+        }
+    }
+
+    capture_input(ui, &response, rect, s);
 }
 
 /// Toolbar label + color for an adaptive-quality tier (0 = full quality…
@@ -323,31 +430,173 @@ fn capture_input(
         }
     }
 
-    // Buttons.
-    let buttons = [
-        (egui::PointerButton::Primary, MouseButtonId::Left),
-        (egui::PointerButton::Secondary, MouseButtonId::Right),
-        (egui::PointerButton::Middle, MouseButtonId::Middle),
-    ];
-    for (pb, mb) in buttons {
-        let pressed = response.ctx.input(|i| i.pointer.button_clicked(pb));
-        let released = response.ctx.input(|i| i.pointer.button_released(pb));
-        if let Some((x, y)) = pointer.and_then(remote_pos) {
-            if pressed {
-                let _ = s.commands.send(Command::MouseButton {
-                    x,
-                    y,
-                    button: mb,
-                    down: true,
-                });
+    // ---- Android touch layer --------------------------------------------
+    // egui-winit synthesizes pointer events from the FIRST touch (so a
+    // tap already clicks), but nothing else worked on a phone: no right
+    // click, no scroll, no keyboard, and a held touch still clicked.
+    // This layer owns touch input end to end:
+    //   quick tap      → left click at the touch point
+    //   long-press     → right click at the touch point
+    //   drag           → move with the left button pressed
+    //   second finger  → two-finger scroll
+    // The egui-synthesized pointer clicks are suppressed around every
+    // touch interaction (cooldown latch below) so taps don't double.
+    #[cfg(target_os = "android")]
+    {
+        let now = std::time::Instant::now();
+        let touch_events: Vec<egui::Event> = response.ctx.input(|i| {
+            i.events
+                .iter()
+                .filter(|ev| matches!(ev, egui::Event::Touch { .. }))
+                .cloned()
+                .collect()
+        });
+        if !touch_events.is_empty() {
+            // egui reports the synthesized click in the frame AFTER the
+            // touch ends; keep suppressing pointer clicks past it.
+            s.touch_cooldown_until = Some(now + std::time::Duration::from_millis(150));
+        }
+        for ev in touch_events {
+            let egui::Event::Touch { id, phase, pos, .. } = ev else {
+                continue;
+            };
+            match phase {
+                egui::TouchPhase::Start => {
+                    if s.touch_pending.is_none() && s.touch_drag.is_none() {
+                        // Defer the press: quick release = tap (left),
+                        // held release = long-press (right).
+                        s.touch_pending = Some((id, pos, now));
+                    } else if s.touch_scroll.is_none() {
+                        // Second finger during an interaction → scroll.
+                        s.touch_scroll = Some((id, pos));
+                    }
+                }
+                egui::TouchPhase::Move => {
+                    if let Some((pid, ppos, _t0)) = s.touch_pending {
+                        if id == pid && pos.dist(ppos) > 14.0 {
+                            // A drag: press the left button at the touch
+                            // origin, then follow the finger.
+                            if let Some((x, y)) = remote_pos(ppos) {
+                                let _ = s.commands.send(Command::MouseButton {
+                                    x,
+                                    y,
+                                    button: MouseButtonId::Left,
+                                    down: true,
+                                });
+                            }
+                            s.touch_drag = Some(pid);
+                            s.touch_pending = None;
+                        }
+                    }
+                    if s.touch_drag == Some(id) {
+                        if let Some((x, y)) = remote_pos(pos) {
+                            if s.last_mouse != Some((x, y)) {
+                                s.last_mouse = Some((x, y));
+                                let _ = s.commands.send(Command::MouseMove { x, y });
+                            }
+                        }
+                    }
+                    if let Some((sid, spos)) = s.touch_scroll {
+                        if id == sid {
+                            let (dx, dy) = (pos.x - spos.x, pos.y - spos.y);
+                            if let Some((x, y)) = remote_pos(pos) {
+                                let _ = s.commands.send(Command::MouseWheel {
+                                    x,
+                                    y,
+                                    dx: -(dx as i32) / 8,
+                                    dy: -(dy as i32) / 8,
+                                });
+                            }
+                            s.touch_scroll = Some((sid, pos));
+                        }
+                    }
+                }
+                egui::TouchPhase::End | egui::TouchPhase::Cancel => {
+                    if let Some((pid, _ppos, t0)) = s.touch_pending {
+                        if id == pid {
+                            // A tap only fires on a clean END; a Cancel
+                            // (system stole the gesture) sends nothing.
+                            if phase == egui::TouchPhase::End {
+                                let held = t0.elapsed();
+                                let button = if held < std::time::Duration::from_millis(500) {
+                                    MouseButtonId::Left
+                                } else {
+                                    MouseButtonId::Right
+                                };
+                                if let Some((x, y)) = remote_pos(pos) {
+                                    let _ = s.commands.send(Command::MouseMove { x, y });
+                                    let _ = s.commands.send(Command::MouseButton {
+                                        x,
+                                        y,
+                                        button,
+                                        down: true,
+                                    });
+                                    let _ = s.commands.send(Command::MouseButton {
+                                        x,
+                                        y,
+                                        button,
+                                        down: false,
+                                    });
+                                }
+                            }
+                            s.touch_pending = None;
+                        }
+                    }
+                    if s.touch_drag == Some(id) {
+                        // Release even on Cancel: a stuck left button on
+                        // the host would keep dragging forever.
+                        if let Some((x, y)) = remote_pos(pos) {
+                            let _ = s.commands.send(Command::MouseButton {
+                                x,
+                                y,
+                                button: MouseButtonId::Left,
+                                down: false,
+                            });
+                        }
+                        s.touch_drag = None;
+                    }
+                    if let Some((sid, _)) = s.touch_scroll {
+                        if id == sid {
+                            s.touch_scroll = None;
+                        }
+                    }
+                }
             }
-            if released {
-                let _ = s.commands.send(Command::MouseButton {
-                    x,
-                    y,
-                    button: mb,
-                    down: false,
-                });
+        }
+    }
+
+    // Buttons — suppressed while the touch layer owns the interaction.
+    let touch_owned = s.touch_pending.is_some()
+        || s.touch_drag.is_some()
+        || s.touch_scroll.is_some()
+        || s.touch_cooldown_until
+            .is_some_and(|t| std::time::Instant::now() < t);
+    if !touch_owned {
+        let buttons = [
+            (egui::PointerButton::Primary, MouseButtonId::Left),
+            (egui::PointerButton::Secondary, MouseButtonId::Right),
+            (egui::PointerButton::Middle, MouseButtonId::Middle),
+        ];
+        for (pb, mb) in buttons {
+            let pressed = response.ctx.input(|i| i.pointer.button_clicked(pb));
+            let released = response.ctx.input(|i| i.pointer.button_released(pb));
+            if let Some((x, y)) = pointer.and_then(remote_pos) {
+                if pressed {
+                    let _ = s.commands.send(Command::MouseButton {
+                        x,
+                        y,
+                        button: mb,
+                        down: true,
+                    });
+                }
+                if released {
+                    let _ = s.commands.send(Command::MouseButton {
+                        x,
+                        y,
+                        button: mb,
+                        down: false,
+                    });
+                }
             }
         }
     }

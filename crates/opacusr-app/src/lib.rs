@@ -5,6 +5,10 @@
 /// Android system-bar insets (status/navigation bars render over the
 /// NativeActivity's edge-to-edge window; see the module docs).
 pub mod android_insets;
+/// Runtime system-UI hooks into the Android glue: landscape while a
+/// session is live, immersive fullscreen, soft keyboard. Desktop: the
+/// calls are no-ops (see the module docs).
+pub mod android_sysui;
 pub mod app;
 pub mod branding;
 pub mod contacts;

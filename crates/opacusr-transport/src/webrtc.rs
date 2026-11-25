@@ -15,6 +15,7 @@ use bytes::Bytes;
 use tokio::sync::mpsc;
 use webrtc::api::APIBuilder;
 use webrtc::data_channel::data_channel_message::DataChannelMessage;
+use webrtc::data_channel::data_channel_state::RTCDataChannelState;
 use webrtc::data_channel::RTCDataChannel;
 use webrtc::ice_transport::ice_gathering_state::RTCIceGatheringState;
 use webrtc::ice_transport::ice_server::RTCIceServer;
@@ -174,6 +175,45 @@ pub async fn wait_connected(pc: &Arc<RTCPeerConnection>) -> Result<()> {
     }
 }
 
+/// Wait until every given data channel reports `open` (the SCTP
+/// association is up for it). `connection_state == Connected` covers
+/// ICE+DTLS only — SCTP comes up AFTER DTLS, so on a slow answerer
+/// (a phone host is the user-reported case: «к телефону не
+/// подключается … DataChannel is not opened») the offerer could return
+/// from [`WebRtcTransport::from_offerer`] while its channels were still
+/// `connecting`, and the very first handshake send died on the
+/// not-yet-open channel. Waiting here makes the handshake deterministic
+/// and lets the connect ladder fall back to the TCP relay on a real
+/// failure instead of a confusing send error.
+async fn wait_channels_open(chans: &[Arc<RTCDataChannel>]) -> Result<()> {
+    let deadline = Instant::now() + CONNECT_TIMEOUT;
+    loop {
+        if chans
+            .iter()
+            .all(|dc| dc.ready_state() == RTCDataChannelState::Open)
+        {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            let states: Vec<&str> = chans
+                .iter()
+                .map(|dc| match dc.ready_state() {
+                    RTCDataChannelState::Connecting => "connecting",
+                    RTCDataChannelState::Open => "open",
+                    RTCDataChannelState::Closing => "closing",
+                    RTCDataChannelState::Closed => "closed",
+                    _ => "unknown",
+                })
+                .collect();
+            return Err(TransportError::WebRtc(format!(
+                "data channels did not open in time ({})",
+                states.join(", ")
+            )));
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
 /// Answerer state machine: attach channel capture *before* applying the
 /// remote offer (required by the WebRTC API), then finish the handshake.
 pub struct AnswerPending {
@@ -302,6 +342,9 @@ impl WebRtcTransport {
         attach_channel_pump(&control, tx_ctl);
         attach_channel_pump(&media, tx_med);
         wait_connected(&pc).await?;
+        // ICE done ≠ SCTP done: the first handshake send must not race
+        // the channels opening (see `wait_channels_open`).
+        wait_channels_open(&[control.clone(), media.clone()]).await?;
         Ok(Self {
             pc,
             control,

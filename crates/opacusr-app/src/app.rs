@@ -100,6 +100,26 @@ pub struct SessionHandle {
     /// When the session screen opened — drives the «still no frame?»
     /// diagnostics shown in the viewer while the first frame is pending.
     pub opened_at: std::time::Instant,
+    /// Chrome-less viewer («⛶»): toolbar + sidebar hidden; on Android
+    /// also sticky-immersive system bars and landscape rotation.
+    pub fullscreen: bool,
+    /// Soft-keyboard toggle state (Android only; other platforms hide
+    /// the button — they have real keyboards).
+    pub soft_keyboard_on: bool,
+    /// Android touch layer: a touch awaiting classification — quick
+    /// release = tap (left click), held release = long-press (right
+    /// click), movement = drag (left button stays down).
+    pub touch_pending: Option<(egui::TouchId, egui::Pos2, std::time::Instant)>,
+    /// Android touch layer: touch id currently dragging (left button
+    /// already pressed down).
+    pub touch_drag: Option<egui::TouchId>,
+    /// Android touch layer: secondary finger drives two-finger scroll
+    /// (touch id, last position).
+    pub touch_scroll: Option<(egui::TouchId, egui::Pos2)>,
+    /// Suppress egui-synthesized pointer clicks while the touch layer
+    /// owns the interaction — egui reports the synthesized click in the
+    /// frame AFTER the touch ends, so the latch must outlive it.
+    pub touch_cooldown_until: Option<std::time::Instant>,
 }
 
 impl SessionHandle {
@@ -151,6 +171,12 @@ impl SessionHandle {
             cursor_pos: None,
             status: "connecting…".into(),
             opened_at: std::time::Instant::now(),
+            fullscreen: false,
+            soft_keyboard_on: false,
+            touch_pending: None,
+            touch_drag: None,
+            touch_scroll: None,
+            touch_cooldown_until: None,
         }
     }
 }
@@ -792,6 +818,11 @@ impl App {
         self.cur_connected_at = None;
 
         self.session = Some(SessionHandle::new(cmd_tx, ui_events_rx));
+        // A desktop screen letterboxed into a portrait phone was the
+        // «маленькое окно» complaint: hold sensor-landscape for the
+        // whole session (TeamViewer behavior); disconnect restores
+        // full-sensor rotation.
+        crate::android_sysui::set_landscape(true);
     }
 
     /// «Reconnect» from the history: a tap on a history row prefills
@@ -819,10 +850,23 @@ impl App {
         }
         self.finish_attempt();
         self.session = None;
+        self.restore_phone_system_ui();
         // A failed attempt keeps its gold explanation on the card;
         // «Отключено.» only for a session that actually worked.
         if !self.status_is_error {
             self.status_message = "Отключено.".into();
+        }
+    }
+
+    /// Phone system UI back to normal after a session (rotation,
+    /// soft keyboard, immersive bars). Desktop: all no-ops.
+    fn restore_phone_system_ui(&mut self) {
+        crate::android_sysui::set_landscape(false);
+        crate::android_sysui::set_keyboard(false);
+        crate::android_sysui::set_immersive(false);
+        if let Some(s) = &mut self.session {
+            s.soft_keyboard_on = false;
+            s.fullscreen = false;
         }
     }
 
@@ -1319,6 +1363,10 @@ impl eframe::App for App {
                 ClientEvent::Notice(t) => sess.status = t,
                 ClientEvent::Closed(reason) => {
                     sess.status = format!("closed: {reason}");
+                    // The session screen is dying: restore the phone
+                    // system UI (portrait rotation, hidden keyboard,
+                    // system bars) so the home screen renders normally.
+                    self.restore_phone_system_ui();
                     if let Some(ts) = self.cur_hist_ts.take() {
                         let (outcome, duration) = match self.cur_connected_at.take() {
                             Some(t0) => (Outcome::Connected, Some(now_secs().saturating_sub(t0))),
@@ -1358,10 +1406,16 @@ impl eframe::App for App {
 
         // ---- session hotkeys (F11 fullscreen, Ctrl+Shift+…) ----
         if self.session.is_some() {
-            // F11 works even while a text field is focused.
+            // F11 works even while a text field is focused. Desktop:
+            // real OS fullscreen; the chrome-less viewer mode follows so
+            // both platforms hide the toolbar/sidebar together.
             if ctx.input(|i| i.key_pressed(egui::Key::F11)) {
                 let full = ctx.input(|i| i.viewport().fullscreen == Some(true));
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!full));
+                if let Some(sess) = &mut self.session {
+                    sess.fullscreen = !full;
+                    crate::android_sysui::set_immersive(sess.fullscreen);
+                }
             }
             // Letter shortcuts are ignored while the user is typing.
             if ctx.memory(|m| m.focused().is_none()) {
