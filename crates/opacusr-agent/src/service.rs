@@ -709,11 +709,16 @@ impl AgentService {
             // Phone-host honesty: input injection is not implemented on
             // Android (NullInjector swallows everything silently) — say so
             // once instead of letting the PC user wonder why clicks do
-            // nothing.
+            // nothing. The session is threaded through the cfg block so
+            // BOTH platform builds see a coherent ownership chain (the
+            // android cross-check compiles code the desktop build cannot
+            // even see — the b785eb9/81433e3 lesson, again).
+            #[cfg(not(target_os = "android"))]
+            let session = session;
             #[cfg(target_os = "android")]
-            {
-                let mut session = session;
-                let _ = session
+            let session = {
+                let mut s = session;
+                let _ = s
                     .send_msg(&Message::ChatMessage(message::ChatMessage {
                         id: 0,
                         text: "Просмотр экрана телефона: управление с ПК пока не \
@@ -722,7 +727,8 @@ impl AgentService {
                         ts_ms: 0,
                     }))
                     .await;
-            }
+                s
+            };
             let _ = host.run(session, capture, injector, cursor).await;
         });
     }
