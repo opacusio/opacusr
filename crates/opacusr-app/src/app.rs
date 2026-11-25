@@ -120,6 +120,9 @@ pub struct SessionHandle {
     /// owns the interaction — egui reports the synthesized click in the
     /// frame AFTER the touch ends, so the latch must outlive it.
     pub touch_cooldown_until: Option<std::time::Instant>,
+    /// Per-session frame counter for the periodic sticky-immersive
+    /// reassert on Android (bars sometimes reappear after focus gain).
+    pub(crate) sysui_tick: u32,
 }
 
 impl SessionHandle {
@@ -181,6 +184,7 @@ impl SessionHandle {
             touch_drag: None,
             touch_scroll: None,
             touch_cooldown_until: None,
+            sysui_tick: 0,
         }
     }
 }
@@ -1264,9 +1268,16 @@ impl eframe::App for App {
                     if width == 0 || height == 0 {
                         continue;
                     }
+                    // A bare cursor sprite is invisible on matching
+                    // backgrounds (black arrow on a dark desktop — the
+                    // 0.12.1 report). Give every shape a 1-px contrasting
+                    // outline: transparent pixels adjacent to any opaque
+                    // pixel turn white (alpha 220). The core pixels stay
+                    // untouched, so the pointer remains recognizable.
+                    let outlined = outline_rgba(&rgba, width as usize, height as usize);
                     let img = egui::ColorImage::from_rgba_unmultiplied(
                         [width as usize, height as usize],
-                        &rgba,
+                        &outlined,
                     );
                     let tex =
                         ctx.load_texture(format!("cursor-{id}"), img, egui::TextureOptions::LINEAR);
@@ -1410,6 +1421,16 @@ impl eframe::App for App {
 
         // ---- session hotkeys (F11 fullscreen, Ctrl+Shift+…) ----
         if self.session.is_some() {
+            // Android: some ROMs drop the sticky-immersive flags when the
+            // window (re)gains focus or a system dialog closes — reassert
+            // them periodically while the chrome-less mode is on.
+            if let Some(sess) = &mut self.session {
+                sess.sysui_tick = sess.sysui_tick.wrapping_add(1);
+                #[cfg(target_os = "android")]
+                if sess.fullscreen && sess.sysui_tick % 90 == 0 {
+                    crate::android_sysui::set_immersive(true);
+                }
+            }
             // F11 works even while a text field is focused. Desktop:
             // real OS fullscreen; the chrome-less viewer mode follows so
             // both platforms hide the toolbar/sidebar together.
@@ -1589,24 +1610,24 @@ fn friendly_connect_error(reason: &str) -> String {
     let low = reason.to_lowercase();
     if low.contains("is offline") || low.contains("all signaling endpoints failed") {
         msg.push_str(
-            "\n\nКомпьютер с таким ID не найден на сигнальном сервере. Проверьте ID \
-             (в поле ID он вводится без пробелов) и убедитесь, что доступ на хосте \
-             ВКЛЮЧЕН: на компьютере — «Запустить доступ» (или служба агента), на \
-             телефоне — строка «Доступ» на главном экране, иначе телефону некуда \
-             зарегистрироваться. В одной Wi-Fi сети подключайтесь \
-             по адресу компьютера: он показан на машине-хосте в карточке «Этот \
-             компьютер» — введите его в поле ID (пример: 192.168.1.5:54000; приём \
-             включается галочкой «Прямые LAN-подключения»). Через интернет нужен \
-             ОДИН общий сигнальный сервер на обоих устройствах: адрес сервера \
-             компьютера тоже показан в карточке «Этот компьютер» — впишите его в \
-             Настройки → Подключение на втором устройстве.",
+            "\n\nУстройство с таким ID не найдено на сигнальном сервере. Проверьте ID \
+             (в поле ID он вводится без пробелов) и убедитесь, что на хосте OpacusR \
+             ОТКРЫТ и доступ включён: на компьютере — «Запустить доступ» (или служба \
+             агента), на телефоне — карточка «Этот компьютер» на главном экране. \
+             Если хост — телефон: он должен быть разблокирован, OpacusR открыт \
+             и в одной Wi-Fi сети с ПК (или с настроенным общим сигнальным сервером). \
+             В одной Wi-Fi сети подключайтесь и по адресу компьютера — он показан \
+             на машине-хосте в карточке «Этот компьютер» (пример: 192.168.1.5:54000). \
+             Через интернет нужен ОДИН общий сигнальный сервер на обоих устройствах: \
+             адрес сервера компьютера тоже показан в карточке «Этот компьютер» — \
+             впишите его в Настройки → Подключение на втором устройстве.",
         );
     } else if low.contains("screen streaming unavailable") {
         msg.push_str(
-            "\n\nХост принял сессию, но трансляция экрана на нём недоступна: на \
-             телефоне захват экрана (MediaProjection) ещё в разработке — просмотр \
-             экрана телефона появится в следующей версии. Файлы и чат в сессии \
-             с компьютером-хостом работают как обычно.",
+            "\n\nХост принял сессию, но не смог начать трансляцию экрана. На телефоне \
+             проверьте, что диалог OpacusR (согласие на запись экрана) подтверждён \
+             и у приложения не выключено разрешение. На компьютере проверьте, что \
+             экран разблокирован и агент работает.",
         );
     } else if low.contains("connect failed") || low.contains("refused") {
         msg.push_str(
@@ -1629,6 +1650,35 @@ fn friendly_connect_error(reason: &str) -> String {
         );
     }
     msg
+}
+
+/// Add a 1-px contrasting outline around a cursor sprite: transparent
+/// pixels adjacent (8-neighborhood) to any opaque pixel turn white with
+/// alpha 220. Black pointers stay visible on dark backgrounds, white
+/// ones on light ones (the core keeps its own color).
+fn outline_rgba(rgba: &[u8], w: usize, h: usize) -> Vec<u8> {
+    let opaque = |x: usize, y: usize| x < w && y < h && rgba[(y * w + x) * 4 + 3] > 64;
+    let mut out = rgba.to_vec();
+    for y in 0..h {
+        for x in 0..w {
+            let i = (y * w + x) * 4;
+            if rgba[i + 3] > 64 {
+                continue; // core pixel: untouched
+            }
+            let near = opaque(x.wrapping_sub(1), y)
+                || opaque(x + 1, y)
+                || opaque(x, y.wrapping_sub(1))
+                || opaque(x, y + 1)
+                || opaque(x.wrapping_sub(1), y.wrapping_sub(1))
+                || opaque(x + 1, y.wrapping_sub(1))
+                || opaque(x.wrapping_sub(1), y + 1)
+                || opaque(x + 1, y + 1);
+            if near {
+                out[i..i + 4].copy_from_slice(&[255, 255, 255, 220]);
+            }
+        }
+    }
+    out
 }
 
 /// Dark native window chrome. egui paints only the client area — on
@@ -1686,3 +1736,35 @@ fn apply_native_chrome(frame: &eframe::Frame) {
 /// from the content background automatically).
 #[cfg(not(windows))]
 fn apply_native_chrome(_frame: &eframe::Frame) {}
+
+#[cfg(test)]
+mod tests {
+    use super::outline_rgba;
+
+    #[test]
+    fn cursor_outline_wraps_opaque_core_and_keeps_it() {
+        let at = |w: usize, x: usize, y: usize| (y * w + x) * 4;
+        let put = |rgba: &mut [u8], i: usize, c: [u8; 4]| rgba[i..i + 4].copy_from_slice(&c);
+
+        // 3x3: only the center pixel is opaque (black arrow tip).
+        let mut rgba = vec![0u8; 9 * 4];
+        put(&mut rgba, at(3, 1, 1), [10, 10, 10, 255]);
+        let out = outline_rgba(&rgba, 3, 3);
+        // Core untouched.
+        assert_eq!(&out[at(3, 1, 1)..at(3, 1, 1) + 4], &[10, 10, 10, 255]);
+        // Direct neighbors: white outline, semi-transparent.
+        for (x, y) in [(0usize, 1usize), (1, 0), (1, 2), (2, 1)] {
+            assert_eq!(&out[at(3, x, y)..at(3, x, y) + 4], &[255, 255, 255, 220]);
+        }
+        // Diagonal-only-adjacent… corner (0,0) is adjacent to opaque
+        // (1,1) diagonally → outlined too.
+        assert_eq!(&out[at(3, 0, 0)..at(3, 0, 0) + 4], &[255, 255, 255, 220]);
+
+        // A pixel with NO opaque neighbors stays untouched: paint the
+        // core at (0,0) of a 4x4 — (3,3) is far from it.
+        let mut rgba = vec![0u8; 16 * 4];
+        put(&mut rgba, at(4, 0, 0), [255, 0, 0, 255]);
+        let out = outline_rgba(&rgba, 4, 4);
+        assert_eq!(&out[at(4, 3, 3)..at(4, 3, 3) + 4], &[0, 0, 0, 0]);
+    }
+}

@@ -293,6 +293,13 @@ fn set_chromeless(s: &mut SessionHandle, on: bool) {
 
 /// The central remote view: the fitted video, the cursor overlay and
 /// the input capture (toolbar/sidebar are laid out around it).
+///
+/// The video is CENTERED in the panel: allocating the fitted rect
+/// directly left it pinned to the top-left corner with the whole
+/// empty remainder to the right/bottom — on a phone in landscape this
+/// read as «видео не на весь экран» even when the mode was right.
+/// The input rect spans the FULL panel so taps outside the video
+/// still clamp into the remote screen edges.
 fn session_view(ui: &mut egui::Ui, s: &mut SessionHandle) {
     let available = ui.available_size();
     let Some(tex) = &s.texture else {
@@ -316,7 +323,8 @@ fn session_view(ui: &mut egui::Ui, s: &mut SessionHandle) {
                     ui.add_space(12.0);
                     ui.label(
                         egui::RichText::new(
-                            "Если хост — телефон: трансляция экрана телефона ещё в разработке.\n\
+                            "Если хост — телефон: разблокируйте его и подтвердите\n\
+                                 трансляцию (диалог OpacusR на экране телефона).\n\
                                  Если хост — компьютер: проверьте, что на нём экран разблокирован\n\
                                  и OpacusR работает.",
                         )
@@ -330,8 +338,10 @@ fn session_view(ui: &mut egui::Ui, s: &mut SessionHandle) {
     };
     let (rw, rh) = (s.screen.0 as f32, s.screen.1 as f32);
     let fit = fit_size(available, rw, rh);
-    let (rect, response) = ui.allocate_exact_size(fit, Sense::click_and_drag());
+    // The whole panel is the input surface; the video sits centered in it.
+    let (panel, response) = ui.allocate_exact_size(available, Sense::click_and_drag());
     response.request_focus();
+    let rect = egui::Rect::from_center_size(panel.center(), fit);
     ui.painter().image(
         tex.id(),
         rect,
@@ -353,7 +363,11 @@ fn session_view(ui: &mut egui::Ui, s: &mut SessionHandle) {
     if let Some((cx, cy, visible, shape_id)) = s.cursor_pos {
         if visible && rw > 0.0 {
             if let Some(cur) = s.cursor_shapes.get(&shape_id) {
-                let scale = rect.width() / rw;
+                // Never let the pointer shrink below ~14 screen px: on a
+                // shrunken/letterboxed phone view the raw scale made the
+                // arrow a few pixels tall — invisible (report 0.12.1:
+                // «не видно курсор» on a dark desktop).
+                let scale = (rect.width() / rw).max(14.0 / cur.size.0.max(1.0));
                 let top_left = egui::pos2(
                     rect.min.x + cx as f32 * scale - cur.hotspot.0 * scale,
                     rect.min.y + cy as f32 * scale - cur.hotspot.1 * scale,
@@ -618,11 +632,25 @@ fn capture_input(
         }
     }
 
-    // Keyboard (only while the view has focus).
-    if !response.has_focus() {
+    // Keyboard: desktop forwards while the view has focus; on Android
+    // the soft keyboard is summoned via the ⌨ button and may hold the
+    // focus itself — forward while it is open even if egui's focus
+    // landed elsewhere, otherwise typed text is silently dropped.
+    #[allow(unused_mut)]
+    let mut keyboard_live = response.has_focus();
+    #[cfg(target_os = "android")]
+    if s.soft_keyboard_on {
+        keyboard_live = true;
+    }
+    if !keyboard_live {
         return;
     }
     let events = response.ctx.input(|i| i.events.clone());
+    // Printable keys ride BOTH an Event::Key (Space) and an Event::Text
+    // (" ") on some backends — dedupe so hosts do not get double spaces.
+    let text_seen_space = events
+        .iter()
+        .any(|ev| matches!(ev, egui::Event::Text(t) if t.contains(' ')));
     for ev in events {
         match ev {
             egui::Event::Key {
@@ -631,6 +659,9 @@ fn capture_input(
                 modifiers,
                 ..
             } => {
+                if key == egui::Key::Space && text_seen_space && modifiers.is_none() {
+                    continue;
+                }
                 if pressed && !modifiers.is_none() {
                     if let Some(opkey) = map_key(key) {
                         let _ = s.commands.send(Command::KeyEvent {
@@ -648,6 +679,12 @@ fn capture_input(
                 }
             }
             egui::Event::Text(text) => {
+                let _ = s.commands.send(Command::TextInput { text });
+            }
+            // Real IME commits (Gboard swipe/autocorrect, desktop CJK
+            // input methods) arrive as Ime events, not Text — forward
+            // the committed string, drop the composition chatter.
+            egui::Event::Ime(egui::ImeEvent::Commit(text)) if !text.is_empty() => {
                 let _ = s.commands.send(Command::TextInput { text });
             }
             _ => {}

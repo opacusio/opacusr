@@ -314,6 +314,41 @@ fn own_machine_strip(ui: &mut Ui, app: &mut App) {
                     }
                 }
             }
+            // Phone-as-host: start the MediaProjection consent flow ahead
+            // of the first PC connection (once granted it survives until
+            // the app dies, so later sessions start instantly). Pressing
+            // it while active stops the projection.
+            #[cfg(target_os = "android")]
+            {
+                let active = opacusr_capture::android_projection::is_active();
+                let label = if active {
+                    "⏹ Трансляция"
+                } else {
+                    "⏺ Трансляция"
+                };
+                if ui
+                    .small_button(label)
+                    .on_hover_text(if active {
+                        "Остановить трансляцию экрана этого телефона"
+                    } else {
+                        "Включить трансляцию экрана этого телефона (ПК сможет смотреть его по ID)"
+                    })
+                    .clicked()
+                {
+                    if active {
+                        opacusr_capture::android_projection::stop();
+                    } else {
+                        opacusr_capture::android_projection::request_start();
+                    }
+                }
+                if opacusr_capture::android_projection::start_failed() {
+                    ui.label(
+                        egui::RichText::new("доступ к экрану отклонён")
+                            .color(egui::Color32::from_rgb(235, 120, 120))
+                            .small(),
+                    );
+                }
+            }
         });
     }
 
@@ -354,15 +389,26 @@ fn own_machine_strip(ui: &mut Ui, app: &mut App) {
         );
     }
 
-    // Android is viewer-only today: a session INTO this phone renders an
-    // empty frame stream because MediaProjection capture is not
-    // implemented yet. Say so where users build the wrong expectation
-    // (the «С ноутбука на телефон пусто» report).
+    // Android CAN host now: the first incoming session pops the system
+    // MediaProjection consent («Начать сейчас»), after which the phone
+    // streams its own screen to the PC (view-only). A manual switch on
+    // the host card starts it ahead of time so the first PC connection
+    // is instant.
     #[cfg(target_os = "android")]
-    crate::hint(
-        ui,
-        "трансляция экрана ЭТОГО устройства пока в разработке: телефон работает как пульт и смотрит чужие экраны",
-    );
+    {
+        let active = opacusr_capture::android_projection::is_active();
+        if active {
+            crate::hint(
+                ui,
+                "трансляция экрана этого телефона включена — ПК может смотреть его по ID выше",
+            );
+        } else {
+            crate::hint(
+                ui,
+                "трансляция экрана этого телефона включится по запросу ПК (появится системный диалог) — или нажмите «Трансляция» выше",
+            );
+        }
+    }
 
     ui.add_space(6.0);
     crate::hint(ui, "Пароль доступа, 2FA и служба — в Настройках.");
