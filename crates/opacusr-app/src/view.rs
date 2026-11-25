@@ -430,18 +430,22 @@ fn capture_input(
         }
     }
 
-    // ---- Android touch layer --------------------------------------------
+    // ---- Android touch layer (compiled everywhere) ------------------------
     // egui-winit synthesizes pointer events from the FIRST touch (so a
     // tap already clicks), but nothing else worked on a phone: no right
-    // click, no scroll, no keyboard, and a held touch still clicked.
-    // This layer owns touch input end to end:
+    // click, no scroll, and a held touch still clicked. This layer owns
+    // touch input end to end:
     //   quick tap      → left click at the touch point
     //   long-press     → right click at the touch point
     //   drag           → move with the left button pressed
     //   second finger  → two-finger scroll
     // The egui-synthesized pointer clicks are suppressed around every
     // touch interaction (cooldown latch below) so taps don't double.
-    #[cfg(target_os = "android")]
+    // Compiled on ALL platforms (not cfg-android): touch-only events
+    // never arrive without a touchscreen, so desktop behavior is
+    // unchanged — but the host build type-checks the code (the Android
+    // cross-check CI job runs AFTER push, which once let a bad method
+    // name slip through).
     {
         let now = std::time::Instant::now();
         let touch_events: Vec<egui::Event> = response.ctx.input(|i| {
@@ -473,7 +477,7 @@ fn capture_input(
                 }
                 egui::TouchPhase::Move => {
                     if let Some((pid, ppos, _t0)) = s.touch_pending {
-                        if id == pid && pos.dist(ppos) > 14.0 {
+                        if id == pid && pos.distance(ppos) > 14.0 {
                             // A drag: press the left button at the touch
                             // origin, then follow the finger.
                             if let Some((x, y)) = remote_pos(ppos) {
