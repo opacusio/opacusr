@@ -11,6 +11,10 @@ homepage.workspace = true
 thiserror = { workspace = true }
 tracing = { workspace = true }
 x11rb = { workspace = true, optional = true }
+# android_projection (MediaProjection host backend) — raw vtable JNI,
+# compiled on ALL targets so the desktop build type-checks the wiring
+# (same discipline as opacusr-android).
+jni-sys = "0.4"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Wayland (PipeWire) capture — optional, experimental. See src/wayland.rs.

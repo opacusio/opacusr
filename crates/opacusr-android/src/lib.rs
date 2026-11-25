@@ -1,11 +1,12 @@
 //! OpacusR Android app: NativeActivity glue around the egui UI.
 //!
-//! The phone acts as a VIEWER: it connects to an OpacusR host (by
-//! partner ID or ip:port, the same two input fields as on the desktop)
-//! and shows the shared screen with touch controls. Capturing the
-//! Android screen itself (host mode) needs MediaProjection and comes
-//! later. The cargo-apk manifest lives in this crate's Cargo.toml;
-//! CI builds `OpacusR.apk` for arm64-v8a on release tags.
+//! The phone works as a VIEWER (connects to an OpacusR host by partner
+//! ID or ip:port and shows the shared screen with touch controls) AND
+//! as a HOST: MediaProjection capture via the CaptureActivity/
+//! CaptureService shim (classes.dex, packaged by CI — see
+//! crates/opacusr-android/java/ and AndroidManifest.xml). The
+//! cargo-apk manifest lives in this crate's Cargo.toml; CI builds
+//! `OpacusR.apk` for arm64-v8a on release tags.
 //!
 //! Desktop note: on non-Android targets this crate is an empty cdylib
 //! (everything below is `cfg(target_os = "android")`).
@@ -73,6 +74,25 @@ fn android_main(android_app: AndroidApp) {
             hook_set_keyboard,
         );
         tracing::info!(target: "opacusr", "system-UI hooks registered");
+
+        // Phone-as-host: cache the JNI context + the CaptureActivity class
+        // ref for the MediaProjection backend (the class resolves through
+        // the ACTIVITY's class loader — FindClass cannot see APK classes
+        // from a native thread). Best-effort: without it the phone simply
+        // stays viewer-only and the honest hints explain that.
+        match android_load_capture_class(android_app.vm_as_ptr(), android_app.activity_as_ptr()) {
+            Some(cls_global) => {
+                opacusr_capture::android_projection::set_context(
+                    android_app.vm_as_ptr() as usize,
+                    activity_global,
+                    cls_global,
+                );
+                tracing::info!(target: "opacusr", "projection bridge ready");
+            }
+            None => {
+                tracing::warn!(target: "opacusr", "projection bridge unavailable (no capture shim)")
+            }
+        }
     } else {
         tracing::warn!(target: "opacusr", "system-UI hooks unavailable (no global ref)");
     }
@@ -164,6 +184,19 @@ impl UiJni {
         }
         true
     }
+
+    /// Framework-class lookup (FindClass cannot resolve APK classes from
+    /// an attached native thread — those go through cached class refs).
+    fn find_class(&self, name: &core::ffi::CStr) -> Option<jni_sys::jclass> {
+        unsafe {
+            let cls = ((*self.iface).v1_6.FindClass)(self.env, name.as_ptr());
+            if self.check("FindClass") && !cls.is_null() {
+                Some(cls)
+            } else {
+                None
+            }
+        }
+    }
 }
 
 /// Creates a global ref of the activity for the runtime hooks (the
@@ -202,9 +235,11 @@ fn android_new_global_ref(
     }
 }
 
-/// UI-thread hook: sensor-landscape while a session is live, full-sensor
-/// otherwise (Activity.setRequestedOrientation: SENSOR_LANDSCAPE = 13,
-/// FULL_SENSOR = 10 — full sensor allows BOTH orientations again).
+/// UI-thread hook: sensor-landscape while a session is live, back to the
+/// manifest default afterwards (Activity.setRequestedOrientation:
+/// SENSOR_LANDSCAPE = 6, FULL_USER = 13 — the manifest's `fullUser`
+/// default; the old values 13/10 actually meant FULL_USER/FULL_SENSOR,
+/// so sessions never really held landscape — 0.12.1 report).
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
 fn hook_set_landscape(on: bool) {
     let Some(j) = UiJni::attach() else { return };
@@ -220,7 +255,7 @@ fn hook_set_landscape(on: bool) {
             c"(I)V".as_ptr(),
         );
         if j.check("landscape: GetMethodID") {
-            let orientation: core::ffi::c_int = if on { 13 } else { 10 };
+            let orientation: core::ffi::c_int = if on { 6 } else { 13 };
             ((*j.iface).v1_6.CallVoidMethod)(j.env, j.activity, mid, orientation);
             j.check("landscape: call");
         }
@@ -230,11 +265,17 @@ fn hook_set_landscape(on: bool) {
 
 /// UI-thread hook: sticky-immersive system bars (chrome-less fullscreen)
 /// or back to the edge-to-edge state the insets module compensates for.
+///
+/// API 30+ first: `Window.getInsetsController().hide(systemBars())` —
+/// the legacy `View.setSystemUiVisibility(0x1706)` path is deprecated,
+/// and on several Android 14/15 ROMs it no longer hides the bars at all
+/// (0.12.1 report: «не разворачивает на весь экран» with the bars still
+/// visible). The legacy path stays as the pre-API-30 fallback.
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
 fn hook_set_immersive(on: bool) {
     let Some(j) = UiJni::attach() else { return };
     unsafe {
-        // Activity.getWindow() → Window.getDecorView() → View.
+        // Activity.getWindow() → Window.
         let act_cls: jni_sys::jclass = ((*j.iface).v1_6.GetObjectClass)(j.env, j.activity);
         if !j.check("immersive: activity class") {
             return;
@@ -254,6 +295,56 @@ fn hook_set_immersive(on: bool) {
         if window.is_null() {
             return;
         }
+
+        let sdk = android_sdk_int(&j);
+        if sdk >= 30 {
+            let win_cls: jni_sys::jclass = ((*j.iface).v1_6.GetObjectClass)(j.env, window);
+            let get_ctrl = ((*j.iface).v1_6.GetMethodID)(
+                j.env,
+                win_cls,
+                c"getInsetsController".as_ptr(),
+                c"()Landroid/view/WindowInsetsController;".as_ptr(),
+            );
+            let mut ctrl: jni_sys::jobject = std::ptr::null_mut();
+            if j.check("immersive: getInsetsController") {
+                ctrl = ((*j.iface).v1_6.CallObjectMethod)(j.env, window, get_ctrl);
+                j.check("immersive: controller");
+            }
+            ((*j.iface).v1_6.DeleteLocalRef)(j.env, win_cls);
+            if !ctrl.is_null() {
+                if let Some(mask) = system_bars_mask(&j) {
+                    let ctrl_cls: jni_sys::jclass = ((*j.iface).v1_6.GetObjectClass)(j.env, ctrl);
+                    let hide_show = ((*j.iface).v1_6.GetMethodID)(
+                        j.env,
+                        ctrl_cls,
+                        if on { c"hide" } else { c"show" }.as_ptr(),
+                        c"(I)V".as_ptr(),
+                    );
+                    if j.check("immersive: hide/show lookup") {
+                        ((*j.iface).v1_6.CallVoidMethod)(j.env, ctrl, hide_show, mask);
+                        j.check("immersive: hide/show call");
+                    }
+                    let behavior = ((*j.iface).v1_6.GetMethodID)(
+                        j.env,
+                        ctrl_cls,
+                        c"setSystemBarsBehavior".as_ptr(),
+                        c"(I)V".as_ptr(),
+                    );
+                    if j.check("immersive: behavior lookup") {
+                        // BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE = 2.
+                        ((*j.iface).v1_6.CallVoidMethod)(j.env, ctrl, behavior, 2);
+                        j.check("immersive: behavior call");
+                    }
+                    ((*j.iface).v1_6.DeleteLocalRef)(j.env, ctrl_cls);
+                    ((*j.iface).v1_6.DeleteLocalRef)(j.env, ctrl);
+                    ((*j.iface).v1_6.DeleteLocalRef)(j.env, window);
+                    return;
+                }
+            }
+            // Controller unavailable (unexpected) → fall through to legacy.
+        }
+
+        // Legacy path (pre-API 30, and the API 30+ fallback).
         let win_cls: jni_sys::jclass = ((*j.iface).v1_6.GetObjectClass)(j.env, window);
         let get_decor = ((*j.iface).v1_6.GetMethodID)(
             j.env,
@@ -281,8 +372,7 @@ fn hook_set_immersive(on: bool) {
         if j.check("immersive: setSystemUiVisibility") {
             // SYSTEM_UI_FLAG_LAYOUT_STABLE | LAYOUT_HIDE_NAVIGATION |
             // LAYOUT_FULLSCREEN | HIDE_NAVIGATION | FULLSCREEN |
-            // IMMERSIVE_STICKY = 0x1706 (deprecated since API 30 but
-            // still honored; NativeActivity has no WindowInsets API).
+            // IMMERSIVE_STICKY = 0x1706.
             let flags: core::ffi::c_int = if on { 0x1706 } else { 0 };
             ((*j.iface).v1_6.CallVoidMethod)(j.env, decor, set_vis, flags);
             j.check("immersive: call");
@@ -292,14 +382,63 @@ fn hook_set_immersive(on: bool) {
     }
 }
 
+/// `Build.VERSION.SDK_INT` (framework class — safe from any thread).
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+fn android_sdk_int(j: &UiJni) -> i32 {
+    unsafe {
+        let Some(cls) = j.find_class(c"android/os/Build$VERSION") else {
+            return 0;
+        };
+        let fid =
+            ((*j.iface).v1_6.GetStaticFieldID)(j.env, cls, c"SDK_INT".as_ptr(), c"I".as_ptr());
+        if !j.check("SDK_INT lookup") {
+            ((*j.iface).v1_6.DeleteLocalRef)(j.env, cls);
+            return 0;
+        }
+        let v = ((*j.iface).v1_6.GetStaticIntField)(j.env, cls, fid);
+        j.check("SDK_INT read");
+        ((*j.iface).v1_6.DeleteLocalRef)(j.env, cls);
+        v
+    }
+}
+
+/// `WindowInsets.Type.systemBars()` mask (API 30+ static helper).
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+fn system_bars_mask(j: &UiJni) -> Option<jni_sys::jint> {
+    unsafe {
+        let cls = j.find_class(c"android/view/WindowInsets$Type")?;
+        let mid = ((*j.iface).v1_6.GetStaticMethodID)(
+            j.env,
+            cls,
+            c"systemBars".as_ptr(),
+            c"()I".as_ptr(),
+        );
+        if !j.check("systemBars lookup") {
+            ((*j.iface).v1_6.DeleteLocalRef)(j.env, cls);
+            return None;
+        }
+        let mask = ((*j.iface).v1_6.CallStaticIntMethod)(j.env, cls, mid);
+        j.check("systemBars call");
+        ((*j.iface).v1_6.DeleteLocalRef)(j.env, cls);
+        Some(mask)
+    }
+}
+
 /// UI-thread hook: soft keyboard. Show via InputMethodManager
 /// toggleSoftInput(SHOW_FORCED, 0); hide via
 /// hideSoftInputFromWindow(decorView token) — more reliable than a
 /// second toggle if something else opened the keyboard meanwhile.
+/// While the keyboard is up the window switches to
+/// SOFT_INPUT_ADJUST_NOTHING: the remote video must NOT shrink when
+/// the IME opens (the 0.12.1 report — «с нее невозможно работать», the
+/// keyboard covered half the screen); the default adjust mode is
+/// restored on hide.
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
 fn hook_set_keyboard(on: bool) {
     let Some(j) = UiJni::attach() else { return };
     unsafe {
+        // The IME must not resize/shrink the video window.
+        set_soft_input_mode(&j, if on { 0x30 } else { 0x00 });
         let act_cls: jni_sys::jclass = ((*j.iface).v1_6.GetObjectClass)(j.env, j.activity);
         if !j.check("keyboard: activity class") {
             return;
@@ -404,6 +543,237 @@ fn hook_set_keyboard(on: bool) {
         ((*j.iface).v1_6.DeleteLocalRef)(j.env, imm);
         ((*j.iface).v1_6.DeleteLocalRef)(j.env, act_cls);
     }
+}
+
+/// `Window.setSoftInputMode(mode)` — ADJUST_NOTHING while the soft
+/// keyboard is open, stock mode (UNSPECIFIED = 0x00) when hidden.
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+fn set_soft_input_mode(j: &UiJni, mode: core::ffi::c_int) {
+    unsafe {
+        let act_cls: jni_sys::jclass = ((*j.iface).v1_6.GetObjectClass)(j.env, j.activity);
+        if !j.check("softinput: activity class") {
+            return;
+        }
+        let get_window = ((*j.iface).v1_6.GetMethodID)(
+            j.env,
+            act_cls,
+            c"getWindow".as_ptr(),
+            c"()Landroid/view/Window;".as_ptr(),
+        );
+        let mut window: jni_sys::jobject = std::ptr::null_mut();
+        if j.check("softinput: getWindow") {
+            window = ((*j.iface).v1_6.CallObjectMethod)(j.env, j.activity, get_window);
+            j.check("softinput: window");
+        }
+        ((*j.iface).v1_6.DeleteLocalRef)(j.env, act_cls);
+        if window.is_null() {
+            return;
+        }
+        let win_cls: jni_sys::jclass = ((*j.iface).v1_6.GetObjectClass)(j.env, window);
+        let mid = ((*j.iface).v1_6.GetMethodID)(
+            j.env,
+            win_cls,
+            c"setSoftInputMode".as_ptr(),
+            c"(I)V".as_ptr(),
+        );
+        if j.check("softinput: lookup") {
+            ((*j.iface).v1_6.CallVoidMethod)(j.env, window, mid, mode);
+            j.check("softinput: call");
+        }
+        ((*j.iface).v1_6.DeleteLocalRef)(j.env, win_cls);
+        ((*j.iface).v1_6.DeleteLocalRef)(j.env, window);
+    }
+}
+
+// -------------------------------------------------------------------------
+// MediaProjection host capture: JNI bridge to the CaptureActivity /
+// CaptureService shim (classes.dex; see crates/opacusr-android/java/).
+// The class ref must be resolved through the activity's own class
+// loader — FindClass cannot see APK classes from a native thread.
+// -------------------------------------------------------------------------
+
+/// Loads `io.opacusr.app.CaptureActivity` through the activity's
+/// class loader and keeps a GLOBAL ref (leaked, process lifetime).
+/// Returns the address, or None on failure (degrades to no projection).
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+fn android_load_capture_class(
+    vm_raw: *mut core::ffi::c_void,
+    activity_raw: *mut core::ffi::c_void,
+) -> Option<usize> {
+    if vm_raw.is_null() || activity_raw.is_null() {
+        return None;
+    }
+    unsafe {
+        let vm_handle: *mut jni_sys::JavaVM = vm_raw.cast();
+        let vm: jni_sys::JavaVM = *vm_handle;
+        if vm.is_null() {
+            return None;
+        }
+        let mut env: *mut jni_sys::JNIEnv = std::ptr::null_mut();
+        let res = ((*vm).v1_1.AttachCurrentThread)(
+            vm_handle,
+            (&mut env) as *mut *mut jni_sys::JNIEnv as *mut *mut core::ffi::c_void,
+            std::ptr::null_mut(),
+        );
+        if res != jni_sys::JNI_OK || env.is_null() {
+            return None;
+        }
+        let iface: *const jni_sys::JNINativeInterface_ = *env;
+        let fail = |what: &str| {
+            ((*iface).v1_6.ExceptionCheck)(env);
+            ((*iface).v1_6.ExceptionClear)(env);
+            tracing::warn!(target: "opacusr", "capture class: {what}");
+        };
+
+        let act_cls: jni_sys::jclass = ((*iface).v1_6.GetObjectClass)(env, activity_raw.cast());
+        if act_cls.is_null() {
+            fail("GetObjectClass");
+            return None;
+        }
+        let get_class = ((*iface).v1_6.GetMethodID)(
+            env,
+            act_cls,
+            c"getClass".as_ptr(),
+            c"()Ljava/lang/Class;".as_ptr(),
+        );
+        ((*iface).v1_6.DeleteLocalRef)(env, act_cls);
+        if get_class.is_null() {
+            fail("getClass");
+            return None;
+        }
+        let cls_obj = ((*iface).v1_6.CallObjectMethod)(env, activity_raw.cast(), get_class);
+        if cls_obj.is_null() {
+            fail("getClass call");
+            return None;
+        }
+        let cls_cls: jni_sys::jclass = ((*iface).v1_6.GetObjectClass)(env, cls_obj);
+        let get_loader = ((*iface).v1_6.GetMethodID)(
+            env,
+            cls_cls,
+            c"getClassLoader".as_ptr(),
+            c"()Ljava/lang/ClassLoader;".as_ptr(),
+        );
+        ((*iface).v1_6.DeleteLocalRef)(env, cls_cls);
+        if get_loader.is_null() {
+            fail("getClassLoader");
+            ((*iface).v1_6.DeleteLocalRef)(env, cls_obj);
+            return None;
+        }
+        let loader = ((*iface).v1_6.CallObjectMethod)(env, cls_obj, get_loader);
+        ((*iface).v1_6.DeleteLocalRef)(env, cls_obj);
+        if loader.is_null() {
+            fail("getClassLoader call");
+            return None;
+        }
+        let loader_cls: jni_sys::jclass = ((*iface).v1_6.GetObjectClass)(env, loader);
+        let load_class = ((*iface).v1_6.GetMethodID)(
+            env,
+            loader_cls,
+            c"loadClass".as_ptr(),
+            c"(Ljava/lang/String;)Ljava/lang/Class;".as_ptr(),
+        );
+        ((*iface).v1_6.DeleteLocalRef)(env, loader_cls);
+        if load_class.is_null() {
+            fail("loadClass");
+            ((*iface).v1_6.DeleteLocalRef)(env, loader);
+            return None;
+        }
+        let name: jni_sys::jstring =
+            ((*iface).v1_6.NewStringUTF)(env, c"io.opacusr.app.CaptureActivity".as_ptr());
+        let capt_cls = ((*iface).v1_6.CallObjectMethod)(env, loader, load_class, name);
+        ((*iface).v1_6.DeleteLocalRef)(env, name);
+        ((*iface).v1_6.DeleteLocalRef)(env, loader);
+        if ((*iface).v1_6.ExceptionCheck)(env) {
+            ((*iface).v1_6.ExceptionClear)(env);
+            tracing::warn!(target: "opacusr", "capture class: loadClass failed (shim missing?)");
+            return None;
+        }
+        if capt_cls.is_null() {
+            tracing::warn!(target: "opacusr", "capture class: null");
+            return None;
+        }
+        let global = ((*iface).v1_6.NewGlobalRef)(env, capt_cls);
+        ((*iface).v1_6.DeleteLocalRef)(env, capt_cls);
+        if global.is_null() {
+            ((*iface).v1_6.ExceptionClear)(env);
+            tracing::warn!(target: "opacusr", "capture class: global ref failed");
+            return None;
+        }
+        Some(global as usize)
+    }
+}
+
+// --- JNI callbacks the Java shim calls back into (static native methods;
+// symbol names must match the Java declarations byte for byte). These
+// are NOT cfg-gated so the desktop build type-checks them; the Android
+// cross-check CI job compiles them FOR Android.
+
+/// `CaptureService` reports the VirtualDisplay is live: cache the
+/// ImageReader + MediaProjection as global refs and mark the state
+/// active. The frame poller (AndroidCapture) reads from the reader.
+#[no_mangle]
+#[allow(clippy::not_unsafe_ptr_arg_deref)] // exported JNI symbol: the ABI mandates raw-pointer params
+pub extern "system" fn Java_io_opacusr_app_CaptureService_nativeProjectionStarted(
+    env: *mut jni_sys::JNIEnv,
+    _cls: jni_sys::jclass,
+    width: core::ffi::c_int,
+    height: core::ffi::c_int,
+    dpi: core::ffi::c_int,
+    reader: jni_sys::jobject,
+    projection: jni_sys::jobject,
+) {
+    if env.is_null() || reader.is_null() || projection.is_null() {
+        return;
+    }
+    unsafe {
+        let iface: *const jni_sys::JNINativeInterface_ = *env;
+        if iface.is_null() {
+            return;
+        }
+        let mut vm_raw: *mut jni_sys::JavaVM = std::ptr::null_mut();
+        if ((*iface).v1_6.GetJavaVM)(env, &mut vm_raw) != jni_sys::JNI_OK || vm_raw.is_null() {
+            ((*iface).v1_6.ExceptionClear)(env);
+            return;
+        }
+        let rg = ((*iface).v1_6.NewGlobalRef)(env, reader);
+        let pg = ((*iface).v1_6.NewGlobalRef)(env, projection);
+        ((*iface).v1_6.ExceptionClear)(env);
+        if rg.is_null() || pg.is_null() {
+            tracing::warn!(target: "opacusr", "projection start: global refs failed");
+            return;
+        }
+        opacusr_capture::android_projection::set_active(
+            vm_raw as usize,
+            rg as usize,
+            pg as usize,
+            width,
+            height,
+            dpi,
+        );
+    }
+}
+
+/// `CaptureService` observed `MediaProjection.Callback.onStop` — the
+/// user (or the system) revoked the capture.
+#[no_mangle]
+#[allow(clippy::not_unsafe_ptr_arg_deref)] // exported JNI symbol: the ABI mandates raw-pointer params
+pub extern "system" fn Java_io_opacusr_app_CaptureService_nativeProjectionStopped(
+    _env: *mut jni_sys::JNIEnv,
+    _cls: jni_sys::jclass,
+) {
+    opacusr_capture::android_projection::deactivate();
+}
+
+/// `CaptureActivity`: the consent dialog was denied (or the service
+/// could not start) — remember so the host spawn path fails fast.
+#[no_mangle]
+#[allow(clippy::not_unsafe_ptr_arg_deref)] // exported JNI symbol: the ABI mandates raw-pointer params
+pub extern "system" fn Java_io_opacusr_app_CaptureActivity_nativeProjectionFailed(
+    _env: *mut jni_sys::JNIEnv,
+    _cls: jni_sys::jclass,
+) {
+    opacusr_capture::android_projection::mark_failed();
+    tracing::info!(target: "opacusr", "projection consent denied");
 }
 
 /// The acquired MulticastLock global ref, stored as an address and

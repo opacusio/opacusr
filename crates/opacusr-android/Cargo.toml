@@ -71,6 +71,10 @@ resizeable_activity = true
 # acquisition helper is ungated so the desktop build type-checks it.
 jni-sys = "0.4"
 tracing = { workspace = true }
+# MediaProjection host capture state (android_projection): referenced
+# from android_main + the ungated JNI callbacks, so pull it on ALL
+# targets to keep the desktop build type-checking the wiring.
+opacusr-capture = { workspace = true }
 
 [target.'cfg(target_os = "android")'.dependencies]
 opacusr-app = { workspace = true }

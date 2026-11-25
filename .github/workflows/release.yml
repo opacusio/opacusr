@@ -234,7 +234,7 @@ jobs:
           path: opacusr-*-macos-aarch64.tar.gz
 
   android:
-    name: Android (APK, viewer)
+    name: Android (APK, viewer + host)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -284,12 +284,21 @@ jobs:
           CXX_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang++
           AR_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
         run: cargo apk build -p opacusr-android --release --target aarch64-linux-android
-      - name: Rename APK
+      - name: Repackage APK (MediaProjection shim + full manifest)
+        # cargo-apk 0.10 can only declare the single NativeActivity; the
+        # phone-as-host capture shim (CaptureActivity/CaptureService) is
+        # compiled into classes.dex and linked with our full manifest by
+        # scripts/package_android.sh, then re-signed with the same
+        # committed keystore so update installs keep chaining.
+        env:
+          ANDROID_HOME: /usr/local/lib/android/sdk
+          CARGO_APK_RELEASE_KEYSTORE: ${{ github.workspace }}/release.keystore
+          CARGO_APK_RELEASE_KEYSTORE_PASSWORD: opacusr-release-key
         run: |
           VER="${GITHUB_REF_NAME#v}"
           apk=$(find target -name '*.apk' -path '*release*' | head -1)
           test -n "$apk"
-          cp "$apk" "opacusr-${VER}-android-arm64.apk"
+          bash scripts/package_android.sh "$apk" "opacusr-${VER}-android-arm64.apk" "$VER"
       - uses: actions/upload-artifact@v7
         with:
           name: android-artifacts

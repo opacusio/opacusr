@@ -660,25 +660,28 @@ impl AgentService {
             events: tx,
             commands: cmd_rx,
         };
-        let capture: Box<dyn ScreenCapture> = if self.demo {
-            Box::new(opacusr_capture::test::TestSource::new(1280, 720))
-        } else {
-            match opacusr_capture::platform_capture(
-                false,
-                opacusr_capture::WinBackend::parse(&self.cfg.capture),
-            ) {
-                Ok(c) => c,
-                Err(e) => {
-                    let _ = self
-                        .events
-                        .send(AgentEvent::Notice(format!("no capture backend: {e}")));
-                    // Do NOT strand the viewer in «Ожидание первого кадра»:
-                    // the session is already accepted, so explain the close
-                    // on the wire before tearing it down. This is the
-                    // PC-viewing-phone case (Android has no capture backend
-                    // yet — the viewer shows the same hint in its UI).
-                    let reason = format!("screen streaming unavailable on this host: {e}");
-                    tokio::spawn(async move {
+        let demo = self.demo;
+        let capture_backend = self.cfg.capture.clone();
+        let spawn_events = self.events.clone();
+        tokio::spawn(async move {
+            // Capture backend creation. On Android this is where the
+            // phone-as-host consent dance happens: if MediaProjection is
+            // not live yet, pop the system consent dialog and wait for the
+            // user to approve (the PC viewer sits in «Ожидание первого
+            // кадра» meanwhile); deny → honest close instead of a hang.
+            let capture: Box<dyn ScreenCapture> = if demo {
+                Box::new(opacusr_capture::test::TestSource::new(1280, 720))
+            } else {
+                match android_capture_or_request(&spawn_events, &capture_backend).await {
+                    Ok(c) => c,
+                    Err(e) => {
+                        let _ = spawn_events
+                            .send(AgentEvent::Notice(format!("no capture backend: {e}")));
+                        // Do NOT strand the viewer in «Ожидание первого кадра»:
+                        // the session is already accepted, so explain the close
+                        // on the wire before tearing it down (PC-viewing-phone
+                        // consent denied / capture unavailable).
+                        let reason = format!("screen streaming unavailable on this host: {e}");
                         let mut session = session;
                         let _ = session
                             .send_msg(&Message::ChatMessage(message::ChatMessage {
@@ -691,20 +694,37 @@ impl AgentService {
                             .send_msg(&Message::Bye(ByeReason::Error(reason)))
                             .await;
                         session.close().await;
-                    });
-                    return;
+                        return;
+                    }
                 }
+            };
+            let injector: Box<dyn InputInjector> = opacusr_input::platform_injector();
+            // Cursor overlay source: synthetic in demo mode, platform poller
+            // otherwise (backends without support simply never send updates).
+            let cursor: Box<dyn opacusr_capture::CursorSource> = if demo {
+                Box::new(opacusr_capture::TestCursor::new((1280, 720)))
+            } else {
+                opacusr_capture::platform_cursor()
+            };
+            // Phone-host honesty: input injection is not implemented on
+            // Android (NullInjector swallows everything silently) — say so
+            // once instead of letting the PC user wonder why clicks do
+            // nothing.
+            #[cfg(target_os = "android")]
+            {
+                let mut session = session;
+                let _ = session
+                    .send_msg(&Message::ChatMessage(message::ChatMessage {
+                        id: 0,
+                        text: "Просмотр экрана телефона: управление с ПК пока не \
+                               поддерживается — сессия только для просмотра."
+                            .into(),
+                        ts_ms: 0,
+                    }))
+                    .await;
             }
-        };
-        let injector: Box<dyn InputInjector> = opacusr_input::platform_injector();
-        // Cursor overlay source: synthetic in demo mode, platform poller
-        // otherwise (backends without support simply never send updates).
-        let cursor: Box<dyn opacusr_capture::CursorSource> = if self.demo {
-            Box::new(opacusr_capture::TestCursor::new((1280, 720)))
-        } else {
-            opacusr_capture::platform_cursor()
-        };
-        tokio::spawn(host.run(session, capture, injector, cursor));
+            let _ = host.run(session, capture, injector, cursor).await;
+        });
     }
 
     /// Direct LAN listener: no signaling, password still required.
@@ -797,6 +817,64 @@ fn is_loopback_endpoint(url: &str) -> bool {
         || host == "::1"
         || host.starts_with("127.")
         || host.starts_with("::ffff:127.")
+}
+
+/// Build the capture backend for a host session.
+///
+/// Desktop: `platform_capture` exactly as before. Android (phone-as-host):
+/// the MediaProjection backend — when the projection is not live yet,
+/// pop the system consent dialog via the CaptureActivity shim and wait up
+/// to 45 s for the user to approve it (the PC viewer shows «Ожидание
+/// первого кадра» meanwhile). A denial or timeout surfaces as an error so
+/// the session closes with an honest message instead of hanging.
+async fn android_capture_or_request(
+    events: &mpsc::UnboundedSender<AgentEvent>,
+    capture_cfg: &str,
+) -> Result<Box<dyn ScreenCapture>, opacusr_capture::CaptureError> {
+    #[cfg(target_os = "android")]
+    {
+        let _ = capture_cfg;
+        if !opacusr_capture::android_projection::is_active() {
+            if opacusr_capture::android_projection::start_failed() {
+                return Err(opacusr_capture::CaptureError::Other(
+                    "screen capture consent was denied earlier — approve the \
+                     projection dialog on the phone (or press «Трансляция» on \
+                     its host card)"
+                        .into(),
+                ));
+            }
+            let _ = events.send(AgentEvent::Notice(
+                "ПК запрашивает экран телефона: подтвердите трансляцию в \
+                 системном диалоге на телефоне"
+                    .into(),
+            ));
+            opacusr_capture::android_projection::request_start();
+            for _ in 0..90 {
+                if opacusr_capture::android_projection::is_active() {
+                    break;
+                }
+                if opacusr_capture::android_projection::start_failed() {
+                    return Err(opacusr_capture::CaptureError::Other(
+                        "screen capture consent denied on the phone".into(),
+                    ));
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            }
+            if !opacusr_capture::android_projection::is_active() {
+                return Err(opacusr_capture::CaptureError::Other(
+                    "screen capture consent timed out on the phone (45 s)".into(),
+                ));
+            }
+        }
+        Ok(Box::new(
+            opacusr_capture::android_projection::AndroidCapture::new(),
+        ))
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = events;
+        opacusr_capture::platform_capture(false, opacusr_capture::WinBackend::parse(capture_cfg))
+    }
 }
 
 #[cfg(test)]

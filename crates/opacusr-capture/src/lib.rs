@@ -12,6 +12,7 @@
 //! * [`test::TestSource`] — deterministic animated pattern used by tests
 //!   and `opacusr-agent --demo` (no real screen required).
 
+pub mod android_projection;
 pub mod cursor;
 /// Byte-level `spa_meta_cursor` reader for the PipeWire/portal backend.
 pub mod cursor_meta;
@@ -254,6 +255,15 @@ pub fn platform_capture(
         // only governs the Unix path below.
         let _ = allow_test_fallback;
         return Ok(Box::new(crate::win32::Win32Capture::new()));
+    }
+    #[cfg(target_os = "android")]
+    {
+        // Phone-as-host: the MediaProjection backend is always constructible
+        // (the consent dialog is requested/awaited by the agent's host spawn
+        // path — see opacusr-agent spawn_host). It errors per-frame while the
+        // projection is not live yet.
+        let _ = allow_test_fallback;
+        return Ok(Box::new(crate::android_projection::AndroidCapture::new()));
     }
     #[allow(unreachable_code)]
     {
