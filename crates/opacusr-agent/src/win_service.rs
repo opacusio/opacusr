@@ -669,6 +669,9 @@ mod imp {
 
     pub fn install() -> anyhow::Result<()> {
         let exe = std::env::current_exe()?;
+        // Captured before `exe` moves into the ServiceInfo below — the
+        // firewall step (later in this function) needs the path too.
+        let exe_path = exe.to_string_lossy().into_owned();
         let manager = manager(ServiceManagerAccess::CREATE_SERVICE | ServiceManagerAccess::CONNECT)
             .context("connect to the service control manager (run as Administrator)")?;
         let info = ServiceInfo {
@@ -748,7 +751,7 @@ mod imp {
         // while everything on localhost works. Best-effort: without
         // admin rights netsh fails and the installer moves on (the
         // service itself still runs).
-        ensure_firewall_rules(&exe.to_string_lossy());
+        ensure_firewall_rules(&exe_path);
 
         // Start immediately: `service install` must leave the machine
         // reachable, not «after the next reboot» (TeamViewer behavior).
