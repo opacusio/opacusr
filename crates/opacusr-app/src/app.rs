@@ -1416,9 +1416,10 @@ impl eframe::App for App {
         egui::TopBottomPanel::top("opacusr_top").show(ctx, |ui| {
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                // Brand: the OpacusR ghost (flat tile) instead of a bare dot.
+                // Brand: the OpacusR ghost (flat tile) instead of a bare
+                // dot. No "OpacusR" wordmark next to it — the window title
+                // already says it, so the top bar stays clean.
                 crate::branding::icon(ui, &self.brand.logo, 22.0);
-                ui.label(theme::bold("OpacusR").strong().size(18.0));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     // Build marker: lets the user (and support) see which
                     // binary actually runs — e.g. after an MSI upgrade
