@@ -410,12 +410,19 @@ fn windows_machine_guid() -> Option<String> {
             return None;
         }
         let text = String::from_utf8_lossy(&out.stdout);
-        let value = text
-            .lines()
-            .filter(|l| l.contains("MachineGuid"))
-            .filter_map(|l| l.split_whitespace().last())
-            .last()?
-            .to_string();
+        // reg prints the GUID on the "MachineGuid    REG_SZ    <value>"
+        // line; a plain loop sidesteps the double-ended-iterator .last()
+        // lint chain (CI clippy is stricter than the sandbox one).
+        let mut value: Option<&str> = None;
+        for line in text.lines() {
+            if !line.contains("MachineGuid") {
+                continue;
+            }
+            if let Some(tok) = line.split_whitespace().next_back() {
+                value = Some(tok);
+            }
+        }
+        let value = value?.to_string();
         (!value.is_empty()).then_some(value)
     })
     .clone()
