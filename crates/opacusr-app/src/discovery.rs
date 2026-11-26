@@ -101,18 +101,38 @@ impl Discovery {
     /// Current host list: deduped by fullname, stale entries dropped,
     /// sorted case-insensitively by label.
     pub fn snapshot(&self) -> Vec<DiscoveredHost> {
+        let own = self.own_id.load(Ordering::Relaxed);
+        let now = Instant::now();
         let mut hosts = self.hosts.lock().unwrap();
-        hosts.retain(|key, (_, seen)| {
-            if key.starts_with("beacon://") {
-                seen.elapsed() < beacon::BEACON_TTL
-            } else {
-                seen.elapsed() < HOST_TTL
-            }
-        });
+        hosts.retain(|key, (host, seen)| entry_usable(key, host, *seen, own, now));
         let mut out: Vec<DiscoveredHost> = hosts.values().map(|(h, _)| h.clone()).collect();
         out.sort_by_key(|h| h.label.to_lowercase());
         out
     }
+}
+
+/// Keep-rule shared with the tests: the entry is fresh enough AND not
+/// our own advertisement looped back. mDNS resolves our own agent too —
+/// with EVERY interface address, Wi-Fi AND the mobile-data one. A
+/// v0.13.1 phone on dual networks then spent its «connect by ID»
+/// attempts dialing its OWN signaling server over the mobile interface
+/// (a long round trip ending in «peer offline») instead of the peer.
+fn entry_usable(
+    key: &str,
+    host: &DiscoveredHost,
+    seen: Instant,
+    own_id: u64,
+    now: Instant,
+) -> bool {
+    let ttl = if key.starts_with("beacon://") {
+        beacon::BEACON_TTL
+    } else {
+        HOST_TTL
+    };
+    now.checked_duration_since(seen)
+        .map(|age| age < ttl)
+        .unwrap_or(false)
+        && host.peer_id != Some(own_id)
 }
 
 /// Bind the UDP beacon listener and spawn its thread. Best-effort: a
@@ -429,5 +449,67 @@ mod tests {
             lan_port: 0,
         });
         assert!(beacon_host(&pkt, ip).is_none());
+    }
+
+    #[test]
+    fn snapshot_rule_drops_own_looped_back_advertisements() {
+        let host = DiscoveredHost {
+            fullname: "beacon://192.168.2.25/545600641".into(),
+            label: "Телефон".into(),
+            signal_url: Some("ws://192.168.2.25:8080/signal".into()),
+            lan_target: Some("192.168.2.25:54000".into()),
+            peer_id: Some(545_600_641),
+        };
+        let now = Instant::now();
+        // Our own agent's advertisement (any interface) → dropped even
+        // while fresh.
+        assert!(!entry_usable(
+            "beacon://192.168.2.25/545600641",
+            &host,
+            now,
+            545_600_641,
+            now
+        ));
+        // Someone else's beacon with the same age → kept.
+        assert!(entry_usable(
+            "beacon://192.168.2.25/545600641",
+            &host,
+            now,
+            798_065_551,
+            now
+        ));
+        // A stale entry of a foreign host → dropped.
+        let old = now - beacon::BEACON_TTL - std::time::Duration::from_secs(1);
+        assert!(!entry_usable(
+            "beacon://192.168.2.25/545600641",
+            &host,
+            old,
+            798_065_551,
+            now
+        ));
+        // mDNS entries follow the (longer) mDNS TTL, not the beacon one.
+        let mdns = DiscoveredHost {
+            fullname: "pc._opacusr._tcp.local.".into(),
+            label: "pc".into(),
+            signal_url: Some("ws://192.168.2.10:8080/signal".into()),
+            lan_target: None,
+            peer_id: Some(798_065_551),
+        };
+        let older = now - beacon::BEACON_TTL - std::time::Duration::from_secs(1);
+        assert!(entry_usable(
+            "pc._opacusr._tcp.local.",
+            &mdns,
+            older,
+            545_600_641,
+            now
+        ));
+        // An own mDNS resolution is equally useless as a dial target.
+        assert!(!entry_usable(
+            "pc._opacusr._tcp.local.",
+            &mdns,
+            now,
+            798_065_551,
+            now
+        ));
     }
 }

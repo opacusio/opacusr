@@ -761,24 +761,13 @@ impl App {
             // accepted when the host reports the dialed ID (or no ID at
             // all — an older build), so a stale history entry pointing
             // at another machine can never start a wrong session.
+            let discovered = self.discovery.snapshot();
             let mut direct: Vec<String> = self.book.lan_hosts_for(&host_id.to_string());
-            let mut urls = if self.config.signaling_urls.is_empty() {
-                vec![self.server_url.clone()]
-            } else {
-                let mut u = self.config.signaling_urls.clone();
-                if !u.iter().any(|x| x == &self.server_url) {
-                    u.insert(0, self.server_url.clone());
-                }
-                u
-            };
-            // mDNS + UDP-broadcast discovered hosts join the ladder
-            // automatically: on one Wi-Fi the plain 9-digit ID then works
-            // even when BOTH devices keep their loopback defaults — each
-            // discovered endpoint carries its own registry, and the one
-            // that knows the ID completes the handshake. A beacon/mDNS
-            // entry that carries the dialed ID also donates its
-            // direct-LAN target, tried before any signaling.
-            for host in self.discovery.snapshot() {
+            // Discovered hosts (mDNS + UDP beacon) donate their direct-LAN
+            // target when they carry the dialed ID: on one Wi-Fi the plain
+            // 9-digit ID then works even when BOTH devices keep their
+            // loopback defaults, with no signaling at all.
+            for host in &discovered {
                 if host.peer_id == Some(host_id) {
                     if let Some(target) = &host.lan_target {
                         if !direct.contains(target) {
@@ -786,11 +775,28 @@ impl App {
                         }
                     }
                 }
+            }
+            // Live LAN signaling endpoints go FIRST — their registry is
+            // the likeliest ID holder on this network; then the
+            // user-configured ones; this machine's own server goes LAST.
+            // v0.13.2-: the order was reversed and a LAN dial began with
+            // «peer offline» from its own loopback registry — the one
+            // endpoint that can never know a LAN peer that never dialed us.
+            let mut urls: Vec<String> = Vec::new();
+            for host in &discovered {
                 if let Some(url) = &host.signal_url {
                     if !urls.contains(url) {
                         urls.push(url.clone());
                     }
                 }
+            }
+            for url in &self.config.signaling_urls {
+                if !urls.contains(url) {
+                    urls.push(url.clone());
+                }
+            }
+            if !urls.contains(&self.server_url) {
+                urls.push(self.server_url.clone());
             }
             urls.dedup();
 
@@ -810,7 +816,11 @@ impl App {
             self.status_is_error = false;
             self.rt.spawn(async move {
                 let mut cmd_rx = Some(cmd_rx);
-                let mut last_err = String::from("no routes available");
+                // Keep EVERY route's own failure for the final report:
+                // v0.13.1 showed only the last route's error, which on a
+                // dual-network phone was its own mobile-data endpoint —
+                // the informative LAN timeouts scrolled away unseen.
+                let mut errs: Vec<String> = Vec::new();
                 for (i, route) in routes.iter().enumerate() {
                     let (target, direct) = match route {
                         Route::Direct(addr) => (addr.clone(), true),
@@ -854,7 +864,14 @@ impl App {
                             &target, host_id, settings, choice,
                         ))
                     };
-                    match tokio::time::timeout(std::time::Duration::from_secs(25), attempt).await {
+                    // A direct LAN dial either completes within seconds or
+                    // is being silently dropped (client isolation / wrong
+                    // network / firewall) — holding a dead target 25 s just
+                    // stretches the wait; signaling routes keep the
+                    // generous cap because a working one may fall back to
+                    // the relay internally before it finishes.
+                    let cap = if direct { 12 } else { 25 };
+                    match tokio::time::timeout(std::time::Duration::from_secs(cap), attempt).await {
                         Ok(Ok((client, mut events))) => {
                             // Direct dials are validated against the ID
                             // the host reports in its handshake: another
@@ -865,7 +882,7 @@ impl App {
                             if direct {
                                 if let Some(hid) = client.host_id {
                                     if hid != host_id {
-                                        last_err = format!("{target}: другой узел (id {hid})");
+                                        errs.push(format!("{target}: другой узел (id {hid})"));
                                         let _ = ui_events_tx.send(ClientEvent::Notice(
                                             "по этому адресу другой узел, пробую следующий путь…"
                                                 .into(),
@@ -888,22 +905,27 @@ impl App {
                             return;
                         }
                         Ok(Err(e)) => {
-                            last_err = format!("{target}: {e}");
+                            errs.push(format!("{target}: {e}"));
                             let _ = ui_events_tx.send(ClientEvent::Notice(
                                 "путь не сработал, пробую следующий…".into(),
                             ));
                         }
                         Err(_) => {
-                            last_err = format!("{target}: timed out");
+                            errs.push(format!("{target}: timed out"));
                             let _ = ui_events_tx.send(ClientEvent::Notice(
                                 "путь не ответил, пробую следующий…".into(),
                             ));
                         }
                     }
                 }
-                let _ = ui_events_tx.send(ClientEvent::Closed(format!(
-                    "all signaling endpoints failed ({last_err})"
-                )));
+                let mut reason = String::from("all signaling endpoints failed");
+                if errs.is_empty() {
+                    reason.push_str(" (no routes available)");
+                } else {
+                    reason.push_str(":\n• ");
+                    reason.push_str(&errs.join("\n• "));
+                }
+                let _ = ui_events_tx.send(ClientEvent::Closed(reason));
             });
         }
 
@@ -1744,17 +1766,39 @@ pub(crate) fn tool_button(ui: &mut egui::Ui, label: &str, open: bool) -> egui::R
 /// card in gold. The raw `reason` stays on the session screen and in
 /// Настройки → Диагностика; here it is followed by the guidance the
 /// user actually needs (TeamViewer's «why can't I connect» answer).
+/// Since v0.13.2 the reason lists EVERY route it tried — classification
+/// keys off what the routes actually SAW: silent timeouts mean the
+/// packets never got through (client isolation / firewall / different
+/// networks), «offline» means a server WAS reached but the host is not
+/// registered there.
 fn friendly_connect_error(reason: &str) -> String {
     let mut msg = format!("Подключение не удалось: {reason}");
     let low = reason.to_lowercase();
-    if low.contains("is offline") || low.contains("all signaling endpoints failed") {
+    if low.contains("timed out") {
         msg.push_str(
-            "\n\nУстройство с таким ID не найдено на сигнальном сервере. Проверьте ID \
-             (в поле ID он вводится без пробелов) и убедитесь, что на хосте OpacusR \
-             ОТКРЫТ и доступ включён: на компьютере — «Запустить доступ» (или служба \
-             агента), на телефоне — карточка «Этот компьютер» на главном экране. \
-             Если хост — телефон: он должен быть разблокирован, OpacusR открыт \
-             и в одной Wi-Fi сети с ПК (или с настроенным общим сигнальным сервером). \
+            "\n\nПуть(и) не ответили вовремя — пакеты между устройствами не проходят. \
+             Если оба устройства в одной Wi-Fi сети, почти наверняка на роутере включена \
+             «изоляция клиентов» (AP/Client isolation — типична для гостевых и Mesh-сетей) \
+             или брандмауэр Windows молча отбрасывает входящие. Что делать: \
+             1) в настройках роутера отключите изоляцию клиентов («доступ между \
+             беспроводными клиентами»); 2) разрешите OpacusR в брандмауэре Windows \
+             для частных сетей; 3) убедитесь, что оба устройства в ОДНОЙ сети \
+             (телефон — по Wi-Fi, а не по мобильному интернету); 4) обходной путь — \
+             раздайте точку доступа Wi-Fi с одного устройства и подключите второе \
+             к ней: в такой сети изоляции не бывает; 5) через интернет нужен ОДИН \
+             общий сигнальный сервер — адрес из карточки «Этот компьютер» впишите \
+             в Настройки → Подключение на втором устройстве.",
+        );
+    } else if low.contains("is offline") || low.contains("all signaling endpoints failed") {
+        msg.push_str(
+            "\n\nУстройство с таким ID не найдено на сигнальном сервере (при этом сервер \
+             ОТВЕТИЛ). Проверьте ID (в поле ID он вводится без пробелов) и убедитесь, \
+             что на хосте OpacusR ОТКРЫТ и доступ включён: на компьютере — «Запустить \
+             доступ» (или служба агента), на телефоне — карточка «Этот компьютер» \
+             на главном экране. Если хост точно включён — подождите 5–10 секунд и \
+             повторите: beacon-обнаружение обновляет адреса каждые 3 секунды, и \
+             подключение по ID пойдёт напрямую, без сервера. Если хост — телефон: \
+             он должен быть разблокирован, OpacusR открыт и в одной Wi-Fi сети с ПК. \
              В одной Wi-Fi сети подключайтесь и по адресу компьютера — он показан \
              на машине-хосте в карточке «Этот компьютер» (пример: 192.168.1.5:54000). \
              Через интернет нужен ОДИН общий сигнальный сервер на обоих устройствах: \
@@ -1782,7 +1826,7 @@ fn friendly_connect_error(reason: &str) -> String {
              Безопасность) и код 2FA, если хост его требует. После нескольких \
              неудачных попыток хост временно блокирует подключения.",
         );
-    } else if low.contains("timed out") || low.contains("timeout") {
+    } else if low.contains("timeout") || low.contains("timed") {
         msg.push_str(
             "\n\nСервер не ответил вовремя. Проверьте интернет на обоих устройствах \
              и адрес сигнального сервера (Настройки → Подключение).",

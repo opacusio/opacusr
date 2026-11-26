@@ -420,6 +420,18 @@ fn own_machine_strip(ui: &mut Ui, app: &mut App) {
             ui,
             "адрес сервера вводится на другом устройстве: Настройки → Подключение",
         );
+    } else {
+        // No usable Wi-Fi/LAN address: on mobile data alone the phone is
+        // invisible to LAN peers and hears no beacons — say so instead of
+        // letting every LAN dial fail mysteriously (v0.13.1 report: the
+        // phone sat on a dual Wi-Fi+mobile network and the ladder kept
+        // probing dead endpoints).
+        crate::hint(
+            ui,
+            "Wi-Fi выключен (только мобильная сеть): прямые LAN-подключения и \
+             beacon-обнаружение недоступны — подключение возможно только через \
+             общий сигнальный сервер (Настройки → Подключение)",
+        );
     }
 
     // Android CAN host now: the first incoming session pops the system
