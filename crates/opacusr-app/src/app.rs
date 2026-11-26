@@ -48,6 +48,16 @@ pub struct SessionHandle {
     pub panel_term: bool,
     /// TCP tunnel side panel (SSH-style local forwarding).
     pub panel_tunnel: bool,
+    /// Android call menu (⋯): chat/files/terminal/stats/tunnel and the
+    /// rest of the controls live there — the toolbar row stays short
+    /// so the video gets the whole screen.
+    pub panel_menu: bool,
+    /// On-screen control-keys strip (Ctrl/Alt/Shift/Win + Esc/arrows/F1
+    /// –F12): a phone soft keyboard has none of those.
+    pub panel_keys: bool,
+    /// Sticky modifiers for the keys strip (bits of `mods`). Consumed
+    /// by the next non-modifier key tap.
+    pub sticky_mods: u8,
     /// Active tunnel listeners: (bound port, target host, target port).
     pub tunnels: Vec<(u16, String, u16)>,
     pub last_mouse: Option<(u32, u32)>,
@@ -152,9 +162,14 @@ impl SessionHandle {
             clipboard_sync: true,
             audio_on: false,
             panel_chat: false,
-            panel_files: true,
+            // Was `true` — a 320 px files sidebar ate the phone screen
+            // (the «увеличь окно» report); it lives in the call menu now.
+            panel_files: false,
             panel_term: false,
             panel_tunnel: false,
+            panel_menu: false,
+            panel_keys: false,
+            sticky_mods: 0,
             tunnels: Vec::new(),
             last_mouse: None,
             last_frame: None,
@@ -644,6 +659,16 @@ impl App {
 
     pub(crate) fn connect_clicked(&mut self, label: Option<String>) {
         let input = self.peer_id_input.replace([' ', '-'], "");
+        // Auto-fill: the password that already worked for THIS target.
+        // The save existed all along (viewer_passwords on a successful
+        // session), but a manually retyped ID still showed an empty
+        // field — «не запоминает пароль». The field is filled visibly,
+        // so the user sees what will be sent.
+        if self.password_input.is_empty() {
+            if let Some(pw) = self.config.viewer_passwords.get(&input) {
+                self.password_input = pw.clone();
+            }
+        }
         let password = self.password_input.clone();
         if password.is_empty() {
             // Gold on the card + the keyboard up on the password field:
@@ -1795,7 +1820,10 @@ fn friendly_connect_error(reason: &str) -> String {
              ОТВЕТИЛ). Проверьте ID (в поле ID он вводится без пробелов) и убедитесь, \
              что на хосте OpacusR ОТКРЫТ и доступ включён: на компьютере — «Запустить \
              доступ» (или служба агента), на телефоне — карточка «Этот компьютер» \
-             на главном экране. Если хост точно включён — подождите 5–10 секунд и \
+             на главном экране. Если ID вводился давно (контакт, история) — сверьте \
+             его с карточкой «Этот компьютер» на машине-хосте: до 0.14.0 ID менялся \
+             при каждом перезапуске агента, теперь он закреплён за устройством \
+             навсегда. Если хост точно включён — подождите 5–10 секунд и \
              повторите: beacon-обнаружение обновляет адреса каждые 3 секунды, и \
              подключение по ID пойдёт напрямую, без сервера. Если хост — телефон: \
              он должен быть разблокирован, OpacusR открыт и в одной Wi-Fi сети с ПК. \

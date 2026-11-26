@@ -341,11 +341,22 @@ impl AgentService {
     ) -> anyhow::Result<()> {
         let proxy = proxy_for_endpoint(&self.cfg.proxy, url)?;
         let mut sig = SignalingClient::connect_via(url, proxy.as_ref()).await?;
+        // Stable peer ID: request the persisted assignment, falling back
+        // to the value derived from the machine fingerprint. The server
+        // re-issues the same id to the same fingerprint even while a
+        // dead socket of ours still holds it (takeover), so the ID
+        // survives reconnects, restarts and server restarts — saved
+        // contacts stop breaking with «peer … is offline».
+        let fp = crate::config::AgentConfig::machine_fingerprint();
+        let requested_id = crate::config::AgentConfig::disk_last_peer_id()
+            .or_else(|| Some(crate::config::AgentConfig::stable_id_for(&fp)));
         sig.send(&SignalMessage::Register(Register {
             platform: opacusr_proto::Platform::current(),
             display_name: self.cfg.name.clone(),
             is_agent: true,
             unattended: self.unattended,
+            requested_id,
+            key_fp: Some(fp),
         }))
         .await?;
 

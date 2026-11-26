@@ -489,6 +489,10 @@ impl SessionClient {
             display_name: settings.display_name.clone(),
             is_agent: false,
             unattended: false,
+            // The viewer's own id is ephemeral — nobody dials it. Only
+            // the agent (is_agent: true) requests a stable id.
+            requested_id: None,
+            key_fp: None,
         }))
         .await?;
         // Time-bounded registration: a server that accepts the TCP/WS

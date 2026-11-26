@@ -188,7 +188,14 @@ fn own_machine_strip(ui: &mut Ui, app: &mut App) {
     theme::section(ui, "Этот компьютер");
     ui.add_space(6.0);
     let running_id = app.host.as_ref().and_then(|h| h.my_id);
-    let shown = running_id.or(app.config.last_peer_id);
+    // The machine's STABLE id: the server-assigned one when known,
+    // otherwise the deterministic value the fingerprint requests on the
+    // next registration. Since 0.14.0 the id never changes again, so
+    // contacts typed once stay valid even with the agent offline.
+    let stable = opacusr_agent::config::AgentConfig::stable_id_for(
+        &opacusr_agent::config::AgentConfig::machine_fingerprint(),
+    );
+    let shown = running_id.or(app.config.last_peer_id).or(Some(stable));
     match shown {
         Some(id) => {
             let online = running_id.is_some();

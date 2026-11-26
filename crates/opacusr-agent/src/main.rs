@@ -512,12 +512,19 @@ async fn register_once(cfg: &AgentConfig, url: &str) -> anyhow::Result<opacusr_p
     let proxy = opacusr_agent::proxy_for_endpoint(&cfg.proxy, url)?;
     let mut sig =
         opacusr_transport::signaling::SignalingClient::connect_via(url, proxy.as_ref()).await?;
+    // Same stable-ID rules as AgentService::serve_once: the CLI probe
+    // must not mint a throwaway id that overwrites the persisted one.
+    let fp = AgentConfig::machine_fingerprint();
+    let requested_id =
+        AgentConfig::disk_last_peer_id().or_else(|| Some(AgentConfig::stable_id_for(&fp)));
     sig.send(&opacusr_proto::signal::SignalMessage::Register(
         opacusr_proto::signal::Register {
             platform: opacusr_proto::Platform::current(),
             display_name: cfg.name.clone(),
             is_agent: true,
             unattended: cfg.is_unattended(),
+            requested_id,
+            key_fp: Some(fp),
         },
     ))
     .await?;

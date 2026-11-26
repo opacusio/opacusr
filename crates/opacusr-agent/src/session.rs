@@ -442,6 +442,11 @@ async fn run_session(
     // the position only when it actually moves (keeps idle links quiet).
     let mut cursor_serial: Option<u64> = None;
     let mut last_cursor: Option<(i32, i32, bool)> = None;
+    // A one-shot shape() failure (GetIconInfo can hiccup while the
+    // pointer changes) used to be marked «seen» immediately and the
+    // cursor went dark for the whole session — retry a few frames
+    // before giving up.
+    let mut shape_tries: u32 = 0;
 
     // Clipboard sync state (echo suppression). Markers are content hashes
     // so text and images share one mechanism.
@@ -483,19 +488,30 @@ async fn run_session(
                     let (ox, oy) = capture.origin();
                     let (cx, cy) = (pos.x - ox, pos.y - oy);
                     if cursor_serial != Some(pos.serial) {
-                        if let Some(sh) = cursor.shape(pos.serial) {
-                            session.send_msg(&Message::CursorShape(message::CursorShape {
-                                id: pos.serial,
-                                width: sh.width,
-                                height: sh.height,
-                                hotspot_x: sh.hotspot_x,
-                                hotspot_y: sh.hotspot_y,
-                                rgba: sh.rgba,
-                            })).await?;
+                        match cursor.shape(pos.serial) {
+                            Some(sh) => {
+                                session.send_msg(&Message::CursorShape(message::CursorShape {
+                                    id: pos.serial,
+                                    width: sh.width,
+                                    height: sh.height,
+                                    hotspot_x: sh.hotspot_x,
+                                    hotspot_y: sh.hotspot_y,
+                                    rgba: sh.rgba,
+                                }))
+                                .await?;
+                                cursor_serial = Some(pos.serial);
+                                shape_tries = 0;
+                            }
+                            None => {
+                                shape_tries += 1;
+                                if shape_tries >= 5 {
+                                    // Give up on this serial: retrying
+                                    // every frame would spam the wire
+                                    // for genuinely missing shapes.
+                                    cursor_serial = Some(pos.serial);
+                                }
+                            }
                         }
-                        // Mark as seen even on failure: retrying every
-                        // frame would spam the wire for missing shapes.
-                        cursor_serial = Some(pos.serial);
                     }
                     let next = (cx, cy, pos.visible);
                     if last_cursor.as_ref() != Some(&next) {

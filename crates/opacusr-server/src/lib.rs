@@ -69,6 +69,13 @@ struct PeerHandle {
     info: PeerInfo,
     tx: mpsc::Sender<SignalMessage>,
     last_seen: Arc<std::sync::atomic::AtomicU64>,
+    /// Connection generation: a STALE connection's unregister must not
+    /// delete a takeover's fresh registration of the same id.
+    gen: u64,
+    /// Fingerprint of the machine key this connection registered with
+    /// (`None` for old clients). Takeover of a busy id is allowed only
+    /// for the same fingerprint.
+    fp: Option<String>,
 }
 
 /// Per-peer outbound queue depth. A peer that does not drain its queue
@@ -94,28 +101,73 @@ fn now() -> u64 {
 #[derive(Default)]
 pub struct Registry {
     peers: std::sync::Mutex<HashMap<PeerId, PeerHandle>>,
+    /// Machine-key fingerprint → the id this machine always gets
+    /// (stable ids; the «peer … is offline» fix: the id used to be
+    /// minted anew on EVERY registration, so saved contacts broke
+    /// after each agent restart/reconnect).
+    fps: std::sync::Mutex<HashMap<String, PeerId>>,
+    /// Connection generation counter for the unregister guard.
+    gen_counter: std::sync::atomic::AtomicU64,
+}
+
+/// Mint a random free id (the pre-0.14.0 behavior).
+fn mint_random(peers: &HashMap<PeerId, PeerHandle>) -> PeerId {
+    let mut rng = rand::thread_rng();
+    loop {
+        let candidate: PeerId =
+            rng.gen_range(opacusr_proto::MIN_PEER_ID..=opacusr_proto::MAX_PEER_ID);
+        if !peers.contains_key(&candidate) {
+            return candidate;
+        }
+    }
 }
 
 impl Registry {
-    /// Register a peer and return its fresh public id + inbound queue.
-    /// `None` when the registry is already at `max_peers` (atomic
-    /// check-and-insert — the old pre-check in `handle_socket` raced
-    /// under concurrent registrations).
+    /// Register a peer and return its id + inbound queue.
+    ///
+    /// Identity rules (stable ids):
+    /// - a fingerprint seen before re-issues the SAME id — and when a
+    ///   dead socket of the SAME machine still holds it, the takeover
+    ///   replaces the handle (the old task's unregister is a no-op via
+    ///   the generation guard); a busy id is NEVER given to a different
+    ///   fingerprint;
+    /// - otherwise `requested_id` is honored when valid and free;
+    /// - otherwise a random id is minted (old behavior).
+    ///
+    /// `None` when the registry is at `max_peers` and no takeover
+    /// applies (atomic check-and-insert — the old pre-check raced).
     pub fn register(
         &self,
         info: PeerInfo,
+        requested_id: Option<PeerId>,
+        key_fp: Option<&str>,
         max_peers: usize,
-    ) -> Option<(PeerId, mpsc::Receiver<SignalMessage>)> {
+    ) -> Option<(PeerId, mpsc::Receiver<SignalMessage>, u64)> {
         let mut peers = self.peers.lock().unwrap();
-        if peers.len() >= max_peers {
+        let mut fps = self.fps.lock().unwrap();
+        let fp_known = key_fp.and_then(|fp| fps.get(fp).copied());
+        // A takeover replaces an existing entry instead of growing the
+        // registry, so it must not trip the capacity check.
+        if fp_known.is_none() && peers.len() >= max_peers {
             return None;
         }
-        let mut rng = rand::thread_rng();
-        let id = loop {
-            let candidate: PeerId =
-                rng.gen_range(opacusr_proto::MIN_PEER_ID..=opacusr_proto::MAX_PEER_ID);
-            if !peers.contains_key(&candidate) {
-                break candidate;
+        let gen = self
+            .gen_counter
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            + 1;
+        let id = if let Some(id0) = fp_known {
+            match peers.get(&id0) {
+                // Occupied by the same machine (a dead socket not yet
+                // pruned, or a duplicate agent process): take it back.
+                Some(h) if h.fp.as_deref() == key_fp => id0,
+                // Occupied by someone else (id collision): mint fresh.
+                Some(_) => mint_random(&peers),
+                None => id0,
+            }
+        } else {
+            match requested_id {
+                Some(r) if opacusr_proto::is_valid_peer_id(r) && !peers.contains_key(&r) => r,
+                _ => mint_random(&peers),
             }
         };
         let (tx, rx) = mpsc::channel(PEER_QUEUE_DEPTH);
@@ -126,13 +178,29 @@ impl Registry {
                 info,
                 tx,
                 last_seen,
+                gen,
+                fp: key_fp.map(String::from),
             },
         );
-        Some((id, rx))
+        if let Some(fp) = key_fp {
+            fps.insert(fp.to_string(), id);
+        }
+        Some((id, rx, gen))
     }
 
-    pub fn unregister(&self, id: PeerId) -> bool {
-        self.peers.lock().unwrap().remove(&id).is_some()
+    /// Remove the peer registered by connection generation `gen`.
+    /// Returns `true` when THIS connection still owned the id — only
+    /// then the caller adjusts the peers gauge. After a takeover the
+    /// stale connection's cleanup must be a no-op.
+    pub fn unregister(&self, id: PeerId, gen: u64) -> bool {
+        let mut peers = self.peers.lock().unwrap();
+        match peers.get(&id) {
+            Some(p) if p.gen == gen => {
+                peers.remove(&id);
+                true
+            }
+            _ => false,
+        }
     }
 
     pub fn touch(&self, id: PeerId) {
@@ -789,13 +857,15 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
         is_agent: reg.is_agent,
         unattended: reg.unattended,
     };
-    let (my_id, mut inbound) = {
-        // Atomic check-and-insert: the old len()-precheck raced under
-        // concurrent registrations and could exceed the cap slightly.
-        let Some((id, inbound)) = state
-            .registry
-            .register(my_info.clone(), state.limits.max_peers)
-        else {
+    let (my_id, mut inbound, my_gen) = {
+        // Atomic check-and-insert inside the registry (the old
+        // len()-precheck raced under concurrent registrations).
+        let Some((id, inbound, gen)) = state.registry.register(
+            my_info.clone(),
+            reg.requested_id,
+            reg.key_fp.as_deref(),
+            state.limits.max_peers,
+        ) else {
             tracing::warn!(target: "opacusr", "refusing registration: server is full");
             let _ = send_signal(
                 &mut socket,
@@ -827,7 +897,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
             }),
         )
         .await;
-        (id, inbound)
+        (id, inbound, gen)
     };
 
     // Split the socket: the write half is pumped by a dedicated task.
@@ -866,11 +936,15 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
         }
     }
 
-    state.registry.unregister(my_id);
-    state
-        .metrics
-        .peers
-        .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+    // Only a connection that STILL owns its id removes it and lowers
+    // the gauge: after a same-machine takeover the stale socket's
+    // cleanup must not delete the fresh registration.
+    if state.registry.unregister(my_id, my_gen) {
+        state
+            .metrics
+            .peers
+            .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+    }
     out_task.abort();
     tracing::info!(target: "opacusr", "peer {my_id} disconnected");
     // Peers discover the disappearance via SessionFailed / PeerSend errors.
@@ -989,6 +1063,93 @@ async fn send_signal(socket: &mut WebSocket, msg: SignalMessage) -> Result<(), S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_info() -> PeerInfo {
+        PeerInfo {
+            platform: Platform::Linux,
+            display_name: "tester".into(),
+            is_agent: true,
+            unattended: false,
+        }
+    }
+
+    /// The stable-ID rules: same fingerprint re-issues the same id even
+    /// while a dead socket holds it (takeover), a different fingerprint
+    /// never gets a busy id, stale unregisters are no-ops.
+    #[test]
+    fn registry_stable_ids_takeover_and_guard() {
+        let reg = Registry::default();
+        // First registration with a fingerprint.
+        let (id1, _rx1, g1) = reg.register(test_info(), None, Some("fp-a"), 10).unwrap();
+        // Same machine re-registering (its old socket is a zombie):
+        // the id is re-issued, a takeover replaces the handle.
+        let (id2, _rx2, g2) = reg.register(test_info(), None, Some("fp-a"), 10).unwrap();
+        assert_eq!(id1, id2, "same fingerprint must keep its id");
+        // The stale connection's cleanup must not delete the takeover.
+        assert!(!reg.unregister(id1, g1), "stale unregister must be a no-op");
+        // A different fingerprint is refused the busy id, and the fp
+        // binding sticks: fp-b gets its own minted id, requested ids
+        // are honored only for fingerprints seen for the first time.
+        let (id3, _rx3, g3) = reg
+            .register(test_info(), Some(id1), Some("fp-b"), 10)
+            .unwrap();
+        assert_ne!(id3, id1, "a busy id must not go to another fingerprint");
+        // …and fp-b keeps that id on its next registration too.
+        let (id4, _rx4, _g4) = reg
+            .register(test_info(), Some(id1), Some("fp-b"), 10)
+            .unwrap();
+        assert_eq!(id4, id3, "a known fingerprint keeps its assigned id");
+        assert!(reg.unregister(id1, g2), "the live owner can unregister");
+        // id4 is the same peer id as id3 (a takeover re-registered it
+        // under a new generation), so g3 is stale now and the live
+        // _g4 owns the slot.
+        assert!(!reg.unregister(id3, g3));
+        assert!(reg.unregister(id4, _g4));
+    }
+
+    #[test]
+    fn registry_requested_id_validated_and_cap_respected() {
+        let reg = Registry::default();
+        // An invalid requested id falls back to a random mint.
+        let (id, _rx, g) = reg
+            .register(test_info(), Some(12_345_678), None, 10)
+            .unwrap();
+        assert!(opacusr_proto::is_valid_peer_id(id));
+        reg.unregister(id, g);
+        // Capacity: no fingerprint → the cap applies.
+        let mut gens = Vec::new();
+        for _ in 0..10 {
+            let (id, _rx, g) = reg.register(test_info(), None, None, 10).unwrap();
+            gens.push((id, g));
+        }
+        assert!(
+            reg.register(test_info(), None, None, 10).is_none(),
+            "full registry must refuse a plain registration"
+        );
+        // A fingerprint seen BEFORE the cap still re-issues its id at the
+        // cap (takeover replaces an entry instead of growing the map).
+        let cap_reg = Registry::default();
+        let (seed_id, _seed_rx, seed_g) = cap_reg
+            .register(test_info(), None, Some("fp-c"), 10)
+            .unwrap();
+        let mut gens2 = vec![(seed_id, seed_g)];
+        for _ in 0..9 {
+            let (id, _rx, g) = cap_reg.register(test_info(), None, None, 10).unwrap();
+            gens2.push((id, g));
+        }
+        assert!(cap_reg.register(test_info(), None, None, 10).is_none());
+        let retaken = cap_reg
+            .register(test_info(), None, Some("fp-c"), 10)
+            .unwrap();
+        assert_eq!(retaken.0, seed_id, "takeover at the cap keeps the id");
+        for (id, g) in gens {
+            reg.unregister(id, g);
+        }
+        for (id, g) in gens2 {
+            cap_reg.unregister(id, g);
+        }
+        cap_reg.unregister(retaken.0, retaken.2);
+    }
 
     #[test]
     fn limiter_allows_within_budget_and_blocks_beyond() {

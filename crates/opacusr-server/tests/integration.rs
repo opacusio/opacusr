@@ -28,6 +28,8 @@ async fn client(port: u16) -> (SignalingClient, Welcome) {
         display_name: "tester".into(),
         is_agent: false,
         unattended: false,
+        requested_id: None,
+        key_fp: None,
     }))
     .await
     .unwrap();
@@ -155,17 +157,22 @@ async fn relay_pairs_two_connections() {
 #[tokio::test]
 async fn registry_prune_keeps_fresh_peers() {
     let registry = opacusr_server::Registry::default();
-    let _ = registry.register(
-        PeerInfo {
-            platform: Platform::Linux,
-            display_name: "fresh".into(),
-            is_agent: true,
-            unattended: false,
-        },
-        usize::MAX,
-    );
+    let (_id, _rx, gen) = registry
+        .register(
+            PeerInfo {
+                platform: Platform::Linux,
+                display_name: "fresh".into(),
+                is_agent: true,
+                unattended: false,
+            },
+            None,
+            None,
+            usize::MAX,
+        )
+        .unwrap();
     assert_eq!(registry.len(), 1);
     let removed = registry.prune();
     assert!(removed.is_empty());
     assert_eq!(registry.len(), 1);
+    assert!(registry.unregister(_id, gen));
 }

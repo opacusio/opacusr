@@ -18,6 +18,20 @@ pub struct Register {
     /// `true` = host answers session requests without human consent
     /// (unattended password set).
     pub unattended: bool,
+    /// Client's wish for a STABLE id. Historically every registration
+    /// minted a random id, so a saved contact broke after every agent
+    /// restart/reconnect («peer … is offline» forever). Now: the first
+    /// registration requests an id derived from the machine key, the
+    /// server keeps fp → id and re-issues the SAME id to the SAME
+    /// fingerprint forever. `None` (old clients / viewers) → random.
+    #[serde(default)]
+    pub requested_id: Option<PeerId>,
+    /// Hex fingerprint of the client's persistent machine key. The
+    /// server re-issues the same id to the same fingerprint (even
+    /// across its own restart, via the client's `requested_id`) and
+    /// refuses a takeover of a busy id by a DIFFERENT fingerprint.
+    #[serde(default)]
+    pub key_fp: Option<String>,
 }
 
 /// Server → client: registration result.

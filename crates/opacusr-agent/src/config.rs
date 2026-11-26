@@ -191,6 +191,11 @@ pub struct AgentConfig {
     /// so the GUI can display it (dimmed) while the agent is offline —
     /// the ID itself is minted server-side at registration.
     pub last_peer_id: Option<u64>,
+    /// Random per-machine secret (32 hex chars, generated on first
+    /// use) backing the stable peer ID when the OS provides no machine
+    /// identity. Never leaves the machine; only its SHA-256 digest
+    /// (16 hex chars) goes on the wire as the registration fingerprint.
+    pub machine_key: Option<String>,
     /// TeamViewer model: start the host agent as soon as the GUI opens
     /// (so the machine is reachable without a manual «Запустить»).
     /// On Windows the MSI additionally autostarts the GUI at user login.
@@ -303,6 +308,7 @@ impl Default for AgentConfig {
             record_dir: crate::config::data_root().join("OpacusR-Recordings"),
             tunnel: "loopback".into(),
             last_peer_id: None,
+            machine_key: None,
             start_agent_automatically: true,
             close_to_tray: true,
             p2p_enabled: false,
@@ -342,6 +348,77 @@ fn whoami_fallback() -> String {
     std::env::var("USERNAME")
         .or_else(|_| std::env::var("USER"))
         .unwrap_or_else(|_| "OpacusR host".into())
+}
+
+/// First 16 hex chars of SHA-256 (the machine fingerprint).
+fn hex16(data: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let d = Sha256::digest(data);
+    d[..8].iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// OS-provided persistent machine identity, when one exists (see
+/// [`AgentConfig::machine_fingerprint`] for the source order).
+fn machine_identity_source() -> Option<String> {
+    #[cfg(target_os = "windows")]
+    {
+        windows_machine_guid()
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let id = std::fs::read_to_string("/etc/machine-id").ok()?;
+        let id = id.trim().to_string();
+        (!id.is_empty()).then_some(id)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let out = std::process::Command::new("ioreg")
+            .args(["-rd1", "-c", "IOPlatformExpertDevice"])
+            .output()
+            .ok()?;
+        let text = String::from_utf8_lossy(&out.stdout);
+        let line = text.lines().find(|l| l.contains("IOPlatformUUID"))?;
+        let uuid = line.split('"').nth(3)?.trim().to_string();
+        (!uuid.is_empty()).then_some(uuid)
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
+    {
+        None
+    }
+}
+
+/// The OS machine GUID (HKLM\SOFTWARE\Microsoft\Cryptography\MachineGuid)
+/// via `reg query`: readable by every local user, so the GUI (user
+/// session) and the service (SYSTEM) agree on the machine's stable ID
+/// even though their config files differ. Pure std — no registry FFI
+/// (invisible to the Linux build and to the mingw cross-check).
+#[cfg(target_os = "windows")]
+fn windows_machine_guid() -> Option<String> {
+    use std::sync::OnceLock;
+    static GUID: OnceLock<Option<String>> = OnceLock::new();
+    GUID.get_or_init(|| {
+        let out = std::process::Command::new("reg")
+            .args([
+                "query",
+                r"HKLM\SOFTWARE\Microsoft\Cryptography",
+                "/v",
+                "MachineGuid",
+            ])
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let text = String::from_utf8_lossy(&out.stdout);
+        let value = text
+            .lines()
+            .filter(|l| l.contains("MachineGuid"))
+            .filter_map(|l| l.split_whitespace().last())
+            .last()?
+            .to_string();
+        (!value.is_empty()).then_some(value)
+    })
+    .clone()
 }
 
 impl AgentConfig {
@@ -439,6 +516,65 @@ impl AgentConfig {
             disk.last_peer_id = Some(id);
             let _ = disk.save();
         }
+    }
+
+    /// The last assigned ID as it is on disk RIGHT NOW (an agent that
+    /// reconnects must re-request the id it was re-assigned meanwhile
+    /// by its own Welcome — the in-memory snapshot predates it).
+    pub fn disk_last_peer_id() -> Option<u64> {
+        Self::load().last_peer_id
+    }
+
+    /// Stable machine identity for stable peer IDs (the «peer … is
+    /// offline» fix: the ID used to be re-minted on EVERY registration,
+    /// so a saved contact broke after each agent restart/reconnect).
+    /// Source order — the identity must be shared by every OpacusR
+    /// process on this machine (the GUI in the user session AND the
+    /// service under SYSTEM have DIFFERENT config files):
+    /// 1. Windows: the OS machine GUID via `reg query` (pure std — the
+    ///    mingw cross-check compiles this file and raw registry FFI is
+    ///    invisible to the Linux build);
+    /// 2. Linux: /etc/machine-id;
+    /// 3. macOS: the IOPlatformUUID;
+    /// 4. a random key generated once and persisted in agent.toml
+    ///    (`machine_key` — the fallback where the OS provides nothing,
+    ///    e.g. Android, where the config dir is the app data dir).
+    ///
+    /// The fingerprint is the first 16 hex chars of SHA-256: the raw
+    /// identity never goes on the wire.
+    pub fn machine_fingerprint() -> String {
+        // Cached: the identity never changes within a process, and the
+        // home card computes it every frame (reg.exe / file I/O would
+        // run 60 times a second otherwise).
+        static FP: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+        FP.get_or_init(|| {
+            if let Some(source) = machine_identity_source() {
+                return hex16(source.as_bytes());
+            }
+            let mut disk = Self::load();
+            match &disk.machine_key {
+                Some(k) => hex16(k.as_bytes()),
+                None => {
+                    let key: String = (0..32)
+                        .map(|_| format!("{:02x}", rand::random::<u8>()))
+                        .collect();
+                    disk.machine_key = Some(key.clone());
+                    let _ = disk.save();
+                    hex16(key.as_bytes())
+                }
+            }
+        })
+        .clone()
+    }
+
+    /// The 9-digit ID a machine fingerprint always requests on the
+    /// first registration (deterministic; a collision is resolved
+    /// server-side by minting a random ID once, which then persists
+    /// via `last_peer_id`).
+    pub fn stable_id_for(fp: &str) -> u64 {
+        let v = u64::from_str_radix(&fp[..8.min(fp.len())], 16).unwrap_or(0);
+        opacusr_proto::MIN_PEER_ID
+            + v % (opacusr_proto::MAX_PEER_ID - opacusr_proto::MIN_PEER_ID + 1)
     }
 
     /// The password the unattended mode actually verifies against:

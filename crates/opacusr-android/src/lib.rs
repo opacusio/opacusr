@@ -462,83 +462,125 @@ fn hook_set_keyboard(on: bool) {
             return;
         }
         let imm_cls: jni_sys::jclass = ((*j.iface).v1_6.GetObjectClass)(j.env, imm);
+        // The decor view is needed by BOTH paths: show needs its focus,
+        // hide needs its window token.
+        let act_get_window = ((*j.iface).v1_6.GetMethodID)(
+            j.env,
+            act_cls,
+            c"getWindow".as_ptr(),
+            c"()Landroid/view/Window;".as_ptr(),
+        );
+        let mut window: jni_sys::jobject = std::ptr::null_mut();
+        if j.check("keyboard: getWindow") {
+            window = ((*j.iface).v1_6.CallObjectMethod)(j.env, j.activity, act_get_window);
+            j.check("keyboard: window");
+        }
+        let mut decor: jni_sys::jobject = std::ptr::null_mut();
+        if !window.is_null() {
+            let win_cls: jni_sys::jclass = ((*j.iface).v1_6.GetObjectClass)(j.env, window);
+            let get_decor = ((*j.iface).v1_6.GetMethodID)(
+                j.env,
+                win_cls,
+                c"getDecorView".as_ptr(),
+                c"()Landroid/view/View;".as_ptr(),
+            );
+            if j.check("keyboard: getDecorView") {
+                decor = ((*j.iface).v1_6.CallObjectMethod)(j.env, window, get_decor);
+                j.check("keyboard: decor");
+            }
+            ((*j.iface).v1_6.DeleteLocalRef)(j.env, win_cls);
+        }
         if on {
-            let toggle = ((*j.iface).v1_6.GetMethodID)(
+            // showSoftInput REQUIRES a focused view: with a NativeActivity
+            // nothing is focused by default, so the old bare
+            // toggleSoftInput silently did nothing on several ROMs
+            // («нет вызова клавиатуры»). Focus the decor view
+            // explicitly, then show the IME over it; the toggle stays
+            // as the last-resort fallback.
+            if !decor.is_null() {
+                let decor_cls: jni_sys::jclass = ((*j.iface).v1_6.GetObjectClass)(j.env, decor);
+                let focus = ((*j.iface).v1_6.GetMethodID)(
+                    j.env,
+                    decor_cls,
+                    c"requestFocus".as_ptr(),
+                    c"()Z".as_ptr(),
+                );
+                if j.check("keyboard: requestFocus") {
+                    ((*j.iface).v1_6.CallBooleanMethod)(j.env, decor, focus);
+                }
+                ((*j.iface).v1_6.DeleteLocalRef)(j.env, decor_cls);
+            }
+            let show = ((*j.iface).v1_6.GetMethodID)(
                 j.env,
                 imm_cls,
-                c"toggleSoftInput".as_ptr(),
-                c"(II)V".as_ptr(),
+                c"showSoftInput".as_ptr(),
+                c"(Landroid/view/View;I)Z".as_ptr(),
             );
-            if j.check("keyboard: toggleSoftInput") {
-                // SHOW_FORCED = 2, hideFlags = 0.
-                ((*j.iface).v1_6.CallVoidMethod)(j.env, imm, toggle, 2, 0);
-                j.check("keyboard: show");
-            }
-        } else {
-            // Decor view's window token for hideSoftInputFromWindow.
-            let act_get_window = ((*j.iface).v1_6.GetMethodID)(
-                j.env,
-                act_cls,
-                c"getWindow".as_ptr(),
-                c"()Landroid/view/Window;".as_ptr(),
-            );
-            let mut window: jni_sys::jobject = std::ptr::null_mut();
-            if j.check("keyboard: getWindow") {
-                window = ((*j.iface).v1_6.CallObjectMethod)(j.env, j.activity, act_get_window);
-                j.check("keyboard: window");
-            }
-            if !window.is_null() {
-                let win_cls: jni_sys::jclass = ((*j.iface).v1_6.GetObjectClass)(j.env, window);
-                let get_decor = ((*j.iface).v1_6.GetMethodID)(
+            if j.check("keyboard: showSoftInput") && !decor.is_null() {
+                // SHOW_IMPLICIT = 0: SHOW_FORCED is deprecated and its
+                // forced state blocks the user's manual dismissal.
+                let ok = ((*j.iface).v1_6.CallBooleanMethod)(
                     j.env,
-                    win_cls,
-                    c"getDecorView".as_ptr(),
-                    c"()Landroid/view/View;".as_ptr(),
+                    imm,
+                    show,
+                    decor,
+                    0 as core::ffi::c_int,
                 );
-                let mut decor: jni_sys::jobject = std::ptr::null_mut();
-                if j.check("keyboard: getDecorView") {
-                    decor = ((*j.iface).v1_6.CallObjectMethod)(j.env, window, get_decor);
-                    j.check("keyboard: decor");
-                }
-                ((*j.iface).v1_6.DeleteLocalRef)(j.env, win_cls);
-                if !decor.is_null() {
-                    let decor_cls: jni_sys::jclass = ((*j.iface).v1_6.GetObjectClass)(j.env, decor);
-                    let get_token = ((*j.iface).v1_6.GetMethodID)(
+                // jni-sys maps jboolean to bool: false → the IME refused
+                // the implicit show (no focus yet on some ROMs) — fall
+                // back to the old forced toggle.
+                if !ok {
+                    let toggle = ((*j.iface).v1_6.GetMethodID)(
                         j.env,
-                        decor_cls,
-                        c"getWindowToken".as_ptr(),
-                        c"()Landroid/os/IBinder;".as_ptr(),
+                        imm_cls,
+                        c"toggleSoftInput".as_ptr(),
+                        c"(II)V".as_ptr(),
                     );
-                    let mut token: jni_sys::jobject = std::ptr::null_mut();
-                    if j.check("keyboard: getWindowToken") {
-                        token = ((*j.iface).v1_6.CallObjectMethod)(j.env, decor, get_token);
-                        j.check("keyboard: token");
+                    if j.check("keyboard: toggleSoftInput") {
+                        // SHOW_FORCED = 2, hideFlags = 0.
+                        ((*j.iface).v1_6.CallVoidMethod)(j.env, imm, toggle, 2, 0);
+                        j.check("keyboard: toggle show");
                     }
-                    ((*j.iface).v1_6.DeleteLocalRef)(j.env, decor_cls);
-                    ((*j.iface).v1_6.DeleteLocalRef)(j.env, decor);
-                    if !token.is_null() {
-                        let hide = ((*j.iface).v1_6.GetMethodID)(
-                            j.env,
-                            imm_cls,
-                            c"hideSoftInputFromWindow".as_ptr(),
-                            c"(Landroid/os/IBinder;I)Z".as_ptr(),
-                        );
-                        if j.check("keyboard: hideSoftInputFromWindow") {
-                            ((*j.iface).v1_6.CallBooleanMethod)(
-                                j.env,
-                                imm,
-                                hide,
-                                token,
-                                0 as core::ffi::c_int,
-                            );
-                            j.check("keyboard: hide");
-                        }
-                    }
-                    ((*j.iface).v1_6.DeleteLocalRef)(j.env, token);
                 }
             }
-            ((*j.iface).v1_6.DeleteLocalRef)(j.env, window);
+        } else if !decor.is_null() {
+            // Window token for hideSoftInputFromWindow — more reliable
+            // than a second toggle if something else opened the IME.
+            let decor_cls: jni_sys::jclass = ((*j.iface).v1_6.GetObjectClass)(j.env, decor);
+            let get_token = ((*j.iface).v1_6.GetMethodID)(
+                j.env,
+                decor_cls,
+                c"getWindowToken".as_ptr(),
+                c"()Landroid/os/IBinder;".as_ptr(),
+            );
+            let mut token: jni_sys::jobject = std::ptr::null_mut();
+            if j.check("keyboard: getWindowToken") {
+                token = ((*j.iface).v1_6.CallObjectMethod)(j.env, decor, get_token);
+                j.check("keyboard: token");
+            }
+            ((*j.iface).v1_6.DeleteLocalRef)(j.env, decor_cls);
+            if !token.is_null() {
+                let hide = ((*j.iface).v1_6.GetMethodID)(
+                    j.env,
+                    imm_cls,
+                    c"hideSoftInputFromWindow".as_ptr(),
+                    c"(Landroid/os/IBinder;I)Z".as_ptr(),
+                );
+                if j.check("keyboard: hideSoftInputFromWindow") {
+                    ((*j.iface).v1_6.CallBooleanMethod)(
+                        j.env,
+                        imm,
+                        hide,
+                        token,
+                        0 as core::ffi::c_int,
+                    );
+                    j.check("keyboard: hide");
+                }
+            }
+            ((*j.iface).v1_6.DeleteLocalRef)(j.env, token);
         }
+        ((*j.iface).v1_6.DeleteLocalRef)(j.env, decor);
+        ((*j.iface).v1_6.DeleteLocalRef)(j.env, window);
         ((*j.iface).v1_6.DeleteLocalRef)(j.env, imm_cls);
         ((*j.iface).v1_6.DeleteLocalRef)(j.env, imm);
         ((*j.iface).v1_6.DeleteLocalRef)(j.env, act_cls);

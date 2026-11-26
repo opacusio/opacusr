@@ -54,6 +54,15 @@ pub fn session_ui(ctx: &Context, s: &mut SessionHandle, cfg: &mut AgentConfig) {
             });
     }
 
+    // ---- control-keys strip (toggled from the Android call menu) --------
+    // A soft IME cannot produce Ctrl/Alt/F1–F12/arrows — remote control
+    // from a phone needs them on screen.
+    if s.panel_keys && !s.fullscreen {
+        egui::TopBottomPanel::bottom("session_keys_strip").show(ctx, |ui| {
+            keys_strip(ui, s);
+        });
+    }
+
     // ---- remote view -----------------------------------------------------
     egui::CentralPanel::default().show(ctx, |ui| {
         session_view(ui, s);
@@ -68,7 +77,118 @@ pub fn session_ui(ctx: &Context, s: &mut SessionHandle, cfg: &mut AgentConfig) {
     }
 }
 
-/// Toolbar row of the session screen (hidden by the «⛶» mode).
+/// Android toolbar: ONE short row (status · RTT · ⌨ · ⛶ · ⏹ · ⋯) so the
+/// video gets the whole screen — the wrapped desktop row consumed two
+/// lines and the 💬/📁 sidebar ate the rest («увеличь окно, спрячь чат
+/// и передачу файлов в меню вызова»). Everything else lives in the ⋯
+/// call menu.
+#[cfg(target_os = "android")]
+fn session_toolbar(ui: &mut egui::Ui, s: &mut SessionHandle, cfg: &mut AgentConfig) {
+    let _ = cfg;
+    ui.horizontal_wrapped(|ui| {
+        ui.style_mut().spacing.button_padding = egui::vec2(8.0, 3.0);
+        if s.view_only {
+            ui.label(
+                egui::RichText::new("👁")
+                    .color(Color32::from_rgb(255, 170, 60))
+                    .strong(),
+            )
+            .on_hover_text("Session is view-only");
+            ui.separator();
+        }
+        ui.label(egui::RichText::new(&s.status).weak().small());
+        ui.label(egui::RichText::new(format!(" {} ms", s.rtt)).weak().small());
+        // Soft keyboard: the IME types text (chat, terminal, the remote
+        // screen); the ⋯ menu holds the CONTROL keys strip for
+        // Ctrl/Alt/arrows/F1–F12 that no soft keyboard can produce.
+        if ui
+            .button(if s.soft_keyboard_on { "⌨ ✓" } else { "⌨" })
+            .on_hover_text("Экранная клавиатура")
+            .clicked()
+        {
+            s.soft_keyboard_on = !s.soft_keyboard_on;
+            crate::android_sysui::set_keyboard(s.soft_keyboard_on);
+        }
+        if ui.button("⛶").on_hover_text("Во весь экран").clicked() {
+            set_chromeless(s, true);
+        }
+        // The call menu — chat, files, terminal, stats, tunnels, the
+        // control-keys strip and session controls.
+        ui.menu_button("⋯", |ui| {
+            ui.set_min_width(220.0);
+            if ui
+                .button(if s.paused {
+                    "▶ Продолжить"
+                } else {
+                    "⏸ Пауза"
+                })
+                .clicked()
+            {
+                s.paused = !s.paused;
+                let _ = s.commands.send(Command::Pause(s.paused));
+            }
+            // Screen selector (multi-monitor hosts).
+            if s.screens.len() > 1 {
+                let current = s
+                    .screens
+                    .iter()
+                    .find(|sc| sc.id == s.selected_screen)
+                    .cloned()
+                    .unwrap_or_else(|| s.screens[0].clone());
+                egui::ComboBox::from_id_salt("screen_select_menu")
+                    .selected_text(format!("🖥 {} ({}×{})", current.name, current.w, current.h))
+                    .show_ui(ui, |ui| {
+                        for sc in &s.screens {
+                            ui.selectable_value(
+                                &mut s.selected_screen,
+                                sc.id,
+                                format!("{} ({}×{})", sc.name, sc.w, sc.h),
+                            );
+                        }
+                    });
+                if s.selected_screen != current.id {
+                    let _ = s.commands.send(Command::SelectScreen(s.selected_screen));
+                }
+            }
+            if ui
+                .toggle_value(&mut s.clipboard_sync, "📋 Буфер обмена")
+                .changed()
+            {
+                let _ = s.commands.send(Command::ClipboardSync(s.clipboard_sync));
+            }
+            if s.audio_available && ui.toggle_value(&mut s.audio_on, "🔊 Звук").changed() {
+                let _ = s.commands.send(Command::Audio(s.audio_on));
+            }
+            if ui.button("🖨 Печать кадра").clicked() {
+                print_current_frame(s);
+            }
+            ui.separator();
+            // Panels: tapping one closes the menu so the video is
+            // visible again (the sidebar takes its width).
+            for (label, flag, avail) in [
+                ("💬 Чат", &mut s.panel_chat, true),
+                ("📁 Файлы", &mut s.panel_files, true),
+                ("⌨ Терминал", &mut s.panel_term, true),
+                ("⌨ Клавиши (Ctrl/F1/…)", &mut s.panel_keys, true),
+                ("📊 Статистика", &mut s.panel_stats, true),
+                ("🔗 Туннели", &mut s.panel_tunnel, s.tunnel_available),
+            ] {
+                if !avail {
+                    continue;
+                }
+                if ui.toggle_value(flag, label).clicked() {
+                    ui.close_menu();
+                }
+            }
+        });
+        if ui.button("⏹").on_hover_text("Отключиться").clicked() {
+            s.disconnect_requested = true;
+        }
+    });
+}
+
+/// Desktop toolbar row of the session screen (hidden by the «⛶» mode).
+#[cfg(not(target_os = "android"))]
 fn session_toolbar(ui: &mut egui::Ui, s: &mut SessionHandle, cfg: &mut AgentConfig) {
     // Wrapped, not plain horizontal: on a phone the row is wider than
     // the screen and `horizontal` silently clipped half the buttons
@@ -124,25 +244,7 @@ fn session_toolbar(ui: &mut egui::Ui, s: &mut SessionHandle, cfg: &mut AgentConf
             .on_hover_text("Print the current remote frame on your local printer")
             .clicked()
         {
-            match &s.last_frame {
-                Some((w, h, rgba)) => {
-                    let secs = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_secs())
-                        .unwrap_or(0);
-                    match crate::print::print_png(*w, *h, rgba, secs) {
-                        Ok(path) => {
-                            s.status = format!("printed: {}", path.display());
-                        }
-                        Err(e) => {
-                            s.status = format!("print failed: {e}");
-                        }
-                    }
-                }
-                None => {
-                    s.status = "Печать: кадр ещё не получен".into();
-                }
-            }
+            print_current_frame(s);
         }
         if s.audio_available && ui.toggle_value(&mut s.audio_on, "🔊").changed() {
             let _ = s.commands.send(Command::Audio(s.audio_on));
@@ -241,17 +343,6 @@ fn session_toolbar(ui: &mut egui::Ui, s: &mut SessionHandle, cfg: &mut AgentConf
             .clicked()
         {
             s.disconnect_requested = true;
-        }
-        // Phones have no hardware keyboard — summon the soft one
-        // for chat/terminal/typing into the remote screen.
-        #[cfg(target_os = "android")]
-        if ui
-            .button(if s.soft_keyboard_on { "⌨ ✓" } else { "⌨" })
-            .on_hover_text("Экранная клавиатура")
-            .clicked()
-        {
-            s.soft_keyboard_on = !s.soft_keyboard_on;
-            crate::android_sysui::set_keyboard(s.soft_keyboard_on);
         }
     });
 }
@@ -373,33 +464,69 @@ fn session_view(ui: &mut egui::Ui, s: &mut SessionHandle) {
     // logically hidden on the host.
     if let Some((cx, cy, visible, shape_id)) = s.cursor_pos {
         if visible && rw > 0.0 {
-            if let Some(cur) = s.cursor_shapes.get(&shape_id) {
-                // Never let the pointer shrink below ~14 screen px: on a
-                // shrunken/letterboxed phone view the raw scale made the
-                // arrow a few pixels tall — invisible (report 0.12.1:
-                // «не видно курсор» on a dark desktop).
-                let scale = (rect.width() / rw).max(14.0 / cur.size.0.max(1.0));
-                let top_left = egui::pos2(
-                    rect.min.x + cx as f32 * scale - cur.hotspot.0 * scale,
-                    rect.min.y + cy as f32 * scale - cur.hotspot.1 * scale,
-                );
-                let crect = egui::Rect::from_min_size(
-                    top_left,
-                    egui::vec2(cur.size.0 * scale, cur.size.1 * scale),
-                );
-                if crect.intersects(rect) {
-                    ui.painter().image(
-                        cur.texture.id(),
-                        crect,
-                        egui::Rect::from_min_max(egui::Pos2::ZERO, egui::Pos2::new(1.0, 1.0)),
-                        Color32::WHITE,
+            match s.cursor_shapes.get(&shape_id) {
+                Some(cur) => {
+                    // Never let the pointer shrink below ~14 screen px: on a
+                    // shrunken/letterboxed phone view the raw scale made the
+                    // arrow a few pixels tall — invisible (report 0.12.1:
+                    // «не видно курсор» on a dark desktop).
+                    let scale = (rect.width() / rw).max(14.0 / cur.size.0.max(1.0));
+                    let top_left = egui::pos2(
+                        rect.min.x + cx as f32 * scale - cur.hotspot.0 * scale,
+                        rect.min.y + cy as f32 * scale - cur.hotspot.1 * scale,
                     );
+                    let crect = egui::Rect::from_min_size(
+                        top_left,
+                        egui::vec2(cur.size.0 * scale, cur.size.1 * scale),
+                    );
+                    if crect.intersects(rect) {
+                        ui.painter().image(
+                            cur.texture.id(),
+                            crect,
+                            egui::Rect::from_min_max(egui::Pos2::ZERO, egui::Pos2::new(1.0, 1.0)),
+                            Color32::WHITE,
+                        );
+                    }
+                }
+                None => {
+                    // The position arrived but its shape never did (a
+                    // one-shot host-side shape failure used to silence
+                    // the cursor for the WHOLE session). Draw a simple
+                    // marker so the pointer is never invisible again.
+                    let vs = rect.width() / rw;
+                    let p = egui::pos2(rect.min.x + cx as f32 * vs, rect.min.y + cy as f32 * vs);
+                    if rect.contains(p) {
+                        ui.painter().circle(
+                            p,
+                            6.0,
+                            Color32::from_rgba_unmultiplied(230, 160, 40, 200),
+                            egui::Stroke::new(1.5_f32, Color32::WHITE),
+                        );
+                    }
                 }
             }
         }
     }
 
     capture_input(ui, &response, rect, s);
+}
+
+/// Print the latest remote frame (the desktop toolbar button and the
+/// Android call menu share this).
+fn print_current_frame(s: &mut SessionHandle) {
+    match &s.last_frame {
+        Some((w, h, rgba)) => {
+            let secs = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            match crate::print::print_png(*w, *h, rgba, secs) {
+                Ok(path) => s.status = format!("printed: {}", path.display()),
+                Err(e) => s.status = format!("print failed: {e}"),
+            }
+        }
+        None => s.status = "Печать: кадр ещё не получен".into(),
+    }
 }
 
 /// Toolbar label + color for an adaptive-quality tier (0 = full quality…
@@ -861,6 +988,105 @@ fn fmt_bitrate(bytes_per_sec: u64) -> String {
     } else {
         format!("{} kbit/s", bits / 1_000)
     }
+}
+
+/// Sticky-modifier tap for the on-screen keys strip. `bit` = a bit of
+/// [`opacusr_proto::message::mods`].
+fn sticky_mod_button(ui: &mut egui::Ui, s: &mut SessionHandle, label: &str, bit: u8) {
+    let on = s.sticky_mods & bit != 0;
+    let text = egui::RichText::new(label).small();
+    let text = if on { text.strong() } else { text };
+    let fill = if on {
+        theme::TEAL
+    } else {
+        ui.visuals().widgets.inactive.bg_fill
+    };
+    if ui
+        .add(
+            egui::Button::new(text)
+                .fill(fill)
+                .min_size([34.0, 24.0].into()),
+        )
+        .clicked()
+    {
+        s.sticky_mods ^= bit;
+    }
+}
+
+/// One control key: press+release with the sticky modifiers, then clear
+/// them (classic sticky-keys behavior — Ctrl sticky + «C» = Ctrl+C).
+fn key_button(ui: &mut egui::Ui, s: &mut SessionHandle, label: &str, key: OpKey) {
+    if ui.button(egui::RichText::new(label).small()).clicked() {
+        let m = s.sticky_mods;
+        let _ = s.commands.send(Command::KeyEvent {
+            key,
+            mods: m,
+            down: true,
+        });
+        let _ = s.commands.send(Command::KeyEvent {
+            key,
+            mods: m,
+            down: false,
+        });
+        s.sticky_mods = 0;
+    }
+}
+
+fn fkey(i: u32) -> OpKey {
+    match i {
+        1 => OpKey::F1,
+        2 => OpKey::F2,
+        3 => OpKey::F3,
+        4 => OpKey::F4,
+        5 => OpKey::F5,
+        6 => OpKey::F6,
+        7 => OpKey::F7,
+        8 => OpKey::F8,
+        9 => OpKey::F9,
+        10 => OpKey::F10,
+        11 => OpKey::F11,
+        _ => OpKey::F12,
+    }
+}
+
+/// On-screen control keys: a phone soft keyboard types letters but has
+/// NO Ctrl/Alt/Win, no F1–F12, no arrows — remote control
+/// («полноценная клавиатура») needs them. Modifiers are STICKY:
+/// tap Ctrl, then tap C.
+fn keys_strip(ui: &mut egui::Ui, s: &mut SessionHandle) {
+    ui.horizontal_wrapped(|ui| {
+        ui.style_mut().spacing.button_padding = egui::vec2(6.0, 3.0);
+        ui.style_mut().spacing.item_spacing = egui::vec2(4.0, 4.0);
+        sticky_mod_button(ui, s, "Ctrl", mods::CTRL);
+        sticky_mod_button(ui, s, "Alt", mods::ALT);
+        sticky_mod_button(ui, s, "Shift", mods::SHIFT);
+        sticky_mod_button(ui, s, "Win", mods::META);
+        ui.separator();
+        key_button(ui, s, "Esc", OpKey::Escape);
+        key_button(ui, s, "Tab", OpKey::Tab);
+        key_button(ui, s, "Enter", OpKey::Enter);
+        key_button(ui, s, "Back", OpKey::Backspace);
+        key_button(ui, s, "Del", OpKey::Delete);
+        key_button(ui, s, "Home", OpKey::Home);
+        key_button(ui, s, "End", OpKey::End);
+        key_button(ui, s, "PgUp", OpKey::PageUp);
+        key_button(ui, s, "PgDn", OpKey::PageDown);
+        key_button(ui, s, "←", OpKey::ArrowLeft);
+        key_button(ui, s, "↑", OpKey::ArrowUp);
+        key_button(ui, s, "↓", OpKey::ArrowDown);
+        key_button(ui, s, "→", OpKey::ArrowRight);
+        ui.separator();
+        for i in 1..=12u32 {
+            key_button(ui, s, &format!("F{i}"), fkey(i));
+        }
+        ui.separator();
+        // Latin letters: the only way to send Ctrl+C-style combos from a
+        // phone (an IME text commit carries no modifiers).
+        for c in b'a'..=b'z' {
+            let ch = c as char;
+            key_button(ui, s, &ch.to_string(), OpKey::Char(ch));
+        }
+    });
 }
 
 fn chat_panel(ui: &mut egui::Ui, s: &mut SessionHandle) {
