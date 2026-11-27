@@ -5390,6 +5390,7 @@ dependencies = [
  "enigo",
  "image",
  "libc",
+ "opacusr-capture",
  "opacusr-proto",
  "thiserror 2.0.21",
  "tracing",

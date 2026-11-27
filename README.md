@@ -11,7 +11,7 @@
 
 - **License:** AGPL-3.0
 - **Status:** v0.13.3 — stable IDs, audited, hardened, actively developed
-- **Platforms:** Windows (DXGI/GDI), Linux (X11 / Wayland via PipeWire), macOS (viewer), Android (viewer + phone-host)
+- **Platforms:** Windows (DXGI/GDI), Linux (X11 / Wayland via PipeWire), macOS (CoreGraphics), Android (viewer + phone-host)
 - **Repository home:** [github.com/opacusio](https://github.com/opacusio)
 
 ---

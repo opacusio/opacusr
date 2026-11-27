@@ -14,6 +14,12 @@ tracing = { workspace = true }
 # PNG encode/decode for image clipboard sync (headless-safe helpers).
 image = { workspace = true }
 
+# macOS only: the global device-px → event-points bridge for remote
+# input (opacusr_capture::macos::px_to_pt_global) — enigo/CoreGraphics
+# events speak points, the protocol speaks streamed-frame pixels.
+[target.'cfg(target_os = "macos")'.dependencies]
+opacusr-capture = { workspace = true }
+
 # evdev grabs for the physical input lock (Linux).
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
 libc = "0.2"

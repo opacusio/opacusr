@@ -89,21 +89,25 @@ jobs:
         # SIGSEGV) when several e2e tests instantiate encoders/decoders
         # concurrently in one process — serialize the harness there. Unit
         # tests are fast, so the single-threaded suite stays cheap.
-        run: cargo test --workspace
+        #
+        # macOS: even single-threaded the vendored OpenH264 rarely still
+        # aborts an e2e test with "Rust cannot catch foreign exceptions"
+        # or SIGSEGV (seen on the v0.7.0 release runs, and on 45929571018
+        # where a passing retry STILL left the job red because the retry
+        # lived in its own step). The retry therefore lives INSIDE this
+        # step: a green retry clears the flake, a real regression fails
+        # both attempts and stays red.
+        run: |
+          if ! cargo test --workspace; then
+            if [ "$RUNNER_OS" = "macOS" ]; then
+              echo "::warning::macOS vendored-OpenH264 flake detected — retrying the suite once"
+              cargo test --workspace
+            else
+              exit 1
+            fi
+          fi
         env:
           RUST_TEST_THREADS: ${{ runner.os == 'macOS' && '1' || '4' }}
-
-      - name: Retry tests once
-        # macOS: even single-threaded the vendored OpenH264 rarely still
-        # aborts the full_session e2e with "Rust cannot catch foreign
-        # exceptions" (seen on the v0.7.0 release runs). The same suite
-        # passes on every nearby commit, so give the leg one free retry
-        # before declaring the push red. A real regression fails both
-        # attempts and stays red.
-        if: failure() && runner.os == 'macOS'
-        run: cargo test --workspace
-        env:
-          RUST_TEST_THREADS: '1'
 
   mobile:
     name: Mobile cross-check (${{ matrix.target }})

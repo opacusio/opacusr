@@ -9,7 +9,7 @@ Status per platform for **v0.14.0**. The transport, protocol, crypto, server, fi
 | Linux (X11) | ✅ RandR multi-monitor | ✅ mic (cpal/ALSA) | ✅ enigo (X11) | ✅ openpty | ✅ eframe | **Working** |
 | Linux (Wayland) | ⚠️ PipeWire portal (`--features pipewire`, experimental) else X11/XWayland | ✅ mic | ⚠️ partial | ✅ | ✅ eframe | **Experimental** |
 | Windows 10/11 | ✅ DXGI Desktop Duplication (auto) with GDI fallback; both multi-monitor | ✅ system sound (WASAPI loopback) | ✅ enigo (SendInput) | ✅ ConPTY | ✅ eframe | **Working** |
-| macOS (aarch64) | ❌ no capture backend yet (viewer works) | ✅ mic (cpal/CoreAudio) | ⚠️ enigo (needs permissions) | ✅ openpty | ✅ eframe | **Viewer only** |
+| macOS (aarch64) | ✅ CoreGraphics snapshots (multi-monitor, Retina; Screen Recording permission required) | ✅ mic (cpal/CoreAudio) | ✅ enigo (needs Accessibility permission) | ✅ openpty | ✅ eframe | **Working** |
 | Android | ✅ MediaProjection (host, view-only) | ❌ | ❌ host-side (viewer inputs work) | ❌ | ✅ NativeActivity + egui | **Working (viewer + phone-host)** |
 | iOS | ❌ | ❌ | ❌ | ❌ | ❌ | **Not started** |
 | Headless / VM / CI | ✅ `test-source` synthetic pattern | n/a (feature compiles) | ✅ `NullInjector` | ✅ | n/a | **Working (testing)** |
@@ -35,10 +35,12 @@ Every platform compiles the full workspace; capture/input differences are isolat
 
 ## macOS
 
-- **Status: viewer works; hosting does NOT.** The workspace builds (aarch64), GUI runs, PTY works — but there is NO screen-capture backend yet, so a Mac cannot host a screen session (`platform_capture` returns `Unsupported`; the viewer gets an honest chat message + session end). A ScreenCaptureKit/CGDisplayStream backend is the biggest missing piece for "all platforms".
-- **Capture:** none yet (the old "core-graphics partial" note was wrong). Screen-recording TCC permissions apply to the viewer's own windows only.
+- **Status: working host AND viewer** (since 0.14.0). The workspace builds (aarch64), GUI runs, PTY works, and the CoreGraphics capture backend streams the screen with the same multi-monitor / Retina guarantees as the other desktop platforms.
+- **Capture:** CoreGraphics snapshots — one `CGDisplayCreateImage` per streamed frame (`opacusr-capture/macos.rs`, C FFI, no ObjC runtime calls). Multi-monitor via `CGGetOnlineDisplayList` (the main display is the default; mid-session switching works), Retina-native frames (device pixels), honest TCC failure: without the **Screen Recording** permission (`Системные настройки → Конфиденциальность и безопасность → Запись экрана`) the session ends with an explicit hint instead of a black stream. ScreenCaptureKit (hardware-backed, window-safe) is the roadmap upgrade.
+- **Coordinate contract:** captured frames are device pixels, Quartz events are points — `origin()` and cursor overlay positions are global top-left device pixels (converted from the CG bottom-left geometry), and remote mouse input converts back via `opacusr_capture::macos::px_to_pt_global` (per-display scale, mixed-DPI aware).
+- **Cursor overlay:** position tracking via `CGEventGetLocation`; the shape is the built-in standard arrow sprite (per-app shapes — I-beam, resize — need the ObjC `NSCursor` dance, roadmap). The capture API drops the pointer, so the overlay is the only cursor the viewer sees.
 - **Audio:** `cpal` captures the default input (microphone). System-sound loopback needs macOS 14.6+ (CoreAudio) or a virtual device (BlackHole) selected via `audio_device` — roadmap.
-- **Input:** enigo works but requires `Accessibility` permission for the process.
+- **Input:** enigo works but requires the `Accessibility` permission for the process (System Settings → Privacy & Security → Accessibility).
 - Config: `~/Library/Application Support/opacusr/agent.toml`. CI builds on `macos-latest`.
 
 ## Android / iOS

@@ -1,6 +1,6 @@
 [package]
 name = "opacusr-capture"
-description = "OpacusR screen capture backends (X11, Windows GDI, macOS stub, test source)"
+description = "OpacusR screen capture backends (X11, Windows GDI/DXGI, macOS CoreGraphics, PipeWire portal, test source)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

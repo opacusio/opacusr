@@ -76,6 +76,8 @@ pub struct CursorPoller {
 enum Inner {
     #[cfg(windows)]
     Win32,
+    #[cfg(target_os = "macos")]
+    Mac,
     #[cfg(all(target_os = "linux", feature = "x11"))]
     X11(Box<X11Cursor>),
     #[cfg(all(target_os = "linux", feature = "pipewire"))]
@@ -105,6 +107,10 @@ impl CursorPoller {
         {
             Some(Inner::Win32)
         }
+        #[cfg(target_os = "macos")]
+        {
+            Some(Inner::Mac)
+        }
         #[cfg(all(target_os = "linux", feature = "pipewire"))]
         {
             // Native Wayland sessions: the cursor metadata rides on the
@@ -127,6 +133,7 @@ impl CursorPoller {
         }
         #[cfg(not(any(
             windows,
+            target_os = "macos",
             all(target_os = "linux", feature = "x11"),
             all(target_os = "linux", feature = "pipewire")
         )))]
@@ -147,12 +154,15 @@ impl CursorSource for CursorPoller {
         match self.inner.as_mut()? {
             #[cfg(windows)]
             Inner::Win32 => win32::poll(),
+            #[cfg(target_os = "macos")]
+            Inner::Mac => macos::poll(),
             #[cfg(all(target_os = "linux", feature = "x11"))]
             Inner::X11(c) => c.poll(),
             #[cfg(all(target_os = "linux", feature = "pipewire"))]
             Inner::PipeWire(c) => c.poll(),
             #[cfg(not(any(
                 windows,
+                target_os = "macos",
                 all(target_os = "linux", feature = "x11"),
                 all(target_os = "linux", feature = "pipewire")
             )))]
@@ -163,6 +173,7 @@ impl CursorSource for CursorPoller {
     #[cfg_attr(
         not(any(
             windows,
+            target_os = "macos",
             all(target_os = "linux", feature = "x11"),
             all(target_os = "linux", feature = "pipewire")
         )),
@@ -172,12 +183,15 @@ impl CursorSource for CursorPoller {
         match self.inner.as_mut()? {
             #[cfg(windows)]
             Inner::Win32 => win32::shape(serial),
+            #[cfg(target_os = "macos")]
+            Inner::Mac => macos::shape(serial),
             #[cfg(all(target_os = "linux", feature = "x11"))]
             Inner::X11(c) => c.shape(serial),
             #[cfg(all(target_os = "linux", feature = "pipewire"))]
             Inner::PipeWire(c) => c.shape(serial),
             #[cfg(not(any(
                 windows,
+                target_os = "macos",
                 all(target_os = "linux", feature = "x11"),
                 all(target_os = "linux", feature = "pipewire")
             )))]
@@ -189,6 +203,8 @@ impl CursorSource for CursorPoller {
         match &self.inner {
             #[cfg(windows)]
             Some(Inner::Win32) => "win32-cursor",
+            #[cfg(target_os = "macos")]
+            Some(Inner::Mac) => "macos-cursor",
             #[cfg(all(target_os = "linux", feature = "x11"))]
             Some(Inner::X11(_)) => "xfixes-cursor",
             #[cfg(all(target_os = "linux", feature = "pipewire"))]
@@ -196,10 +212,137 @@ impl CursorSource for CursorPoller {
             None => "none",
             #[cfg(not(any(
                 windows,
+                target_os = "macos",
                 all(target_os = "linux", feature = "x11"),
                 all(target_os = "linux", feature = "pipewire")
             )))]
             _ => "none",
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// macOS (CoreGraphics events + built-in arrow sprite)
+// ---------------------------------------------------------------------------
+
+#[cfg(target_os = "macos")]
+mod macos {
+    use super::{CursorBitmap, CursorPosition};
+
+    /// Serial of the built-in arrow sprite — constant, because the shape
+    /// never changes: the real per-app shapes (I-beam, resize, grab) need
+    /// the ObjC `NSCursor` dance and stay a roadmap item. The viewer adds
+    /// a contrasting outline around the sprite, so a flat black arrow
+    /// reads fine on light AND dark desktops.
+    const ARROW_SERIAL: u64 = 1;
+
+    const ARROW_W: u32 = 16;
+    const ARROW_H: u32 = 24;
+
+    /// Outline of the standard macOS arrow, clockwise, in sprite pixels
+    /// (x right, y down): vertical left edge → tail notch → tail → back
+    /// up to the notch → horizontal ledge → long hypotenuse home.
+    const ARROW_POLY: &[(f32, f32)] = &[
+        (0.0, 0.0),
+        (0.0, 16.0),
+        (4.5, 12.0),
+        (7.0, 19.0),
+        (9.5, 18.0),
+        (6.5, 11.5),
+        (11.0, 11.5),
+    ];
+
+    /// Even-odd ray casting: is the point inside the arrow polygon?
+    fn inside_arrow(px: f32, py: f32) -> bool {
+        let mut inside = false;
+        let mut prev = ARROW_POLY[ARROW_POLY.len() - 1];
+        for &(xi, yi) in ARROW_POLY {
+            let (xj, yj) = prev;
+            if (yi > py) != (yj > py) && px < (xj - xi) * (py - yi) / (yj - yi) + xi {
+                inside = !inside;
+            }
+            prev = (xi, yi);
+        }
+        inside
+    }
+
+    /// Rasterize the arrow: opaque black fill, transparent background,
+    /// hotspot at the tip (0, 0). 1-px sampling of pixel centers.
+    fn arrow_bitmap() -> CursorBitmap {
+        let mut rgba = vec![0u8; (ARROW_W * ARROW_H * 4) as usize];
+        for y in 0..ARROW_H {
+            for x in 0..ARROW_W {
+                if inside_arrow(x as f32 + 0.5, y as f32 + 0.5) {
+                    let i = ((y * ARROW_W + x) * 4) as usize;
+                    rgba[i] = 10; // near-black like the real pointer
+                    rgba[i + 1] = 10;
+                    rgba[i + 2] = 10;
+                    rgba[i + 3] = 255;
+                }
+            }
+        }
+        CursorBitmap {
+            width: ARROW_W,
+            height: ARROW_H,
+            hotspot_x: 0,
+            hotspot_y: 0,
+            rgba,
+        }
+    }
+
+    pub fn poll() -> Option<CursorPosition> {
+        // Quartz events: global top-left origin, POINTS. Scale to the
+        // device pixels the streamed frame speaks (2x on Retina).
+        let (x_pt, y_pt) = crate::macos::cursor_point()?;
+        let s = crate::macos::px_per_pt_at_point(x_pt, y_pt);
+        Some(CursorPosition {
+            x: (x_pt * s).round() as i32,
+            y: (y_pt * s).round() as i32,
+            // Visibility needs the ObjC NSCursor dance — always report
+            // visible; a hidden remote pointer draws an arrow that sits
+            // still, which is less confusing than no pointer at all.
+            visible: true,
+            serial: ARROW_SERIAL,
+        })
+    }
+
+    pub fn shape(serial: u64) -> Option<CursorBitmap> {
+        if serial != ARROW_SERIAL {
+            return None;
+        }
+        Some(arrow_bitmap())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn arrow_sprite_has_expected_geometry_and_fill() {
+            let cur = arrow_bitmap();
+            assert_eq!((cur.width, cur.height), (ARROW_W, ARROW_H));
+            assert_eq!((cur.hotspot_x, cur.hotspot_y), (0, 0));
+            let alpha_at = |x: u32, y: u32| -> u8 {
+                let i = ((y * ARROW_W + x) * 4) as usize;
+                cur.rgba[i + 3]
+            };
+            // The 1px tip of the hypotenuse passes just left of the
+            // (0,0) pixel center — the first fully-opaque pixel is one
+            // row down. The far corner is transparent, the body is
+            // opaque, nothing beyond the ledge/tail is filled.
+            assert_eq!(alpha_at(0, 1), 255);
+            assert_eq!(alpha_at(15, 23), 0);
+            assert_eq!(alpha_at(2, 10), 255);
+            assert_eq!(alpha_at(12, 20), 0);
+        }
+
+        #[test]
+        fn arrow_serial_is_stable() {
+            // Same serial → same bitmap; unknown serials → None (the
+            // host retries 5× then gives up — never triggered here).
+            assert_eq!(arrow_bitmap(), arrow_bitmap());
+            assert!(shape(ARROW_SERIAL).is_some());
+            assert!(shape(42).is_none());
         }
     }
 }

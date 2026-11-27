@@ -1,4 +1,11 @@
 //! Desktop input injection via `enigo` (X11 / Windows / macOS).
+//!
+//! Coordinates arrive as global DEVICE pixels (the streamed frame's
+//! pixel space, rescaled by the host session) — exactly the space the
+//! capture backends' `origin()` and cursor overlay speak. X11/Windows
+//! inject in that same space directly; macOS enigo/CoreGraphics events
+//! speak global POINTS, so the mac backend converts first (see
+//! `opacusr-capture::macos::px_to_pt_global`).
 
 use enigo::{Axis, Button, Coordinate, Direction, Enigo, Key, Keyboard, Mouse, Settings};
 
@@ -15,6 +22,18 @@ impl DesktopInjector {
         let enigo = Enigo::new(&Settings::default())
             .map_err(|e| InputError::Backend(format!("enigo init: {e}")))?;
         Ok(Self { enigo })
+    }
+
+    /// Streamed-frame device px → the i32 screen coordinates enigo
+    /// speaks. X11/Windows: identity cast (enigo injects in that exact
+    /// space). macOS: converted to global top-left POINTS by the capture
+    /// crate's bridge (CoreGraphics events are points, frames are device
+    /// pixels — Retina would otherwise land every click at 2x).
+    fn to_local(x: u32, y: u32) -> (i32, i32) {
+        #[cfg(target_os = "macos")]
+        return opacusr_capture::macos::px_to_pt_global(x, y);
+        #[cfg(not(target_os = "macos"))]
+        (x as i32, y as i32)
     }
 
     fn map_key(key: OpKey) -> Result<Key, InputError> {
@@ -104,8 +123,9 @@ impl DesktopInjector {
 
 impl InputInjector for DesktopInjector {
     fn mouse_move(&mut self, x: u32, y: u32) -> Result<(), InputError> {
+        let (x, y) = Self::to_local(x, y);
         self.enigo
-            .move_mouse(x as i32, y as i32, Coordinate::Abs)
+            .move_mouse(x, y, Coordinate::Abs)
             .map_err(|e| InputError::Backend(format!("move: {e}")))
     }
 
@@ -116,8 +136,9 @@ impl InputInjector for DesktopInjector {
         button: MouseButtonId,
         down: bool,
     ) -> Result<(), InputError> {
+        let (x, y) = Self::to_local(x, y);
         self.enigo
-            .move_mouse(x as i32, y as i32, Coordinate::Abs)
+            .move_mouse(x, y, Coordinate::Abs)
             .map_err(|e| InputError::Backend(format!("move: {e}")))?;
         let dir = if down {
             Direction::Press

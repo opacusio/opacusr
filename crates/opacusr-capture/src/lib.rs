@@ -7,7 +7,9 @@
 //!   Wayland/PipeWire are roadmap items, see docs/roadmap.md);
 //! * Windows — GDI `BitBlt` of the primary screen (DXGI Desktop Duplication
 //!   is the roadmap upgrade);
-//! * macOS / Android / iOS — stub returning [`CaptureError::Unsupported`]
+//! * macOS — CoreGraphics snapshots (`CGDisplayCreateImage`, multi-monitor,
+//!   Retina-aware; ScreenCaptureKit is the roadmap upgrade);
+//! * Android / iOS — stub returning [`CaptureError::Unsupported`]
 //!   (viewer-only use on those platforms for now);
 //! * [`test::TestSource`] — deterministic animated pattern used by tests
 //!   and `opacusr-agent --demo` (no real screen required).
@@ -31,12 +33,16 @@ pub mod win32;
 pub mod wayland;
 
 #[cfg(any(
-    target_os = "macos",
     target_os = "android",
     target_os = "ios",
     all(not(target_os = "windows"), not(feature = "x11"))
 ))]
 pub mod stub;
+
+/// macOS host capture (CoreGraphics snapshots) + the global
+/// device-px → event-points bridge for remote input.
+#[cfg(target_os = "macos")]
+pub mod macos;
 
 pub mod test;
 
@@ -264,6 +270,17 @@ pub fn platform_capture(
         // projection is not live yet.
         let _ = allow_test_fallback;
         return Ok(Box::new(crate::android_projection::AndroidCapture::new()));
+    }
+    #[cfg(target_os = "macos")]
+    {
+        // CoreGraphics snapshot backend; errors honestly (TCC hint) when
+        // the Screen Recording permission is missing. No test-source
+        // fallback here: silently streaming a synthetic pattern from a
+        // real Mac would be worse than a clear failure.
+        let _ = allow_test_fallback;
+        let cap = crate::macos::MacCapture::connect()?;
+        tracing::info!(target: "opacusr", "using macOS CoreGraphics capture");
+        return Ok(Box::new(cap));
     }
     #[allow(unreachable_code)]
     {
