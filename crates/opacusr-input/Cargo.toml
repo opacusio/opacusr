@@ -11,6 +11,10 @@ homepage.workspace = true
 opacusr-proto = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+# Raw JNI vtable access for the Android accessibility bridge (ungated:
+# the desktop build type-checks the wiring, android_bridge never runs
+# off-Android because set_context is only called from android_main).
+jni-sys = "0.4"
 # PNG encode/decode for image clipboard sync (headless-safe helpers).
 image = { workspace = true }
 

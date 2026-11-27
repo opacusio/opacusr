@@ -37,18 +37,29 @@ pub fn consent_window(ctx: &Context, app: &mut App) {
                     );
                     // MediaProjection consent pops up AFTER «Полный
                     // доступ» on the first PC connection (v0.13.0+ the
-                    // phone CAN host — view-only). Say so BEFORE the
-                    // user picks a button, so the extra dialog is not a
-                    // surprise.
+                    // phone CAN host). Say so BEFORE the user picks a
+                    // button, so the extra dialog is not a surprise.
+                    // v0.16: the phone also accepts remote input via
+                    // the accessibility shim — but only if the user has
+                    // enabled it; otherwise "Полный доступ" degrades to
+                    // view-only, so say that too (honest, AnyDesk-style).
                     #[cfg(target_os = "android")]
-                    ui.label(
-                        egui::RichText::new(
-                            "Экран телефона увидят только в режиме просмотра: после \
-                             принятия появится системный диалог трансляции — подтвердите \
-                             его, чтобы передать экран.",
-                        )
-                        .color(theme::ACCENT),
-                    );
+                    {
+                        let input_ready = opacusr_input::android_bridge::input_service_ready();
+                        ui.label(
+                            egui::RichText::new(if input_ready {
+                                "После принятия появится системный диалог трансляции — \
+                                 подтвердите его, чтобы передать экран. Удалённое \
+                                 управление включено (сервис специальных возможностей)."
+                            } else {
+                                "Экран телефона увидят только в режиме просмотра: после \
+                                 принятия появится системный диалог трансляции. Для удалённого \
+                                 управления включите «OpacusR» в настройках специальных \
+                                 возможностей телефона."
+                            })
+                            .color(theme::ACCENT),
+                        );
+                    }
                     ui.add_space(10.0);
                     ui.horizontal(|ui| {
                         if ui

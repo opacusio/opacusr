@@ -93,6 +93,13 @@ fn android_main(android_app: AndroidApp) {
                 tracing::warn!(target: "opacusr", "projection bridge unavailable (no capture shim)")
             }
         }
+
+        // Remote input: same class-loader dance for the accessibility
+        // shim (io.opacusr.app.InputService, remote pointer/keyboard —
+        // see opacusr_input::android_bridge). Best-effort: without the
+        // class (or without the user enabling the service) the phone
+        // stays view-only.
+        wire_input_bridge(android_app.vm_as_ptr(), android_app.activity_as_ptr());
     } else {
         tracing::warn!(target: "opacusr", "system-UI hooks unavailable (no global ref)");
     }
@@ -637,10 +644,41 @@ fn set_soft_input_mode(j: &UiJni, mode: core::ffi::c_int) {
 /// Loads `io.opacusr.app.CaptureActivity` through the activity's
 /// class loader and keeps a GLOBAL ref (leaked, process lifetime).
 /// Returns the address, or None on failure (degrades to no projection).
+/// Load the input shim class and hand it to the accessibility input
+/// bridge (see opacusr_input::android_bridge). Called from android_main;
+/// defined ungated so the desktop build keeps the opacusr-input
+/// dependency type-checked (same story as the capture wiring above).
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+fn wire_input_bridge(vm_raw: *mut core::ffi::c_void, activity_raw: *mut core::ffi::c_void) {
+    match android_load_class(vm_raw, activity_raw, c"io.opacusr.app.InputService") {
+        Some(cls_global) => {
+            opacusr_input::android_bridge::set_context(
+                vm_raw as usize,
+                activity_raw as usize,
+                cls_global,
+            );
+        }
+        None => {
+            tracing::warn!(target: "opacusr", "input bridge unavailable (no input shim)")
+        }
+    }
+}
+
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
 fn android_load_capture_class(
     vm_raw: *mut core::ffi::c_void,
     activity_raw: *mut core::ffi::c_void,
+) -> Option<usize> {
+    android_load_class(vm_raw, activity_raw, c"io.opacusr.app.CaptureActivity")
+}
+
+/// Load an APK class through the activity's class loader and pin it
+/// with a global ref (FindClass cannot see APK classes from a native
+/// thread). Returns the global ref as a plain address.
+fn android_load_class(
+    vm_raw: *mut core::ffi::c_void,
+    activity_raw: *mut core::ffi::c_void,
+    name: &core::ffi::CStr,
 ) -> Option<usize> {
     if vm_raw.is_null() || activity_raw.is_null() {
         return None;
@@ -720,8 +758,7 @@ fn android_load_capture_class(
             ((*iface).v1_6.DeleteLocalRef)(env, loader);
             return None;
         }
-        let name: jni_sys::jstring =
-            ((*iface).v1_6.NewStringUTF)(env, c"io.opacusr.app.CaptureActivity".as_ptr());
+        let name: jni_sys::jstring = ((*iface).v1_6.NewStringUTF)(env, name.as_ptr());
         let capt_cls = ((*iface).v1_6.CallObjectMethod)(env, loader, load_class, name);
         ((*iface).v1_6.DeleteLocalRef)(env, name);
         ((*iface).v1_6.DeleteLocalRef)(env, loader);

@@ -56,5 +56,21 @@
             android:name="io.opacusr.app.CaptureService"
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
+
+        <!-- Remote input (phone-as-host): the user enables it once in
+             Settings -> Accessibility -> OpacusR. Push-only gesture
+             dispatcher + clipboard paste — see InputService.java. -->
+        <service
+            android:name="io.opacusr.app.InputService"
+            android:exported="false"
+            android:label="OpacusR — удалённый ввод"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/input_service_config" />
+        </service>
     </application>
 </manifest>

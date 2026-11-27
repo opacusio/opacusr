@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Accessibility config for the remote-input service (InputService.java).
+  The service is push-only: it dispatches gestures, it does not listen
+  to events. Window content is needed ONLY to paste text at the focused
+  editable node (clipboard + ACTION_PASTE).
+-->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowStateChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:notificationTimeout="100"
+    android:canRetrieveWindowContent="true" />

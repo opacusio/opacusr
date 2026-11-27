@@ -147,6 +147,28 @@ jobs:
           AR_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
         run: cargo check -p opacusr-android --target aarch64-linux-android
 
+      - name: Android — compile the Java shim + link the manifest (javac/aapt2)
+        # The release APK is packaged by scripts/package_android.sh (javac
+        # + d8 + aapt2). Without this step a Java/manifest error would
+        # only surface at the release tag — hours after the push.
+        if: runner.os == 'Linux'
+        env:
+          ANDROID_HOME: /usr/local/lib/android/sdk
+        run: |
+          JAR="$ANDROID_HOME/platforms/android-34/android.jar"
+          test -f "$JAR" || { echo "platform android-34 missing"; exit 1; }
+          BT="$(ls -d "$ANDROID_HOME"/build-tools/34* 2>/dev/null | sort -V | tail -1)"
+          test -n "$BT" || { echo "build-tools 34 missing"; exit 1; }
+          mkdir -p /tmp/shim-classes
+          javac --release 8 -classpath "$JAR" -d /tmp/shim-classes \
+            crates/opacusr-android/java/io/opacusr/app/*.java
+          "$BT/aapt2" compile --dir crates/opacusr-android/res -o /tmp/res.zip
+          "$BT/aapt2" link -o /tmp/shim-base.apk -I "$JAR" \
+            --manifest crates/opacusr-android/AndroidManifest.xml \
+            --min-sdk-version 24 --target-sdk-version 34 \
+            /tmp/res.zip
+          echo "Java shim + manifest OK"
+
       - name: "iOS — cargo check (pure core: proto + crypto)"
         # Full client is blocked upstream for now: webrtc 0.14 →
         # webrtc-util 0.12 → nix 0.26, whose socket module references

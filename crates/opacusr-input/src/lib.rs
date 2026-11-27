@@ -54,6 +54,12 @@ mod uinput;
 #[cfg(target_os = "linux")]
 pub use uinput::{is_wayland_session, UinputInjector};
 
+/// Android host remote input through the accessibility shim
+/// (InputService + static JNI bridge). Compiles everywhere; set_context
+/// is only called from android_main.
+pub mod android_bridge;
+pub use android_bridge::{input_service_ready, AndroidInjector};
+
 pub mod clipboard;
 
 /// TeamViewer-style physical input lock (Windows LL hooks / Linux evdev
@@ -171,6 +177,19 @@ pub fn platform_injector() -> Box<dyn InputInjector> {
     }
     #[cfg(any(target_os = "android", target_os = "ios"))]
     {
+        // Android host: remote input through the accessibility shim.
+        // Without the service enabled (or on iOS) the session honestly
+        // stays view-only.
+        #[cfg(target_os = "android")]
+        match android_bridge::AndroidInjector::new() {
+            Ok(i) => {
+                tracing::info!(target: "opacusr", "Android host: remote input via accessibility service");
+                return Box::new(i);
+            }
+            Err(e) => {
+                tracing::warn!(target: "opacusr", "Android remote input unavailable: {e}; session runs view-only")
+            }
+        }
         Box::new(NullInjector)
     }
 }

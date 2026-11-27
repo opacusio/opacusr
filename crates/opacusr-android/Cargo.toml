@@ -75,6 +75,9 @@ tracing = { workspace = true }
 # from android_main + the ungated JNI callbacks, so pull it on ALL
 # targets to keep the desktop build type-checking the wiring.
 opacusr-capture = { workspace = true }
+# Accessibility input bridge wiring in android_main (same story):
+# referenced ungated so the desktop build type-checks the call.
+opacusr-input = { workspace = true }
 
 [target.'cfg(target_os = "android")'.dependencies]
 opacusr-app = { workspace = true }

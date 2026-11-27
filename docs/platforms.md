@@ -1,6 +1,6 @@
 # OpacusR Platform Support
 
-Status per platform for **v0.14.0**. The transport, protocol, crypto, server, file-transfer and terminal layers are fully cross-platform Rust; what differs is **screen capture**, **audio capture** and **input injection**.
+Status per platform for **v0.15.0 / main**. The transport, protocol, crypto, server, file-transfer and terminal layers are fully cross-platform Rust; what differs is **screen capture**, **audio capture** and **input injection**.
 
 ## Summary
 
@@ -10,7 +10,7 @@ Status per platform for **v0.14.0**. The transport, protocol, crypto, server, fi
 | Linux (Wayland) | ⚠️ PipeWire portal (`--features pipewire`, experimental) else X11/XWayland | ✅ mic | ✅ uinput virtual devices (native Wayland; needs `/dev/uinput` write access) | ✅ | ✅ eframe | **Experimental** |
 | Windows 10/11 | ✅ DXGI Desktop Duplication (auto) with GDI fallback; both multi-monitor | ✅ system sound (WASAPI loopback) | ✅ enigo (SendInput) | ✅ ConPTY | ✅ eframe | **Working** |
 | macOS (aarch64) | ✅ CoreGraphics snapshots (multi-monitor, Retina; Screen Recording permission required) | ✅ mic (cpal/CoreAudio) | ✅ enigo (needs Accessibility permission) | ✅ openpty | ✅ eframe | **Working** |
-| Android | ✅ MediaProjection (host, view-only) | ❌ | ❌ host-side (viewer inputs work) | ❌ | ✅ NativeActivity + egui | **Working (viewer + phone-host)** |
+| Android | ✅ MediaProjection (host) | ❌ | ⚠️ host-side via accessibility shim (drag/long-press/swipe-scroll/Back/paste; Android 8+ for drag) | ❌ | ✅ NativeActivity + egui | **Working (viewer + phone-host)** |
 | iOS | ❌ | ❌ | ❌ | ❌ | ❌ | **Not started** |
 | Headless / VM / CI | ✅ `test-source` synthetic pattern | n/a (feature compiles) | ✅ `NullInjector` | ✅ | n/a | **Working (testing)** |
 
@@ -45,7 +45,17 @@ Every platform compiles the full workspace; capture/input differences are isolat
 
 ## Android / iOS
 
-**Android ships**: viewer (chromeless fullscreen, touch layer, soft keyboard + control-keys strip, cursor overlay) AND phone-as-host via MediaProjection (view-only, consent dialog + FGS `CaptureService`; a Java shim compiled by CI). Phone-host input injection and audio are not implemented. iOS: nothing beyond proto/crypto checks — the client does not build for iOS yet (webrtc→nix).
+**Android ships**: viewer (chromeless fullscreen, touch layer, soft keyboard + control-keys strip, cursor overlay) AND phone-as-host via MediaProjection (consent dialog + FGS `CaptureService`; a Java shim compiled by CI).
+
+**Phone-host remote input** (accessibility shim, `InputService.java` + `opacusr_input::android_bridge`): the user enables "OpacusR" once in **Settings → Accessibility**; the consent dialog tells them when it is off. Mapping of the desktop protocol onto touch reality:
+
+- left button down/move/up → a **drag** (one continued `GestureDescription` stroke per move segment, `StrokeDescription.continueStroke`; needs **Android 8+** — on older devices a plain tap fallback covers single clicks);
+- right button → **long press** (the touch equivalent of right click);
+- wheel → a **short swipe** at the last pointer position (protocol positive dy = wheel UP → finger swipes DOWN, mirroring uinput.rs); suppressed while a drag is running;
+- `Escape` → **Back** (`GLOBAL_ACTION_BACK`); every other key is reported unsupported;
+- `text()` → **clipboard + `ACTION_PASTE`** at the caret of the focused editable node (clobbers the clipboard — honest limitation; an IME service is the v2 fix).
+
+Hover moves without a held button are dropped (touch screens have no hover). The device path (real gesture dispatch on real hardware) is untested in CI — CI proves javac/aapt2/d8 compile the shim and the manifest links; the first live run should be watched. Audio capture and iOS are not implemented; iOS: nothing beyond proto/crypto checks — the client does not build for iOS yet (webrtc→nix).
 
 ## Headless / CI usage
 
