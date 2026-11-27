@@ -16,24 +16,24 @@ members = [
 ]
 
 [workspace.package]
-version = "0.13.3"
+version = "0.14.0"
 edition = "2021"
 license = "AGPL-3.0-or-later"
 repository = "https://github.com/opacusio/opacusr"
 homepage = "https://github.com/opacusio"
 
 [workspace.dependencies]
-opacusr-proto = { path = "crates/opacusr-proto", version = "0.13.2" }
-opacusr-crypto = { path = "crates/opacusr-crypto", version = "0.13.2" }
-opacusr-transport = { path = "crates/opacusr-transport", version = "0.13.2" }
-opacusr-capture = { path = "crates/opacusr-capture", version = "0.13.2" }
-opacusr-codec = { path = "crates/opacusr-codec", version = "0.13.2" }
-opacusr-input = { path = "crates/opacusr-input", version = "0.13.2" }
-opacusr-agent = { path = "crates/opacusr-agent", version = "0.13.2", default-features = false }
-opacusr-client = { path = "crates/opacusr-client", version = "0.13.2", default-features = false }
-opacusr-server = { path = "crates/opacusr-server", version = "0.13.2" }
-opacusr-app = { path = "crates/opacusr-app", version = "0.13.2" }
-opacusr-libp2p = { path = "crates/opacusr-libp2p", version = "0.13.2" }
+opacusr-proto = { path = "crates/opacusr-proto" }
+opacusr-crypto = { path = "crates/opacusr-crypto" }
+opacusr-transport = { path = "crates/opacusr-transport" }
+opacusr-capture = { path = "crates/opacusr-capture" }
+opacusr-codec = { path = "crates/opacusr-codec" }
+opacusr-input = { path = "crates/opacusr-input" }
+opacusr-agent = { path = "crates/opacusr-agent", default-features = false }
+opacusr-client = { path = "crates/opacusr-client", default-features = false }
+opacusr-server = { path = "crates/opacusr-server" }
+opacusr-app = { path = "crates/opacusr-app" }
+opacusr-libp2p = { path = "crates/opacusr-libp2p" }
 
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time", "fs", "signal"] }
 futures = "0.3"
