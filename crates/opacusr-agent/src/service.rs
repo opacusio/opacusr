@@ -237,18 +237,34 @@ impl AgentService {
         };
         let mut backoff = std::time::Duration::from_secs(1);
         loop {
+            let started = std::time::Instant::now();
             match self
                 .serve_once(&url, primary, consent.as_ref(), &mut shutdown, &gate, &turn)
                 .await
             {
                 Ok(()) => return Ok(()), // graceful shutdown
                 Err(e) => {
+                    // A registration that lived for a while proves the
+                    // endpoint works — the next drop must retry
+                    // promptly again (the old ever-growing backoff left
+                    // a machine offline for up to 30 s after ANY flap).
+                    if started.elapsed() >= std::time::Duration::from_secs(60) {
+                        backoff = std::time::Duration::from_secs(1);
+                    }
+                    // Displaced by a newer registration of the same
+                    // machine (duplicate agent process): do not fight
+                    // for the id in a reconnect ping-pong — back off
+                    // hard and let the newer process own the id.
+                    if e.to_string().contains("taken over") {
+                        backoff = backoff.max(std::time::Duration::from_secs(60));
+                    }
+                    let wait = jittered(backoff);
                     let _ = self.events.send(AgentEvent::Notice(format!(
                         "{url}: connection lost: {e}; retrying in {}s",
-                        backoff.as_secs()
+                        wait.as_secs()
                     )));
                     tokio::select! {
-                        _ = tokio::time::sleep(backoff) => {}
+                        _ = tokio::time::sleep(wait) => {}
                         _ = shutdown.changed() => return Ok(()),
                     }
                     backoff = (backoff * 2).min(std::time::Duration::from_secs(30));
@@ -397,8 +413,22 @@ impl AgentService {
         let mut heartbeat = tokio::time::interval(std::time::Duration::from_secs(10));
         heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         // Per-peer permission decisions, keyed by PeerId (filled on consent).
-        let mut decisions: std::collections::HashMap<opacusr_proto::PeerId, SessionDecision> =
-            std::collections::HashMap::new();
+        // TTL-bounded: a stale "Accept" must not authorize a transport
+        // opened much later by the same viewer id.
+        let mut decisions: std::collections::HashMap<
+            opacusr_proto::PeerId,
+            (SessionDecision, std::time::Instant),
+        > = std::collections::HashMap::new();
+
+        // Zombie-socket watchdog. The heartbeat + WS ping keep inbound
+        // Pongs flowing on a healthy connection (server auto-pongs); if
+        // nothing arrives for IDLE_LIMIT_SECS the path is dead — e.g. a
+        // NAT mapping was replaced or the server restarted — and this
+        // endpoint must reconnect NOW instead of advertising an id the
+        // server already pruned (viewers saw «peer … is offline» for
+        // minutes while this process still showed the id as active).
+        const IDLE_POLL: std::time::Duration = std::time::Duration::from_secs(10);
+        const IDLE_LIMIT_SECS: u64 = 75;
 
         loop {
             tokio::select! {
@@ -406,8 +436,23 @@ impl AgentService {
                     let _ = sig.close().await;
                     return Ok(());
                 }
+                _ = tokio::time::sleep(IDLE_POLL) => {
+                    if let Some(idle) = sig.last_frame_secs_ago() {
+                        if idle >= IDLE_LIMIT_SECS {
+                            anyhow::bail!(
+                                "no inbound traffic for {idle}s — reconnecting (dead signaling socket?)"
+                            );
+                        }
+                    }
+                }
                 _ = heartbeat.tick() => {
-                    let _ = sig.send(&SignalMessage::Heartbeat).await;
+                    // Errors MUST propagate: a swallowed send error used
+                    // to keep this endpoint loop running for minutes on a
+                    // socket the server had already discarded.
+                    sig.send(&SignalMessage::Heartbeat).await?;
+                    // WS-level ping: the server auto-pongs, so inbound
+                    // frames prove the path even without protocol traffic.
+                    sig.send_ping().await?;
                 }
                 msg = sig.recv() => {
                     let msg = msg?;
@@ -448,7 +493,7 @@ impl AgentService {
                                 _ => PeerPayload::Accept,
                             };
                             if decision != SessionDecision::Reject {
-                                decisions.insert(incoming.from, decision);
+                                decisions.insert(incoming.from, (decision, std::time::Instant::now()));
                             }
                             sig.send(&SignalMessage::PeerSend(PeerSend { to: incoming.from, payload }))
                                 .await?;
@@ -462,7 +507,14 @@ impl AgentService {
                                     // any password-knowing viewer bypass the
                                     // consent dialog / ACL by sending a raw
                                     // SdpOffer straight after registration.
-                                    match decisions.get(&from).copied() {
+                                    let decision = decisions
+                                        .get(&from)
+                                        .copied()
+                                        .filter(|(_, at)| {
+                                            at.elapsed() < std::time::Duration::from_secs(120)
+                                        })
+                                        .map(|(d, _)| d);
+                                    match decision {
                                         Some(d) => {
                                             let view_only = d == SessionDecision::ViewOnly;
                                             self.start_webrtc_session(
@@ -491,7 +543,14 @@ impl AgentService {
                                     }
                                 }
                                 PeerPayload::RelayUse { ticket, port } => {
-                                    match decisions.get(&from).copied() {
+                                    let decision = decisions
+                                        .get(&from)
+                                        .copied()
+                                        .filter(|(_, at)| {
+                                            at.elapsed() < std::time::Duration::from_secs(120)
+                                        })
+                                        .map(|(d, _)| d);
+                                    match decision {
                                         Some(d) => {
                                             let view_only = d == SessionDecision::ViewOnly;
                                             self.start_relay_session(
@@ -526,6 +585,14 @@ impl AgentService {
                             let _ = self.events.send(AgentEvent::Notice(format!("peer {} went offline", g.peer)));
                         }
                         SignalMessage::Error { message } => {
+                            if message.contains("taken over") {
+                                // Our id was grabbed by a newer registration
+                                // of the same machine (a duplicate agent
+                                // process). Bail so endpoint_loop backs off
+                                // hard instead of stealing the id back in
+                                // an endless ping-pong.
+                                anyhow::bail!("{message}");
+                            }
                             let _ = self.events.send(AgentEvent::Notice(format!("server: {message}")));
                         }
                         _ => {}
@@ -863,6 +930,18 @@ pub fn proxy_for_endpoint(
         return Ok(None);
     }
     parse_proxy(raw)
+}
+
+/// Backoff with ±20% jitter (nanosecond clock, no extra dependency).
+/// Two retrying loops (e.g. a displaced duplicate agent and the winner)
+/// must not wake in lock-step and keep stealing the id from each other.
+fn jittered(d: std::time::Duration) -> std::time::Duration {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .subsec_nanos() as f64;
+    let factor = 0.8 + 0.4 * (nanos / 1_000_000_000.0);
+    std::time::Duration::from_secs(((d.as_secs_f64() * factor).round() as u64).max(1))
 }
 
 /// True for ws:// URLs whose host part is a loopback address/name.

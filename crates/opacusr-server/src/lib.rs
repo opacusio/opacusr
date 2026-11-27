@@ -87,6 +87,9 @@ const PEER_QUEUE_DEPTH: usize = 512;
 /// Sanity caps on peer-supplied strings/payloads (server-side defense;
 /// the frame limit is the only other barrier on the wire).
 const MAX_DISPLAY_NAME: usize = 256;
+/// Machine-key fingerprint cap: alphanumeric plus `-`/`_`. Anything
+/// longer or weirder is abuse (the fps map is keyed by this string).
+const MAX_KEY_FP: usize = 64;
 /// SDP offers are a few KiB at most; anything larger is abuse.
 const MAX_PEER_PAYLOAD: usize = 512 * 1024;
 
@@ -159,7 +162,17 @@ impl Registry {
             match peers.get(&id0) {
                 // Occupied by the same machine (a dead socket not yet
                 // pruned, or a duplicate agent process): take it back.
-                Some(h) if h.fp.as_deref() == key_fp => id0,
+                // The displaced connection is told WHY — an agent that
+                // receives this notice backs off hard instead of
+                // stealing the id back in an endless reconnect loop.
+                Some(h) if h.fp.as_deref() == key_fp => {
+                    let _ = h.tx.try_send(SignalMessage::Error {
+                        message: format!(
+                            "peer {id0} taken over by a newer registration of the same machine"
+                        ),
+                    });
+                    id0
+                }
                 // Occupied by someone else (id collision): mint fresh.
                 Some(_) => mint_random(&peers),
                 None => id0,
@@ -238,6 +251,16 @@ impl Registry {
             .collect();
         for id in &stale {
             peers.remove(id);
+        }
+        if !stale.is_empty() {
+            // Fingerprint entries pointing at removed ids would pin the
+            // mapping forever — an unauthenticated registration could
+            // grow this map without bound. Same lock order as register
+            // (peers → fps).
+            self.fps
+                .lock()
+                .unwrap()
+                .retain(|_, id| peers.contains_key(id));
         }
         stale
     }
@@ -850,6 +873,23 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
         )
         .await;
         return;
+    }
+    if let Some(fp) = reg.key_fp.as_deref() {
+        if fp.is_empty()
+            || fp.len() > MAX_KEY_FP
+            || !fp
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        {
+            let _ = send_signal(
+                &mut socket,
+                SignalMessage::Error {
+                    message: "invalid key fingerprint".into(),
+                },
+            )
+            .await;
+            return;
+        }
     }
     let my_info = PeerInfo {
         platform: reg.platform,

@@ -65,23 +65,29 @@ pub fn home_ui(ctx: &egui::Context, app: &mut App) {
         }
 
         if ui.available_width() >= STACK_BELOW {
-            // Wide: card top-left, the history fills the rest.
+            // Wide: the own-ID hero card + connect card top-left, the
+            // history fills the rest. AnyDesk hierarchy: СВОЙ id →
+            // чужой id → подключение.
             ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP), |ui| {
                 ui.vertical(|ui| {
                     ui.set_min_width(CARD_W);
                     ui.set_max_width(CARD_W);
+                    own_id_card(ui, app);
+                    ui.add_space(12.0);
                     connect_card(ui, app);
                 });
                 ui.add_space(12.0);
                 history_card(ui, app);
             });
         } else {
-            // Narrow: one scrolling column, history below the card.
+            // Narrow: one scrolling column, history below the cards.
             egui::ScrollArea::vertical()
                 .auto_shrink(false)
                 .show(ui, |ui| {
                     ui.vertical(|ui| {
                         ui.set_min_width(ui.available_width());
+                        own_id_card(ui, app);
+                        ui.add_space(12.0);
                         connect_card(ui, app);
                         ui.add_space(12.0);
                         history_card_narrow(ui, app);
@@ -92,9 +98,9 @@ pub fn home_ui(ctx: &egui::Context, app: &mut App) {
 }
 
 /// The compact connect card: partner ID + password + the violet CTA,
-/// the on-demand 2FA field — and the «Этот компьютер» strip beneath
-/// (own ID, agent status, start/stop). TeamViewer parity without the
-/// big home screen: password, 2FA and service controls are in Настройки.
+/// and the on-demand 2FA field. The «Этот компьютер» strip (own ID,
+/// agent status, start/stop) lives in its own HERO card ABOVE this one
+/// — AnyDesk hierarchy: свой ID → чужой ID → подключение.
 fn connect_card(ui: &mut Ui, app: &mut App) {
     theme::card(ui, |ui| {
         ui.set_min_width(ui.available_width());
@@ -173,10 +179,19 @@ fn connect_card(ui: &mut Ui, app: &mut App) {
         } else {
             ui.label(egui::RichText::new(&app.status_message).weak().small());
         }
+    });
+}
 
-        ui.add_space(8.0);
-        ui.separator();
-        ui.add_space(8.0);
+/// The HERO card: this machine's own ID, big — AnyDesk hierarchy is
+/// «your ID → their ID → connect». The strip used to sit BELOW the
+/// connect form inside one card, its digits capped at 26 px — the ID
+/// a partner has to read out loud was visually subordinate to the
+/// form. Now: separate card, first in reading order, digits scaled to
+/// ~34 px. Everything else (password reveal, agent start/stop, LAN
+/// chips) stays in the card below the ID.
+fn own_id_card(ui: &mut Ui, app: &mut App) {
+    theme::card(ui, |ui| {
+        ui.set_min_width(ui.available_width());
         own_machine_strip(ui, app);
     });
 }
@@ -204,7 +219,7 @@ fn own_machine_strip(ui: &mut Ui, app: &mut App) {
             // glyphs, a mono glyph is ~0.6 em — keep it on ONE line no
             // matter how narrow the column is.
             let col_w = ui.available_width();
-            let size = ((col_w - 26.0) / 6.9).clamp(15.0, 26.0);
+            let size = ((col_w - 26.0) / 6.9).clamp(18.0, 34.0);
             let resp = ui
                 .add(
                     egui::Button::new(theme::mono(&text).size(size).color(if online {
@@ -215,7 +230,7 @@ fn own_machine_strip(ui: &mut Ui, app: &mut App) {
                     .fill(theme::INSET)
                     .stroke(egui::Stroke::new(1.0_f32, theme::CARD_STROKE))
                     .rounding(egui::Rounding::same(10.0))
-                    .min_size([col_w.max(120.0), 40.0].into()),
+                    .min_size([col_w.max(120.0), 48.0].into()),
                 )
                 .on_hover_text("Нажмите, чтобы скопировать ID");
             if resp.clicked() {

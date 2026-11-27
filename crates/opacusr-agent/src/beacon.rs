@@ -33,10 +33,32 @@ pub fn spawn(
 ) {
     tokio::spawn(async move {
         // Rebind the payload each tick: the ID may arrive at any moment.
-        let sock = match tokio::net::UdpSocket::bind("0.0.0.0:0").await {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::debug!(target: "opacusr", "beacon: bind failed: {e}");
+        // The bind is retried a few times: a transient failure during a
+        // service-start race (network stack still coming up) used to
+        // kill LAN resolution for the whole run — same pattern as the
+        // embedded signaling listener's retries.
+        const BIND_ATTEMPTS: u32 = 8;
+        const BIND_BACKOFF: std::time::Duration = std::time::Duration::from_millis(750);
+        let mut sock = None;
+        for attempt in 1..=BIND_ATTEMPTS {
+            match tokio::net::UdpSocket::bind("0.0.0.0:0").await {
+                Ok(s) => {
+                    sock = Some(s);
+                    break;
+                }
+                Err(e) => {
+                    tracing::debug!(target: "opacusr", "beacon: bind failed (attempt {attempt}): {e}");
+                    tokio::select! {
+                        _ = tokio::time::sleep(BIND_BACKOFF) => {}
+                        _ = shutdown.changed() => return,
+                    }
+                }
+            }
+        }
+        let sock = match sock {
+            Some(s) => s,
+            None => {
+                tracing::debug!(target: "opacusr", "beacon: bind failed after {BIND_ATTEMPTS} attempts, LAN beacons off");
                 return;
             }
         };

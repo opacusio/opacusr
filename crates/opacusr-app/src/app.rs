@@ -48,10 +48,6 @@ pub struct SessionHandle {
     pub panel_term: bool,
     /// TCP tunnel side panel (SSH-style local forwarding).
     pub panel_tunnel: bool,
-    /// Android call menu (⋯): chat/files/terminal/stats/tunnel and the
-    /// rest of the controls live there — the toolbar row stays short
-    /// so the video gets the whole screen.
-    pub panel_menu: bool,
     /// On-screen control-keys strip (Ctrl/Alt/Shift/Win + Esc/arrows/F1
     /// –F12): a phone soft keyboard has none of those.
     pub panel_keys: bool,
@@ -125,12 +121,18 @@ pub struct SessionHandle {
     /// already pressed down).
     pub touch_drag: Option<egui::TouchId>,
     /// Android touch layer: secondary finger drives two-finger scroll
-    /// (touch id, last position).
+    /// (touch id, last position). Fractional pixel deltas accumulate in
+    /// [`SessionHandle::wheel_acc`] — sub-notch remainders used to be
+    /// truncated to zero, so slow swipes sent «wheel: 0» forever.
     pub touch_scroll: Option<(egui::TouchId, egui::Pos2)>,
     /// Suppress egui-synthesized pointer clicks while the touch layer
     /// owns the interaction — egui reports the synthesized click in the
     /// frame AFTER the touch ends, so the latch must outlive it.
     pub touch_cooldown_until: Option<std::time::Instant>,
+    /// Fractional wheel remainder (raw pixels): scroll deltas are sent
+    /// only as whole 8-px notches, the rest stays buffered for the next
+    /// event — slow swipes/trackpad scrolls used to round to 0.
+    pub wheel_acc: egui::Vec2,
     /// Per-session frame counter for the periodic sticky-immersive
     /// reassert on Android (bars sometimes reappear after focus gain).
     pub(crate) sysui_tick: u32,
@@ -167,7 +169,6 @@ impl SessionHandle {
             panel_files: false,
             panel_term: false,
             panel_tunnel: false,
-            panel_menu: false,
             panel_keys: false,
             sticky_mods: 0,
             tunnels: Vec::new(),
@@ -207,6 +208,7 @@ impl SessionHandle {
             touch_drag: None,
             touch_scroll: None,
             touch_cooldown_until: None,
+            wheel_acc: egui::Vec2::ZERO,
             sysui_tick: 0,
         }
     }
@@ -259,6 +261,13 @@ pub struct App {
     /// connect attempt — on a phone the keyboard must come up at once).
     pub(crate) focus_password: bool,
     pub host_password_input: String,
+
+    /// Optional signaling endpoint of the CONTACT being dialed (the
+    /// «▶» button on a contact row). Tried FIRST in the ladder — the
+    /// contact's private tunnel knows the host's registry even when
+    /// both peers sit behind symmetric NATs with nothing in common.
+    /// One-shot: consumed by the next connect.
+    pub contact_endpoint_hint: Option<String>,
 
     /// Saved contacts + connection history (`addressbook.toml`).
     pub book: AddressBook,
@@ -404,6 +413,7 @@ impl App {
             rt: spawn_runtime(),
             server_url: config.server_url.clone(),
             peer_id_input: String::new(),
+            contact_endpoint_hint: None,
             password_input: String::new(),
             display_name,
             transport_choice: TransportChoice::Auto,
@@ -808,6 +818,17 @@ impl App {
             // «peer offline» from its own loopback registry — the one
             // endpoint that can never know a LAN peer that never dialed us.
             let mut urls: Vec<String> = Vec::new();
+            // The contact's own endpoint (typed with the contact, e.g. a
+            // tunnel to the host's signaling server) outranks everything:
+            // the global list can be silent about the host, this one
+            // cannot. One-shot: consumed regardless of the outcome.
+            // (v0.13.3-: the contact's ▶ used to OVERWRITE the global
+            // server_url setting instead — a hidden side effect.)
+            if let Some(ep) = self.contact_endpoint_hint.take() {
+                if !urls.contains(&ep) {
+                    urls.push(ep);
+                }
+            }
             for host in &discovered {
                 if let Some(url) = &host.signal_url {
                     if !urls.contains(url) {
@@ -1097,7 +1118,7 @@ impl App {
         }
         self.host = None;
         self.host_consent_rx = None;
-        self.status_message = "Agent stopped.".into();
+        self.status_message = "Агент остановлен.".into();
     }
 
     /// Cached SCM state for the settings row (refreshed at most every
@@ -1352,8 +1373,12 @@ impl eframe::App for App {
                     sess.selected_screen = 0;
                     sess.clipboard_sync = true;
                     sess.status = format!(
-                        "connected to {host_name}{}",
-                        if view_only { " (view only)" } else { "" }
+                        "подключено к {host_name}{}",
+                        if view_only {
+                            " (только просмотр)"
+                        } else {
+                            ""
+                        }
                     );
                     sess.host_name = host_name;
                     self.cur_connected_at = Some(now_secs());
@@ -1481,14 +1506,14 @@ impl eframe::App for App {
                 }
                 ClientEvent::FtSentDone { id, ok } => {
                     sess.chat.push(format!(
-                        "upload #{id} {}",
+                        "отправка файла #{id} {}",
                         if ok { "done ✓" } else { "failed ✗" }
                     ));
                     sess.uploads.retain(|(i, ..)| *i != id);
                 }
                 ClientEvent::FtReceivedDone { path, verified } => {
                     sess.chat.push(format!(
-                        "host sent {} ({})",
+                        "хост отправил {} ({})",
                         path.display(),
                         if verified {
                             "verified ✓"
@@ -1497,7 +1522,7 @@ impl eframe::App for App {
                         }
                     ));
                 }
-                ClientEvent::FtFailed { reason, .. } => sess.status = format!("transfer: {reason}"),
+                ClientEvent::FtFailed { reason, .. } => sess.status = format!("передача: {reason}"),
                 ClientEvent::TermOpened { ok, error, .. } => {
                     sess.term_open = ok;
                     if !ok {
@@ -1517,14 +1542,14 @@ impl eframe::App for App {
                     target_port,
                 } => {
                     sess.status = format!(
-                        "tunnel: 127.0.0.1:{listen_port} → {target_host}:{target_port} (via host)"
+                        "туннель: 127.0.0.1:{listen_port} → {target_host}:{target_port} (через хост)"
                     );
                     sess.tunnels.push((listen_port, target_host, target_port));
                 }
                 ClientEvent::TunnelOpened { ok, error, .. } => {
                     if !ok {
                         sess.status = format!(
-                            "tunnel refused: {}",
+                            "туннель отклонён: {}",
                             error.unwrap_or_else(|| "unknown".into())
                         );
                     }

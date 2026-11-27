@@ -17,17 +17,30 @@ use opacusr_agent::config::AgentConfig;
 /// system bars (sticky immersive) and the session holds landscape
 /// rotation (see `android_sysui`).
 pub fn session_ui(ctx: &Context, s: &mut SessionHandle, cfg: &mut AgentConfig) {
+    // Rects of every chrome surface (toolbar, sidebar, keys strip,
+    // floating overlays). The input layer refuses pointer/touch events
+    // that start inside them: raw touch events bypass egui's widget
+    // hit-testing, so a tap on a floating button used to ALSO click the
+    // remote desktop at that point.
+    let mut overlay: Vec<egui::Rect> = Vec::new();
+
     // ---- toolbar ---------------------------------------------------------
     if !s.fullscreen {
+        let mut toolbar_rect = egui::Rect::NOTHING;
         egui::TopBottomPanel::top("session_toolbar").show(ctx, |ui| {
             session_toolbar(ui, s, cfg);
+            toolbar_rect = ui.min_rect();
         });
+        overlay.push(toolbar_rect);
     }
 
-    // ---- right sidebar (part of the hidden chrome) ------------------------
+    // ---- right sidebar -----------------------------------------------------
+    // Works in chrome-less mode too now: the floating quickbar menu
+    // toggles the panels without leaving fullscreen.
     let sidebar_open =
         s.panel_chat || s.panel_files || s.panel_term || s.panel_stats || s.panel_tunnel;
-    if !s.fullscreen && sidebar_open {
+    if sidebar_open {
+        let mut side_rect = egui::Rect::NOTHING;
         egui::SidePanel::right("session_sidebar")
             .min_width(280.0)
             .default_width(320.0)
@@ -51,29 +64,35 @@ pub fn session_ui(ctx: &Context, s: &mut SessionHandle, cfg: &mut AgentConfig) {
                 if s.panel_tunnel {
                     tunnel_panel(ui, s);
                 }
+                side_rect = ui.min_rect();
             });
+        overlay.push(side_rect);
     }
 
     // ---- control-keys strip (toggled from the Android call menu) --------
     // A soft IME cannot produce Ctrl/Alt/F1–F12/arrows — remote control
-    // from a phone needs them on screen.
+    // from a phone needs them on screen. In chrome-less mode it floats
+    // over the video instead (see fullscreen_overlays).
     if s.panel_keys && !s.fullscreen {
+        let mut keys_rect = egui::Rect::NOTHING;
         egui::TopBottomPanel::bottom("session_keys_strip").show(ctx, |ui| {
             keys_strip(ui, s);
+            keys_rect = ui.min_rect();
         });
+        overlay.push(keys_rect);
     }
 
     // ---- remote view -----------------------------------------------------
     egui::CentralPanel::default().show(ctx, |ui| {
-        session_view(ui, s);
+        session_view(ui, s, &overlay);
     });
 
-    // Chrome-less mode: floating controls over the video — an exit
-    // button and a view-only badge (the toolbar badge is hidden with
-    // the rest of the chrome, but the user MUST still see that input
-    // is off, otherwise taps look broken).
+    // Chrome-less mode: floating controls over the video — quickbar
+    // (keyboard · Ctrl/Alt/Shift · menu), floating keys strip, exit
+    // button and view-only badge. Without them a fullscreen phone user
+    // could not type or press Ctrl at all.
     if s.fullscreen {
-        fullscreen_overlays(ctx, s);
+        fullscreen_overlays(ctx, s, &mut overlay);
     }
 }
 
@@ -93,11 +112,11 @@ fn session_toolbar(ui: &mut egui::Ui, s: &mut SessionHandle, cfg: &mut AgentConf
                     .color(Color32::from_rgb(255, 170, 60))
                     .strong(),
             )
-            .on_hover_text("Session is view-only");
+            .on_hover_text("Сессия только для просмотра");
             ui.separator();
         }
         ui.label(egui::RichText::new(&s.status).weak().small());
-        ui.label(egui::RichText::new(format!(" {} ms", s.rtt)).weak().small());
+        ui.label(egui::RichText::new(format!(" {} мс", s.rtt)).weak().small());
         // Soft keyboard: the IME types text (chat, terminal, the remote
         // screen); the ⋯ menu holds the CONTROL keys strip for
         // Ctrl/Alt/arrows/F1–F12 that no soft keyboard can produce.
@@ -168,7 +187,7 @@ fn session_toolbar(ui: &mut egui::Ui, s: &mut SessionHandle, cfg: &mut AgentConf
             for (label, flag, avail) in [
                 ("💬 Чат", &mut s.panel_chat, true),
                 ("📁 Файлы", &mut s.panel_files, true),
-                ("⌨ Терминал", &mut s.panel_term, true),
+                (">_ Терминал", &mut s.panel_term, true),
                 ("⌨ Клавиши (Ctrl/F1/…)", &mut s.panel_keys, true),
                 ("📊 Статистика", &mut s.panel_stats, true),
                 ("🔗 Туннели", &mut s.panel_tunnel, s.tunnel_available),
@@ -196,7 +215,7 @@ fn session_toolbar(ui: &mut egui::Ui, s: &mut SessionHandle, cfg: &mut AgentConf
     ui.horizontal_wrapped(|ui| {
         if s.view_only {
             ui.label(
-                egui::RichText::new("👁 view only")
+                egui::RichText::new("👁 только просмотр")
                     .color(Color32::from_rgb(255, 170, 60))
                     .strong(),
             );
@@ -205,7 +224,7 @@ fn session_toolbar(ui: &mut egui::Ui, s: &mut SessionHandle, cfg: &mut AgentConf
         ui.label(egui::RichText::new(&s.status).weak().small());
         ui.separator();
         if ui
-            .button(if s.paused { "▶ Resume" } else { "⏸ Pause" })
+            .button(if s.paused { "▶ Продолжить" } else { "⏸ Пауза" })
             .clicked()
         {
             s.paused = !s.paused;
@@ -236,12 +255,12 @@ fn session_toolbar(ui: &mut egui::Ui, s: &mut SessionHandle, cfg: &mut AgentConf
             }
         }
         ui.separator();
-        if ui.toggle_value(&mut s.clipboard_sync, "📋 sync").changed() {
+        if ui.toggle_value(&mut s.clipboard_sync, "📋 Буфер").changed() {
             let _ = s.commands.send(Command::ClipboardSync(s.clipboard_sync));
         }
         if ui
             .button("🖨")
-            .on_hover_text("Print the current remote frame on your local printer")
+            .on_hover_text("Печать кадра удалённого экрана на местном принтере")
             .clicked()
         {
             print_current_frame(s);
@@ -285,7 +304,7 @@ fn session_toolbar(ui: &mut egui::Ui, s: &mut SessionHandle, cfg: &mut AgentConf
             let _ = cfg;
         }
         ui.separator();
-        ui.label(format!("RTT {} ms", s.rtt));
+        ui.label(format!("{} мс", s.rtt));
         // Adaptive-quality tier: what the host's controller is currently
         // streaming at (hidden while a manual quality setting is in
         // force — the sliders above are authoritative then).
@@ -296,30 +315,33 @@ fn session_toolbar(ui: &mut egui::Ui, s: &mut SessionHandle, cfg: &mut AgentConf
                 ui.label(egui::RichText::new(text).color(color).strong())
                     .on_hover_text(match s.quality_params {
                         Some((fps, q, sc)) => format!(
-                            "Adaptive quality tier {tier}/3 — streaming at \
-                                 {fps} fps, JPEG {q}, scale {sc}%"
+                            "Адаптивное качество, уровень {tier}/3 — {fps} fps, JPEG {q}, масштаб {sc}%"
                         ),
-                        None => format!("Adaptive quality tier {tier}/3"),
+                        None => format!("Адаптивное качество, уровень {tier}/3"),
                     });
             }
         }
         if s.recording {
             ui.separator();
             ui.label(
-                egui::RichText::new("● REC")
+                egui::RichText::new("● ЗАПИСЬ")
                     .color(egui::Color32::from_rgb(230, 80, 80))
                     .strong(),
             )
-            .on_hover_text("The host records this session to a video file.");
+            .on_hover_text("Хост записывает эту сессию в видеофайл.");
         }
         ui.separator();
-        ui.toggle_value(&mut s.panel_chat, "💬");
-        ui.toggle_value(&mut s.panel_files, "📁");
-        ui.toggle_value(&mut s.panel_term, "⌨");
-        ui.toggle_value(&mut s.panel_stats, "📊");
+        ui.toggle_value(&mut s.panel_chat, "💬")
+            .on_hover_text("Чат");
+        ui.toggle_value(&mut s.panel_files, "📁")
+            .on_hover_text("Передача файлов");
+        ui.toggle_value(&mut s.panel_term, ">_")
+            .on_hover_text("Терминал хоста");
+        ui.toggle_value(&mut s.panel_stats, "📊")
+            .on_hover_text("Статистика");
         let mut tunnel_btn = ui
             .toggle_value(&mut s.panel_tunnel, "🔗")
-            .on_hover_text("TCP tunnels (SSH-style port forwarding)");
+            .on_hover_text("TCP-туннели (перенаправление портов)");
         tunnel_btn.enabled = s.tunnel_available;
         if s.panel_tunnel && !s.tunnel_available {
             s.panel_tunnel = false;
@@ -347,23 +369,35 @@ fn session_toolbar(ui: &mut egui::Ui, s: &mut SessionHandle, cfg: &mut AgentConf
     });
 }
 
-/// Floating controls over the video in chrome-less mode: an exit
-/// button and a view-only badge (the toolbar badge is hidden with the
-/// rest of the chrome, but the user MUST still see that input is off,
-/// otherwise taps look broken).
-fn fullscreen_overlays(ctx: &Context, s: &mut SessionHandle) {
+/// Floating controls over the video in chrome-less mode. Without them
+/// a fullscreen user had NOTHING but an exit button: no keyboard, no
+/// Ctrl, no chat — «нет вызова полноценной клавиатуры». Now:
+///   • quickbar (top-center): soft keyboard (Android) · sticky
+///     Ctrl/Alt/Shift · ⋯ menu (pause, keys strip, chat, files, stats,
+///     disconnect);
+///   • the control-keys strip floats over the video when enabled;
+///   • view-only badge (top-left) + exit button (top-right).
+/// Every surface's rect is pushed into `overlay` so the input layer
+/// refuses touches that start on them (raw touches bypass egui's
+/// widget hit-testing).
+fn fullscreen_overlays(ctx: &Context, s: &mut SessionHandle, overlay: &mut Vec<egui::Rect>) {
+    let mut badge_rect = egui::Rect::NOTHING;
     egui::Area::new(egui::Id::new("session_fs_badge"))
         .anchor(egui::Align2::LEFT_TOP, [8.0, 8.0])
         .order(egui::Order::Foreground)
         .show(ctx, |ui| {
             if s.view_only {
                 ui.label(
-                    egui::RichText::new("👁 view only")
+                    egui::RichText::new("👁 только просмотр")
                         .color(Color32::from_rgb(255, 170, 60))
                         .strong(),
                 );
             }
+            badge_rect = ui.min_rect();
         });
+    overlay.push(badge_rect);
+
+    let mut exit_rect = egui::Rect::NOTHING;
     egui::Area::new(egui::Id::new("session_fs_exit"))
         .anchor(egui::Align2::RIGHT_TOP, [-8.0, 8.0])
         .order(egui::Order::Foreground)
@@ -375,7 +409,83 @@ fn fullscreen_overlays(ctx: &Context, s: &mut SessionHandle) {
             {
                 set_chromeless(s, false);
             }
+            exit_rect = ui.min_rect();
         });
+    overlay.push(exit_rect);
+
+    // Floating control-keys strip (⌨ Клавиши from the quickbar menu).
+    if s.panel_keys {
+        let mut keys_rect = egui::Rect::NOTHING;
+        egui::Area::new(egui::Id::new("session_fs_keys"))
+            .anchor(egui::Align2::CENTER_BOTTOM, [0.0, -64.0])
+            .order(egui::Order::Foreground)
+            .show(ctx, |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    egui::ScrollArea::horizontal().show(ui, |ui| {
+                        keys_strip(ui, s);
+                    });
+                });
+                keys_rect = ui.min_rect();
+            });
+        overlay.push(keys_rect);
+    }
+
+    // Floating quickbar — the fullscreen session controls.
+    let mut bar_rect = egui::Rect::NOTHING;
+    egui::Area::new(egui::Id::new("session_fs_quickbar"))
+        .anchor(egui::Align2::CENTER_TOP, [0.0, 8.0])
+        .order(egui::Order::Foreground)
+        .show(ctx, |ui| {
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.style_mut().spacing.button_padding = egui::vec2(8.0, 4.0);
+                    // Soft keyboard (Android only — the hook is a no-op
+                    // elsewhere; desktop has a physical keyboard).
+                    #[cfg(target_os = "android")]
+                    if ui
+                        .button(if s.soft_keyboard_on { "⌨ ✓" } else { "⌨" })
+                        .on_hover_text("Экранная клавиатура")
+                        .clicked()
+                    {
+                        s.soft_keyboard_on = !s.soft_keyboard_on;
+                        crate::android_sysui::set_keyboard(s.soft_keyboard_on);
+                    }
+                    sticky_mod_button(ui, s, "Ctrl", mods::CTRL);
+                    sticky_mod_button(ui, s, "Alt", mods::ALT);
+                    sticky_mod_button(ui, s, "Shift", mods::SHIFT);
+                    ui.menu_button("⋯", |ui| {
+                        ui.set_min_width(220.0);
+                        if ui
+                            .button(if s.paused {
+                                "▶ Продолжить"
+                            } else {
+                                "⏸ Пауза"
+                            })
+                            .clicked()
+                        {
+                            s.paused = !s.paused;
+                            let _ = s.commands.send(Command::Pause(s.paused));
+                        }
+                        for (label, flag) in [
+                            ("⌨ Клавиши (Ctrl/F1/…)", &mut s.panel_keys),
+                            ("💬 Чат", &mut s.panel_chat),
+                            ("📁 Файлы", &mut s.panel_files),
+                            ("📊 Статистика", &mut s.panel_stats),
+                        ] {
+                            if ui.toggle_value(flag, label).clicked() {
+                                ui.close_menu();
+                            }
+                        }
+                        ui.separator();
+                        if ui.button("⏹ Отключиться").clicked() {
+                            s.disconnect_requested = true;
+                        }
+                    });
+                });
+            });
+            bar_rect = ui.min_rect();
+        });
+    overlay.push(bar_rect);
 }
 
 /// Toggle the chrome-less viewer mode. On Android this also hides the
@@ -402,7 +512,7 @@ fn set_chromeless(s: &mut SessionHandle, on: bool) {
 /// read as «видео не на весь экран» even when the mode was right.
 /// The input rect spans the FULL panel so taps outside the video
 /// still clamp into the remote screen edges.
-fn session_view(ui: &mut egui::Ui, s: &mut SessionHandle) {
+fn session_view(ui: &mut egui::Ui, s: &mut SessionHandle, overlay: &[egui::Rect]) {
     let available = ui.available_size();
     let Some(tex) = &s.texture else {
         // Still no frame: say what we ARE doing and give the two
@@ -508,7 +618,7 @@ fn session_view(ui: &mut egui::Ui, s: &mut SessionHandle) {
         }
     }
 
-    capture_input(ui, &response, rect, s);
+    capture_input(ui, &response, rect, s, overlay);
 }
 
 /// Print the latest remote frame (the desktop toolbar button and the
@@ -533,10 +643,28 @@ fn print_current_frame(s: &mut SessionHandle) {
 /// 3 = very constrained link).
 fn tier_badge(tier: u8) -> (&'static str, Color32) {
     match tier {
-        0 => ("⚡ best", Color32::from_rgb(120, 220, 120)),
-        1 => ("⚡ tier 1", Color32::from_rgb(235, 210, 90)),
-        2 => ("⚡ tier 2", Color32::from_rgb(240, 160, 70)),
-        _ => ("⚡ tier 3", Color32::from_rgb(235, 100, 90)),
+        0 => ("⚡ лучшее", Color32::from_rgb(120, 220, 120)),
+        1 => ("⚡ уровень 1", Color32::from_rgb(235, 210, 90)),
+        2 => ("⚡ уровень 2", Color32::from_rgb(240, 160, 70)),
+        _ => ("⚡ уровень 3", Color32::from_rgb(235, 100, 90)),
+    }
+}
+
+/// Buffer raw wheel pixel deltas and forward whole 8-px notches. The
+/// old per-event `-(dx as i32) / 8` truncated any sub-8-px swipe to a
+/// zero-delta no-op — slow trackpad / gentle phone scrolls looked dead.
+fn send_wheel(s: &mut SessionHandle, pos: (u32, u32), delta: egui::Vec2) {
+    s.wheel_acc += delta;
+    let dx = (s.wheel_acc.x / 8.0).trunc();
+    let dy = (s.wheel_acc.y / 8.0).trunc();
+    if dx != 0.0 || dy != 0.0 {
+        s.wheel_acc -= egui::vec2(dx * 8.0, dy * 8.0);
+        let _ = s.commands.send(Command::MouseWheel {
+            x: pos.0,
+            y: pos.1,
+            dx: dx as i32,
+            dy: dy as i32,
+        });
     }
 }
 
@@ -557,11 +685,21 @@ fn capture_input(
     response: &egui::Response,
     rect: egui::Rect,
     s: &mut SessionHandle,
+    overlay: &[egui::Rect],
 ) {
     if s.view_only {
         return;
     }
     let (sw, sh) = (s.screen.0 as f32, s.screen.1 as f32);
+
+    // While a popup (⋯ menu, screen selector) is open, egui owns every
+    // pointer/touch event — nothing goes to the remote desktop.
+    let popup_open = response.ctx.memory(|m| m.any_popup_open());
+    // Chrome surfaces (toolbar, sidebar, keys strip, floating overlays):
+    // raw touches bypass egui's widget hit-testing, so a tap on a
+    // floating button would otherwise ALSO click the remote desktop at
+    // that point.
+    let on_chrome = |p: egui::Pos2| overlay.iter().any(|r| r.contains(p));
 
     // Pointer → remote coordinates.
     let remote_pos = |p: egui::Pos2| -> Option<(u32, u32)> {
@@ -575,7 +713,7 @@ fn capture_input(
 
     // Hover/drag movement.
     let pointer = response.ctx.input(|i| i.pointer.hover_pos());
-    if let Some((x, y)) = pointer.and_then(remote_pos) {
+    if let Some((x, y)) = pointer.filter(|p| !on_chrome(*p)).and_then(remote_pos) {
         if s.last_mouse != Some((x, y)) {
             s.last_mouse = Some((x, y));
             let _ = s.commands.send(Command::MouseMove { x, y });
@@ -612,12 +750,21 @@ fn capture_input(
             // touch ends; keep suppressing pointer clicks past it.
             s.touch_cooldown_until = Some(now + std::time::Duration::from_millis(150));
         }
+        // A popup menu owns the whole screen while open.
+        if popup_open {
+            return;
+        }
         for ev in touch_events {
             let egui::Event::Touch { id, phase, pos, .. } = ev else {
                 continue;
             };
             match phase {
                 egui::TouchPhase::Start => {
+                    // A touch that begins on a UI button must not
+                    // classify into a remote tap/scroll gesture.
+                    if on_chrome(pos) {
+                        continue;
+                    }
                     if s.touch_pending.is_none() && s.touch_drag.is_none() {
                         // Defer the press: quick release = tap (left),
                         // held release = long-press (right).
@@ -654,14 +801,15 @@ fn capture_input(
                     }
                     if let Some((sid, spos)) = s.touch_scroll {
                         if id == sid {
-                            let (dx, dy) = (pos.x - spos.x, pos.y - spos.y);
                             if let Some((x, y)) = remote_pos(pos) {
-                                let _ = s.commands.send(Command::MouseWheel {
-                                    x,
-                                    y,
-                                    dx: -(dx as i32) / 8,
-                                    dy: -(dy as i32) / 8,
-                                });
+                                // Fractional deltas accumulate in
+                                // wheel_acc (see send_wheel) instead of
+                                // truncating to «wheel: 0» per move.
+                                send_wheel(
+                                    s,
+                                    (x, y),
+                                    egui::vec2(-(pos.x - spos.x), -(pos.y - spos.y)),
+                                );
                             }
                             s.touch_scroll = Some((sid, pos));
                         }
@@ -736,7 +884,10 @@ fn capture_input(
         for (pb, mb) in buttons {
             let pressed = response.ctx.input(|i| i.pointer.button_clicked(pb));
             let released = response.ctx.input(|i| i.pointer.button_released(pb));
-            if let Some((x, y)) = pointer.and_then(remote_pos) {
+            if let Some((x, y)) = pointer
+                .filter(|p| !popup_open && !on_chrome(*p))
+                .and_then(remote_pos)
+            {
                 if pressed {
                     let _ = s.commands.send(Command::MouseButton {
                         x,
@@ -757,27 +908,28 @@ fn capture_input(
         }
     }
 
-    // Wheel.
+    // Wheel: fractional deltas accumulate in `wheel_acc` and go out as
+    // whole 8-px notches — the old per-event `-(x as i32) / 8` turned
+    // every slow trackpad/phone swipe into a zero-delta no-op.
     let scroll = response.ctx.input(|i| i.raw_scroll_delta);
     if scroll != egui::Vec2::ZERO {
-        if let Some((x, y)) = pointer.and_then(remote_pos) {
-            let _ = s.commands.send(Command::MouseWheel {
-                x,
-                y,
-                dx: -scroll.x as i32 / 8,
-                dy: -scroll.y as i32 / 8,
-            });
+        if let Some((x, y)) = pointer
+            .filter(|p| !popup_open && !on_chrome(*p))
+            .and_then(remote_pos)
+        {
+            send_wheel(s, (x, y), egui::vec2(-scroll.x, -scroll.y));
         }
     }
 
     // Keyboard: desktop forwards while the view has focus; on Android
     // the soft keyboard is summoned via the ⌨ button and may hold the
     // focus itself — forward while it is open even if egui's focus
-    // landed elsewhere, otherwise typed text is silently dropped.
+    // landed elsewhere, otherwise typed text is silently dropped. While
+    // a popup menu is open the keys belong to the menu, not the host.
     #[allow(unused_mut)]
-    let mut keyboard_live = response.has_focus();
+    let mut keyboard_live = response.has_focus() && !popup_open;
     #[cfg(target_os = "android")]
-    if s.soft_keyboard_on {
+    if s.soft_keyboard_on && !popup_open {
         keyboard_live = true;
     }
     if !keyboard_live {
@@ -800,18 +952,15 @@ fn capture_input(
                 if key == egui::Key::Space && text_seen_space && modifiers.is_none() {
                     continue;
                 }
-                if pressed && !modifiers.is_none() {
-                    if let Some(opkey) = map_key(key) {
-                        let _ = s.commands.send(Command::KeyEvent {
-                            key: opkey,
-                            mods: map_mods(&modifiers),
-                            down: pressed,
-                        });
-                    }
-                } else if let Some(opkey) = map_key(key) {
+                if let Some(opkey) = map_key(key) {
+                    // Releases carry the SAME modifiers as the press:
+                    // the host releases its sticky modifiers only when
+                    // the release carries the bits — sending 0 here left
+                    // a physical-keyboard Ctrl held down on the host
+                    // forever (every later tap behaved as Ctrl+tap).
                     let _ = s.commands.send(Command::KeyEvent {
                         key: opkey,
-                        mods: 0,
+                        mods: map_mods(&modifiers),
                         down: pressed,
                     });
                 }
@@ -886,12 +1035,12 @@ fn map_key(key: egui::Key) -> Option<OpKey> {
 // ---------------------------------------------------------------------------
 
 fn stats_panel(ui: &mut egui::Ui, s: &mut SessionHandle) {
-    ui.heading("📊 Stats");
+    ui.heading("📊 Статистика");
     egui::Grid::new("stats_grid")
         .num_columns(2)
         .spacing([12.0, 3.0])
         .show(ui, |ui| {
-            ui.label("Remote");
+            ui.label("Хост");
             let name = if s.host_name.is_empty() {
                 "—".to_string()
             } else {
@@ -900,11 +1049,11 @@ fn stats_panel(ui: &mut egui::Ui, s: &mut SessionHandle) {
             ui.label(name);
             ui.end_row();
 
-            ui.label("Stream");
+            ui.label("Поток");
             ui.label(format!("{}×{} px", s.stream_res.0, s.stream_res.1));
             ui.end_row();
 
-            ui.label("Codec");
+            ui.label("Кодек");
             ui.label(
                 s.codec
                     .map(|c| format!("{c:?}"))
@@ -912,22 +1061,22 @@ fn stats_panel(ui: &mut egui::Ui, s: &mut SessionHandle) {
             );
             ui.end_row();
 
-            ui.label("Receive");
+            ui.label("Приём");
             ui.label(format!(
-                "{:.1} fps (host hint {} fps)",
+                "{:.1} fps (хост подсказывает {} fps)",
                 s.recv_fps, s.fps_hint
             ));
             ui.end_row();
 
-            ui.label("Bitrate");
+            ui.label("Битрейт");
             ui.label(fmt_bitrate(s.bitrate_bps));
             ui.end_row();
 
-            ui.label("RTT");
-            ui.label(format!("{} ms", s.rtt));
+            ui.label("Задержка");
+            ui.label(format!("{} мс", s.rtt));
             ui.end_row();
 
-            ui.label("Quality tier");
+            ui.label("Качество");
             if s.quality_adaptive {
                 match s.quality_tier {
                     Some(tier) => {
@@ -938,31 +1087,36 @@ fn stats_panel(ui: &mut egui::Ui, s: &mut SessionHandle) {
                                 .strong(),
                         )
                         .on_hover_text(
-                            "Driven by RTT/jitter reports; \
-                             tiers: <60 ms best, <120 ms t1, <250 ms t2, ≥250 ms t3",
+                            "Управляется отчётами RTT/джиттера; \
+                             уровни: <60 мс лучшее, <120 мс у1, <250 мс у2, ≥250 мс у3",
                         );
                     }
                     None => {
-                        ui.label("adaptive");
+                        ui.label("адаптивное");
                     }
                 }
             } else if s.quality_params.is_some() {
-                ui.label("manual").on_hover_text(
-                    "A manual quality setting disabled adaptive quality for this session.",
+                ui.label("вручную").on_hover_text(
+                    "Ручная настройка качества отключила адаптивное качество для этой сессии.",
                 );
             } else {
                 ui.label("—");
             }
             ui.end_row();
 
-            ui.label("State");
-            ui.label(if s.paused { "⏸ paused" } else { "streaming" });
+            ui.label("Состояние");
+            ui.label(if s.paused {
+                "⏸ пауза"
+            } else {
+                "идёт поток"
+            });
             ui.end_row();
 
-            ui.label("Recording");
+            ui.label("Запись");
             if s.recording {
                 ui.label(
-                    egui::RichText::new("● on (host)").color(egui::Color32::from_rgb(230, 80, 80)),
+                    egui::RichText::new("● идёт (хост)")
+                        .color(egui::Color32::from_rgb(230, 80, 80)),
                 );
             } else {
                 ui.label("—");
@@ -972,8 +1126,8 @@ fn stats_panel(ui: &mut egui::Ui, s: &mut SessionHandle) {
     ui.separator();
     ui.label(
         egui::RichText::new(
-            "F11 fullscreen · Ctrl+Shift+P pause · Ctrl+Shift+D disconnect\n\
-             Ctrl+Shift+C/F/T/S — chat / files / terminal / stats",
+            "F11 — во весь экран · Ctrl+Shift+P — пауза · Ctrl+Shift+D — отключиться\n\
+             Ctrl+Shift+C/F/T/S — чат / файлы / терминал / статистика",
         )
         .small()
         .weak(),
@@ -1090,7 +1244,7 @@ fn keys_strip(ui: &mut egui::Ui, s: &mut SessionHandle) {
 }
 
 fn chat_panel(ui: &mut egui::Ui, s: &mut SessionHandle) {
-    ui.heading("💬 Chat");
+    ui.heading("💬 Чат");
     egui::ScrollArea::vertical()
         .stick_to_bottom(true)
         .max_height(220.0)
@@ -1100,11 +1254,11 @@ fn chat_panel(ui: &mut egui::Ui, s: &mut SessionHandle) {
             }
         });
     ui.horizontal(|ui| {
-        let send = ui.button("Send");
+        let send = ui.button("Отправить");
         let resp = ui.add(
             egui::TextEdit::singleline(&mut s.chat_input)
-                .hint_text("message…")
-                .desired_width(ui.available_width() - 60.0),
+                .hint_text("сообщение…")
+                .desired_width(ui.available_width() - 110.0),
         );
         let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         if send.clicked() || enter {
@@ -1120,27 +1274,24 @@ fn chat_panel(ui: &mut egui::Ui, s: &mut SessionHandle) {
 }
 
 fn files_panel(ui: &mut egui::Ui, s: &mut SessionHandle) {
-    ui.heading("📁 Files");
+    ui.heading("📁 Файлы");
     if s.view_only {
         crate::hint(
             ui,
-            "View-only session: file transfer is disabled by the host.",
+            "Сессия только для просмотра: передача файлов запрещена хостом.",
         );
         return;
     }
-    crate::hint(
-        ui,
-        "Drag & drop files anywhere on the window to send them to the host.",
-    );
+    crate::hint(ui, "Перетащите файлы в окно, чтобы отправить их на хост.");
     ui.horizontal(|ui| {
-        if ui.button("⬆ Send files…").clicked() {
+        if ui.button("⬆ Отправить файлы…").clicked() {
             if let Some(paths) = crate::pick_files() {
                 for p in paths {
                     let _ = s.commands.send(Command::PushFile(p));
                 }
             }
         }
-        if ui.button("📤 Send clipboard → host").clicked() {
+        if ui.button("📤 Буфер обмена → хост").clicked() {
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             if let Ok(mut cb) = arboard::Clipboard::new() {
                 if let Ok(text) = cb.get_text() {
@@ -1161,16 +1312,13 @@ fn files_panel(ui: &mut egui::Ui, s: &mut SessionHandle) {
 }
 
 fn terminal_panel(ui: &mut egui::Ui, s: &mut SessionHandle) {
-    ui.heading("⌨ Remote terminal");
+    ui.heading(">_ Терминал хоста");
     if s.view_only {
-        crate::hint(
-            ui,
-            "View-only session: the terminal is disabled by the host.",
-        );
+        crate::hint(ui, "Сессия только для просмотра: терминал запрещён хостом.");
         return;
     }
     if !s.term_open {
-        if ui.button("Open shell").clicked() {
+        if ui.button("Открыть оболочку").clicked() {
             let _ = s.commands.send(Command::TermOpen {
                 rows: 30,
                 cols: 100,
@@ -1193,7 +1341,7 @@ fn terminal_panel(ui: &mut egui::Ui, s: &mut SessionHandle) {
     ui.horizontal(|ui| {
         let resp = ui.add(
             egui::TextEdit::singleline(&mut s.term_input)
-                .hint_text("command…")
+                .hint_text("команда…")
                 .desired_width(ui.available_width() - 50.0),
         );
         if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
@@ -1212,25 +1360,25 @@ fn terminal_panel(ui: &mut egui::Ui, s: &mut SessionHandle) {
             });
         }
     });
-    if ui.button("Close shell").clicked() {
+    if ui.button("Закрыть оболочку").clicked() {
         let _ = s.commands.send(Command::TermClose { id: 1 });
         s.term_open = false;
     }
 }
 
 fn tunnel_panel(ui: &mut egui::Ui, s: &mut SessionHandle) {
-    ui.heading("🔗 TCP tunnels");
+    ui.heading("🔗 TCP-туннели");
     if !s.tunnel_available {
         crate::hint(
             ui,
-            "The host does not forward tunnels (policy off or view-only session).",
+            "Хост не перенаправляет туннели (политика отключена или сессия только для просмотра).",
         );
         return;
     }
 
     // Active listeners with stop buttons.
     if s.tunnels.is_empty() {
-        ui.weak("no active tunnels");
+        ui.weak("нет активных туннелей");
     } else {
         egui::Grid::new("tunnel_list")
             .num_columns(4)
@@ -1239,7 +1387,7 @@ fn tunnel_panel(ui: &mut egui::Ui, s: &mut SessionHandle) {
                     ui.monospace(format!("127.0.0.1:{port}"));
                     ui.label("→");
                     ui.monospace(format!("{host}:{tport}"));
-                    if ui.button("stop").clicked() {
+                    if ui.button("стоп").clicked() {
                         let _ = s.commands.send(Command::TunnelStop { listen_port: port });
                         s.tunnels.retain(|(p, ..)| *p != port);
                     }
@@ -1249,25 +1397,25 @@ fn tunnel_panel(ui: &mut egui::Ui, s: &mut SessionHandle) {
     }
     ui.separator();
 
-    ui.label("Forward a local port to a host-side target:");
+    ui.label("Перенаправить локальный порт на цель на хосте:");
     egui::Grid::new("tunnel_form")
         .num_columns(2)
         .show(ui, |ui| {
-            ui.label("Local port");
+            ui.label("Локальный порт");
             ui.add(
                 egui::TextEdit::singleline(&mut s.tun_local_port)
                     .hint_text("8080 (0 = auto)")
                     .desired_width(120.0),
             );
             ui.end_row();
-            ui.label("Target (on host)");
+            ui.label("Цель (на хосте)");
             ui.add(
                 egui::TextEdit::singleline(&mut s.tun_target_host)
                     .hint_text("127.0.0.1")
                     .desired_width(120.0),
             );
             ui.end_row();
-            ui.label("Target port");
+            ui.label("Порт цели");
             ui.add(
                 egui::TextEdit::singleline(&mut s.tun_target_port)
                     .hint_text("3000")
@@ -1282,7 +1430,7 @@ fn tunnel_panel(ui: &mut egui::Ui, s: &mut SessionHandle) {
         if ui
             .add_enabled(
                 local.is_some() && target.is_some(),
-                egui::Button::new("Start"),
+                egui::Button::new("Запустить"),
             )
             .clicked()
         {
@@ -1293,14 +1441,14 @@ fn tunnel_panel(ui: &mut egui::Ui, s: &mut SessionHandle) {
             });
             s.tun_local_port.clear();
         }
-        if ui.button("Stop all").clicked() {
+        if ui.button("Остановить все").clicked() {
             for (port, ..) in s.tunnels.clone() {
                 let _ = s.commands.send(Command::TunnelStop { listen_port: port });
             }
             s.tunnels.clear();
         }
     });
-    ui.weak("Connect apps to 127.0.0.1:<local port>; the host relays them.");
+    ui.weak("Подключите приложения к 127.0.0.1:<локальный порт>; хост перенаправит их.");
 }
 
 #[cfg(test)]
@@ -1360,13 +1508,12 @@ mod tests {
 
         let ctx = egui::Context::default();
         let mut ever_painted = false;
-        for pass in 0..6 {
+        for _pass in 0..6 {
             let out = ctx.run(egui::RawInput::default(), |ctx| {
                 session_ui(ctx, &mut s, &mut cfg);
             });
             if !out.shapes.is_empty() {
                 ever_painted = true;
-                println!("DBG overlay shapes at pass {pass}: {}", out.shapes.len());
             }
         }
         assert!(

@@ -10,8 +10,8 @@
 > 🇷🇺 Russian documentation: [README.ru.md](README.ru.md)
 
 - **License:** AGPL-3.0
-- **Status:** v0.12.0 — audited, hardened, actively developed
-- **Platforms:** Linux (X11 / Wayland via PipeWire), Windows (DXGI/GDI), macOS (partial), Android/iOS (skeleton)
+- **Status:** v0.13.3 — stable IDs, audited, hardened, actively developed
+- **Platforms:** Windows (DXGI/GDI), Linux (X11 / Wayland via PipeWire), macOS (viewer), Android (viewer + phone-host)
 - **Repository home:** [github.com/opacusio](https://github.com/opacusio)
 
 ---

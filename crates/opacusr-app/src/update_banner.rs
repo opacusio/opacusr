@@ -97,13 +97,13 @@ pub fn paint(ctx: &egui::Context) {
             ui.spacing_mut().item_spacing.x = 8.0;
             ui.label(
                 egui::RichText::new(format!(
-                    "Update available: {} (you are running {})",
+                    "Доступна версия {} (у вас {})",
                     rel.tag,
                     env!("CARGO_PKG_VERSION")
                 ))
                 .strong(),
             );
-            ui.hyperlink_to("release notes", rel.url.clone());
+            ui.hyperlink_to("заметки релиза", rel.url.clone());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.small_button("x").clicked() {
                     DISMISSED.store(true, Ordering::Relaxed);
@@ -122,7 +122,7 @@ fn paint_update_button(ui: &mut egui::Ui, ctx: &egui::Context) {
     };
     match phase.clone() {
         Phase::Idle => {
-            if ui.button("Update now").clicked() {
+            if ui.button("Обновить сейчас").clicked() {
                 *phase = Phase::Running;
                 drop(phase);
                 std::thread::Builder::new()
@@ -142,15 +142,20 @@ fn paint_update_button(ui: &mut egui::Ui, ctx: &egui::Context) {
         }
         Phase::Running => {
             ui.spinner();
-            ui.label("downloading + verifying…");
+            ui.label("скачивание + проверка подписей…");
             ctx.request_repaint_after(std::time::Duration::from_millis(400));
         }
         Phase::Done(msg) => {
-            ui.label(egui::RichText::new(format!("✔ {msg} — restart to apply")).strong());
+            ui.label(
+                egui::RichText::new(format!("✔ {msg} — перезапустите, чтобы применить")).strong(),
+            );
         }
         Phase::Failed(e) => {
-            ui.colored_label(egui::Color32::LIGHT_RED, format!("update failed: {e}"));
-            if ui.small_button("retry").clicked() {
+            ui.colored_label(
+                egui::Color32::LIGHT_RED,
+                format!("обновление не удалось: {e}"),
+            );
+            if ui.small_button("повторить").clicked() {
                 if let Ok(mut p) = PHASE.lock() {
                     *p = Phase::Idle;
                 }

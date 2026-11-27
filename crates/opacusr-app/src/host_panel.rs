@@ -35,15 +35,17 @@ pub fn consent_window(ctx: &Context, app: &mut App) {
                         .weak()
                         .small(),
                     );
-                    // Phones cannot stream their screen (no capture
-                    // backend yet): accepting will spawn a session that
-                    // closes at once with the explanatory message to the
-                    // viewer. Say so BEFORE the user picks a button.
+                    // MediaProjection consent pops up AFTER «Полный
+                    // доступ» on the first PC connection (v0.13.0+ the
+                    // phone CAN host — view-only). Say so BEFORE the
+                    // user picks a button, so the extra dialog is not a
+                    // surprise.
                     #[cfg(target_os = "android")]
                     ui.label(
                         egui::RichText::new(
-                            "Этот телефон пока НЕ транслирует свой экран: после принятия \
-                             сессия сразу закроется с сообщением об этом для подключившегося.",
+                            "Экран телефона увидят только в режиме просмотра: после \
+                             принятия появится системный диалог трансляции — подтвердите \
+                             его, чтобы передать экран.",
                         )
                         .color(theme::ACCENT),
                     );

@@ -176,9 +176,10 @@ fn contact_row(ui: &mut Ui, app: &mut App, c: &opacusr_client::addressbook::Cont
         });
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if ui.button("▶").on_hover_text("Подключиться").clicked() {
-                if let Some(ep) = c.endpoint.clone() {
-                    app.server_url = ep;
-                }
+                // The contact's own endpoint (its tunnel URL) rides as a
+                // one-shot ladder hint instead of overwriting the global
+                // server_url setting (a hidden side effect it used to be).
+                app.contact_endpoint_hint = c.endpoint.clone();
                 app.peer_id_input = c.target.clone();
                 let label = c.label.clone();
                 app.connect_clicked(Some(label));

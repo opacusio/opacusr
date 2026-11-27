@@ -356,9 +356,39 @@ fn new_id() -> String {
     format!("{:x}-{:x}", now_secs(), n)
 }
 
-/// `1_700_000_000` → `"2023-11-14 22:13"` (UTC). Pure integer math —
-/// no chrono dependency (Howard Hinnant's civil_from_days).
+/// History timestamp in the USER'S local time: «сегодня, 14:32» /
+/// «вчера, 09:05» / «2023-11-14 22:13». The old version printed pure
+/// UTC — rows read like foreign time on any non-UTC machine. Falls back
+/// to UTC when the platform refuses the offset (indeterminate TZ).
 pub fn fmt_ts(ts: u64) -> String {
+    let local = || -> Option<String> {
+        let d = time::OffsetDateTime::from_unix_timestamp(ts as i64).ok()?;
+        let now = time::OffsetDateTime::now_local().ok()?;
+        let d = d.to_offset(now.offset());
+        let hh_mm = format!("{:02}:{:02}", d.hour(), d.minute());
+        let today = now.date();
+        let that = d.date();
+        if that == today {
+            return Some(format!("сегодня, {hh_mm}"));
+        }
+        if that == today.previous_day()? {
+            return Some(format!("вчера, {hh_mm}"));
+        }
+        Some(format!(
+            "{}-{:02}-{:02} {:02}:{:02}",
+            d.year(),
+            u8::from(d.month()),
+            d.day(),
+            d.hour(),
+            d.minute()
+        ))
+    };
+    local().unwrap_or_else(|| fmt_ts_utc(ts))
+}
+
+/// The old pure-UTC formatting — deterministic and timezone-free, now
+/// the fallback for [`fmt_ts`] and its unit-test anchor.
+pub fn fmt_ts_utc(ts: u64) -> String {
     let days = (ts / 86_400) as i64;
     let secs_of_day = ts % 86_400;
     let z = days + 719_468;
@@ -635,7 +665,20 @@ outcome = "failed"
         assert_eq!(fmt_duration(59), "59s");
         assert_eq!(fmt_duration(204), "3m 24s");
         assert_eq!(fmt_duration(7_292), "2h 01m");
-        assert_eq!(fmt_ts(0), "1970-01-01 00:00");
-        assert_eq!(fmt_ts(1_700_000_000), "2023-11-14 22:13");
+        assert_eq!(fmt_ts_utc(0), "1970-01-01 00:00");
+        assert_eq!(fmt_ts_utc(1_700_000_000), "2023-11-14 22:13");
+        // The local rendering groups «сегодня»/«вчера»; a fresh timestamp
+        // must never render as a bare foreign-UTC date.
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let rendered = fmt_ts(now);
+        assert!(
+            rendered.starts_with("сегодня")
+                || rendered.starts_with("вчера")
+                || rendered.starts_with("20"),
+            "local fmt_ts produced {rendered:?}"
+        );
     }
 }

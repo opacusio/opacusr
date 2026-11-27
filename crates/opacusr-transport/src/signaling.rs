@@ -20,6 +20,12 @@ type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 pub struct SignalingClient {
     ws: WsStream,
     url: String,
+    /// Instant of the last inbound WS frame of ANY kind (Binary, Pong,
+    /// Ping, Text). The zombie-socket watchdog compares this against a
+    /// limit: after a NAT mapping is silently replaced, `send()` keeps
+    /// succeeding into the OS buffer while the server has long pruned
+    /// the peer — only the absence of Pongs proves the path is dead.
+    last_frame: Option<std::time::Instant>,
 }
 
 impl SignalingClient {
@@ -55,6 +61,7 @@ impl SignalingClient {
         Ok(Self {
             ws,
             url: url.to_string(),
+            last_frame: None,
         })
     }
 
@@ -71,17 +78,40 @@ impl SignalingClient {
             .map_err(|e| TransportError::Signaling(format!("send failed: {e}")))
     }
 
+    /// Send a WebSocket-level ping. The server's tungstenite layer
+    /// auto-replies with a Pong, so inbound frames keep flowing even
+    /// when no protocol message is exchanged — [`Self::last_frame_secs_ago`]
+    /// turns that into liveness proof for half-open sockets.
+    pub async fn send_ping(&mut self) -> Result<()> {
+        self.ws
+            .send(WsMessage::Ping(b"opacusr".as_slice().into()))
+            .await
+            .map_err(|e| TransportError::Signaling(format!("ping failed: {e}")))
+    }
+
+    /// Seconds since the last inbound WS frame of any kind, or `None`
+    /// before the first frame arrived.
+    pub fn last_frame_secs_ago(&self) -> Option<u64> {
+        self.last_frame.map(|t| t.elapsed().as_secs())
+    }
+
     /// Receive the next signaling message (skips control frames).
     pub async fn recv(&mut self) -> Result<SignalMessage> {
         loop {
             match self.ws.next().await {
                 Some(Ok(WsMessage::Binary(bytes))) => {
+                    self.last_frame = Some(std::time::Instant::now());
                     return decode_signal(&bytes).map_err(TransportError::Proto);
                 }
                 Some(Ok(WsMessage::Text(t))) => {
+                    self.last_frame = Some(std::time::Instant::now());
                     tracing::debug!(target: "opacusr", "ignoring text frame: {t}");
                 }
-                Some(Ok(WsMessage::Ping(_) | WsMessage::Pong(_) | WsMessage::Frame(_))) => {}
+                // Control frames count as inbound activity: a Pong is
+                // the proof the signaling path is alive.
+                Some(Ok(WsMessage::Ping(_) | WsMessage::Pong(_) | WsMessage::Frame(_))) => {
+                    self.last_frame = Some(std::time::Instant::now());
+                }
                 Some(Ok(WsMessage::Close(c))) => {
                     return Err(TransportError::Signaling(format!(
                         "server closed the connection: {c:?}"

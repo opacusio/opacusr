@@ -1,6 +1,6 @@
 # OpacusR Platform Support
 
-Status per platform for **v0.3.0**. The transport, protocol, crypto, server, file-transfer and terminal layers are fully cross-platform Rust; what differs is **screen capture**, **audio capture** and **input injection**.
+Status per platform for **v0.14.0**. The transport, protocol, crypto, server, file-transfer and terminal layers are fully cross-platform Rust; what differs is **screen capture**, **audio capture** and **input injection**.
 
 ## Summary
 
@@ -9,9 +9,9 @@ Status per platform for **v0.3.0**. The transport, protocol, crypto, server, fil
 | Linux (X11) | ✅ RandR multi-monitor | ✅ mic (cpal/ALSA) | ✅ enigo (X11) | ✅ openpty | ✅ eframe | **Working** |
 | Linux (Wayland) | ⚠️ PipeWire portal (`--features pipewire`, experimental) else X11/XWayland | ✅ mic | ⚠️ partial | ✅ | ✅ eframe | **Experimental** |
 | Windows 10/11 | ✅ DXGI Desktop Duplication (auto) with GDI fallback; both multi-monitor | ✅ system sound (WASAPI loopback) | ✅ enigo (SendInput) | ✅ ConPTY | ✅ eframe | **Working** |
-| macOS (aarch64/x86_64) | ⚠️ core-graphics partial | ✅ mic (cpal/CoreAudio) | ⚠️ enigo (needs permissions) | ✅ openpty | ✅ eframe | **Experimental** |
-| Android | ❌ | ❌ | ❌ | ❌ | 🚧 skeleton crate target | **Planned** |
-| iOS | ❌ | ❌ | ❌ | ❌ | 🚧 skeleton crate target | **Planned** |
+| macOS (aarch64) | ❌ no capture backend yet (viewer works) | ✅ mic (cpal/CoreAudio) | ⚠️ enigo (needs permissions) | ✅ openpty | ✅ eframe | **Viewer only** |
+| Android | ✅ MediaProjection (host, view-only) | ❌ | ❌ host-side (viewer inputs work) | ❌ | ✅ NativeActivity + egui | **Working (viewer + phone-host)** |
+| iOS | ❌ | ❌ | ❌ | ❌ | ❌ | **Not started** |
 | Headless / VM / CI | ✅ `test-source` synthetic pattern | n/a (feature compiles) | ✅ `NullInjector` | ✅ | n/a | **Working (testing)** |
 
 Every platform compiles the full workspace; capture/input differences are isolated behind traits in `opacusr-capture` and `opacusr-input`, so a missing backend degrades to the deterministic `test-source` / `NullInjector` pair instead of failing the build.
@@ -35,15 +35,15 @@ Every platform compiles the full workspace; capture/input differences are isolat
 
 ## macOS
 
-- **Status: experimental.** The workspace builds (`x86_64` and `aarch64`), GUI runs, PTY works.
-- **Capture:** partial core-graphics path; full-screen capture permissions (`Screen Recording` TCC prompt) must be granted to the binary.
+- **Status: viewer works; hosting does NOT.** The workspace builds (aarch64), GUI runs, PTY works — but there is NO screen-capture backend yet, so a Mac cannot host a screen session (`platform_capture` returns `Unsupported`; the viewer gets an honest chat message + session end). A ScreenCaptureKit/CGDisplayStream backend is the biggest missing piece for "all platforms".
+- **Capture:** none yet (the old "core-graphics partial" note was wrong). Screen-recording TCC permissions apply to the viewer's own windows only.
 - **Audio:** `cpal` captures the default input (microphone). System-sound loopback needs macOS 14.6+ (CoreAudio) or a virtual device (BlackHole) selected via `audio_device` — roadmap.
 - **Input:** enigo works but requires `Accessibility` permission for the process.
 - Config: `~/Library/Application Support/opacusr/agent.toml`. CI builds on `macos-latest`.
 
 ## Android / iOS
 
-Skeleton targets exist so the core (proto/crypto/transport/client) can be compiled for mobile from day one (`opacusr-app` is kept GUI-agnostic where practical). Planned delivery: FFI/UniFFI bindings exposing `SessionClient`, then a thin UI per platform. Screen capture on Android requires the MediaProjection API; on iOS, ReplayKit broadcast — both are roadmap items.
+**Android ships**: viewer (chromeless fullscreen, touch layer, soft keyboard + control-keys strip, cursor overlay) AND phone-as-host via MediaProjection (view-only, consent dialog + FGS `CaptureService`; a Java shim compiled by CI). Phone-host input injection and audio are not implemented. iOS: nothing beyond proto/crypto checks — the client does not build for iOS yet (webrtc→nix).
 
 ## Headless / CI usage
 
