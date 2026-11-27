@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  IME metadata for the remote keyboard (KeyboardService.java). One
+  subtype, keyboard mode, US locale — the service renders NO UI
+  (onShowInputRequested=false); it exists so remote text/keys have an
+  InputConnection to ride. The user selects it once as the current
+  input method; while selected, local phone typing is inert (switch
+  keyboards from quick settings to type locally) — same tradeoff as
+  AnyDesk's remote keyboard.
+-->
+<input-method xmlns:android="http://schemas.android.com/apk/res/android"
+    android:isDefault="false">
+    <subtype
+        android:label="OpacusR"
+        android:imeSubtypeLocale="en_US"
+        android:imeSubtypeMode="keyboard"
+        android:isDefault="true" />
+</input-method>

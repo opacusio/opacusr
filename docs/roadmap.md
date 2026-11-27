@@ -56,7 +56,7 @@ Design in [serverless.md](serverless.md); goal: a working connection with **0 â‚
 
 ## M4 â€” Mobile & embed
 
-- **Android**: MediaProjection capture, touch-input mapping, FFI bindings for `SessionClient`, published APKs.
+- **Android**: MediaProjection capture, touch-input mapping, FFI bindings for `SessionClient`, published APKs; remote input (accessibility gestures + IME keyboard for real text/keys).
 - **iOS**: ReplayKit broadcast capture, input bridging where iOS allows, TestFlight builds.
 - **Remote keyboard/text input polish** for touch (soft keyboard over `TextInput`).
 

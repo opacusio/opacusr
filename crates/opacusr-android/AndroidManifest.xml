@@ -72,5 +72,24 @@
                 android:name="android.accessibilityservice"
                 android:resource="@xml/input_service_config" />
         </service>
+
+        <!-- Remote keyboard (phone-as-host v2): a SILENT
+             InputMethodService — the user selects it once as the input
+             method; remote text rides InputConnection.commitText (no
+             clipboard clobber) and keys ride sendKeyEvent. Only the
+             system may bind it (BIND_INPUT_METHOD). See
+             KeyboardService.java and method.xml. -->
+        <service
+            android:name="io.opacusr.app.KeyboardService"
+            android:exported="true"
+            android:label="OpacusR — клавиатура"
+            android:permission="android.permission.BIND_INPUT_METHOD">
+            <intent-filter>
+                <action android:name="android.view.InputMethod" />
+            </intent-filter>
+            <meta-data
+                android:name="android.view.im"
+                android:resource="@xml/method" />
+        </service>
     </application>
 </manifest>

@@ -641,27 +641,26 @@ fn set_soft_input_mode(j: &UiJni, mode: core::ffi::c_int) {
 // loader — FindClass cannot see APK classes from a native thread.
 // -------------------------------------------------------------------------
 
-/// Loads `io.opacusr.app.CaptureActivity` through the activity's
-/// class loader and keeps a GLOBAL ref (leaked, process lifetime).
-/// Returns the address, or None on failure (degrades to no projection).
-/// Load the input shim class and hand it to the accessibility input
-/// bridge (see opacusr_input::android_bridge). Called from android_main;
-/// defined ungated so the desktop build keeps the opacusr-input
-/// dependency type-checked (same story as the capture wiring above).
+/// Load the input shim classes and hand them to the input bridge (see
+/// opacusr_input::android_bridge): the accessibility shim (gestures +
+/// paste) and the silent keyboard shim (IME text/keys). Either may be
+/// missing (old APK without the class) — each degrades on its own.
+/// Called from android_main; defined ungated so the desktop build keeps
+/// the opacusr-input dependency type-checked (same story as the capture
+/// wiring above).
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
 fn wire_input_bridge(vm_raw: *mut core::ffi::c_void, activity_raw: *mut core::ffi::c_void) {
-    match android_load_class(vm_raw, activity_raw, c"io.opacusr.app.InputService") {
-        Some(cls_global) => {
-            opacusr_input::android_bridge::set_context(
-                vm_raw as usize,
-                activity_raw as usize,
-                cls_global,
-            );
-        }
-        None => {
-            tracing::warn!(target: "opacusr", "input bridge unavailable (no input shim)")
-        }
+    let input = android_load_class(vm_raw, activity_raw, c"io.opacusr.app.InputService");
+    let keyboard = android_load_class(vm_raw, activity_raw, c"io.opacusr.app.KeyboardService");
+    if input.is_none() && keyboard.is_none() {
+        tracing::warn!(target: "opacusr", "input bridge unavailable (no input shims)")
     }
+    opacusr_input::android_bridge::set_context(
+        vm_raw as usize,
+        activity_raw as usize,
+        input,
+        keyboard,
+    );
 }
 
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]

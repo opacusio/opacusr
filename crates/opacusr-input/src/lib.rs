@@ -58,7 +58,7 @@ pub use uinput::{is_wayland_session, UinputInjector};
 /// (InputService + static JNI bridge). Compiles everywhere; set_context
 /// is only called from android_main.
 pub mod android_bridge;
-pub use android_bridge::{input_service_ready, AndroidInjector};
+pub use android_bridge::{input_service_ready, keyboard_service_ready, AndroidInjector};
 
 pub mod clipboard;
 

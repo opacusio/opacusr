@@ -47,15 +47,16 @@ Every platform compiles the full workspace; capture/input differences are isolat
 
 **Android ships**: viewer (chromeless fullscreen, touch layer, soft keyboard + control-keys strip, cursor overlay) AND phone-as-host via MediaProjection (consent dialog + FGS `CaptureService`; a Java shim compiled by CI).
 
-**Phone-host remote input** (accessibility shim, `InputService.java` + `opacusr_input::android_bridge`): the user enables "OpacusR" once in **Settings → Accessibility**; the consent dialog tells them when it is off. Mapping of the desktop protocol onto touch reality:
+**Phone-host remote input** (Java shims in classes.dex, `InputService.java` + `KeyboardService.java`, driven from `opacusr_input::android_bridge`): two independent opt-ins, each degrades on its own —
 
-- left button down/move/up → a **drag** (one continued `GestureDescription` stroke per move segment, `StrokeDescription.continueStroke`; needs **Android 8+** — on older devices a plain tap fallback covers single clicks);
-- right button → **long press** (the touch equivalent of right click);
-- wheel → a **short swipe** at the last pointer position (protocol positive dy = wheel UP → finger swipes DOWN, mirroring uinput.rs); suppressed while a drag is running;
-- `Escape` → **Back** (`GLOBAL_ACTION_BACK`); every other key is reported unsupported;
-- `text()` → **clipboard + `ACTION_PASTE`** at the caret of the focused editable node (clobbers the clipboard — honest limitation; an IME service is the v2 fix).
+- **Gestures + paste**: the user enables "OpacusR" once in **Settings → Accessibility**; the consent dialog says when it is off. Mapping of the desktop protocol onto touch reality:
+  - left button down/move/up → a **drag** (one continued `GestureDescription` stroke per move segment, `StrokeDescription.continueStroke`; needs **Android 8+** — on older devices a plain tap fallback covers single clicks);
+  - right button → **long press** (the touch equivalent of right click);
+  - wheel → a **short swipe** at the last pointer position (protocol positive dy = wheel UP → finger swipes DOWN, mirroring uinput.rs); suppressed while a drag is running;
+  - `Escape` → **Back** (`GLOBAL_ACTION_BACK` — editors cannot consume Esc anyway).
+- **Keys + text (v2, IME)**: the user selects the silent «OpacusR» keyboard once as the current input method (it renders NO UI; local typing is inert while selected — switch keyboards from quick settings to type locally, the AnyDesk tradeoff). Text rides `InputConnection.commitText` — real Unicode (emoji, CJK) WITHOUT clobbering the clipboard; editing keys (Enter, Tab, Backspace/Delete, arrows, Home/End, PgUp/PgDn, Insert, Space, F1–F12) ride `InputConnection.sendKeyEvent` with SHIFT/CTRL/ALT/META state (Ctrl+C/V/X/A work in editors that handle them). Modifier chords on letters/digits become real key events; punctuation chords stay unsupported (typed punctuation arrives as `text()` anyway); CapsLock/NumLock/PrintScreen/ContextMenu are unsupported. When the keyboard is not selected (or no editor has focus), `text()` falls back to the v1 clipboard + `ACTION_PASTE` path (clobbers the clipboard) and keys report unsupported honestly.
 
-Hover moves without a held button are dropped (touch screens have no hover). The device path (real gesture dispatch on real hardware) is untested in CI — CI proves javac/aapt2/d8 compile the shim and the manifest links; the first live run should be watched. Audio capture and iOS are not implemented; iOS: nothing beyond proto/crypto checks — the client does not build for iOS yet (webrtc→nix).
+Hover moves without a held button are dropped (touch screens have no hover). The device paths (real gesture dispatch, real IME commits on hardware) are untested in CI — CI proves javac/aapt2/d8 compile the shims and the manifest links; the first live run should be watched. Audio capture and iOS are not implemented; iOS: nothing beyond proto/crypto checks — the client does not build for iOS yet (webrtc→nix).
 
 ## Headless / CI usage
 

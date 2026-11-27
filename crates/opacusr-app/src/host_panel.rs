@@ -43,22 +43,30 @@ pub fn consent_window(ctx: &Context, app: &mut App) {
                     // the accessibility shim — but only if the user has
                     // enabled it; otherwise "Полный доступ" degrades to
                     // view-only, so say that too (honest, AnyDesk-style).
+                    // v0.17: real text/keys additionally need the
+                    // «OpacusR» KEYBOARD selected as the input method —
+                    // spell out which of the two opt-ins is missing.
                     #[cfg(target_os = "android")]
                     {
                         let input_ready = opacusr_input::android_bridge::input_service_ready();
-                        ui.label(
-                            egui::RichText::new(if input_ready {
-                                "После принятия появится системный диалог трансляции — \
-                                 подтвердите его, чтобы передать экран. Удалённое \
-                                 управление включено (сервис специальных возможностей)."
-                            } else {
-                                "Экран телефона увидят только в режиме просмотра: после \
-                                 принятия появится системный диалог трансляции. Для удалённого \
-                                 управления включите «OpacusR» в настройках специальных \
-                                 возможностей телефона."
-                            })
-                            .color(theme::ACCENT),
-                        );
+                        let kb_ready = opacusr_input::android_bridge::keyboard_service_ready();
+                        let hint = if input_ready && kb_ready {
+                            "После принятия появится системный диалог трансляции — \
+                             подтвердите его, чтобы передать экран. Удалённое управление \
+                             включено полностью: жесты (спец. возможности) и ввод текста \
+                             (клавиатура OpacusR)."
+                        } else if input_ready {
+                            "После принятия появится системный диалог трансляции — \
+                             подтвердите его. Управление включено (жесты); для набора \
+                             текста выберите также клавиатуру «OpacusR» в настройках \
+                             ввода телефона."
+                        } else {
+                            "Экран телефона увидят только в режиме просмотра: после \
+                             принятия появится системный диалог трансляции. Для удалённого \
+                             управления включите «OpacusR» в настройках специальных \
+                             возможностей телефона."
+                        };
+                        ui.label(egui::RichText::new(hint).color(theme::ACCENT));
                     }
                     ui.add_space(10.0);
                     ui.horizontal(|ui| {
