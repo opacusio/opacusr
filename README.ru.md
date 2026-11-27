@@ -10,7 +10,7 @@
 > 🇬🇧 English documentation: [README.md](README.md)
 
 - **Лицензия:** AGPL-3.0
-- **Статус:** v0.14.0 — добавлен macOS-хост, стабильные ID устройств, закалено, активная разработка
+- **Статус:** v0.15.0 — добавлен ввод под Wayland, macOS-хост, стабильные ID устройств, закалено, активная разработка
 - **Платформы:** Linux (X11 / Wayland через PipeWire), Windows (DXGI/GDI), macOS (CoreGraphics), Android/iOS (каркас)
 - **Репозиторий:** [github.com/opacusio](https://github.com/opacusio)
 
