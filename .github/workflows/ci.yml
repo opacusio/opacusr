@@ -97,6 +97,10 @@ jobs:
         # lived in its own step). The retry therefore lives INSIDE this
         # step: a green retry clears the flake, a real regression fails
         # both attempts and stays red.
+        # shell: bash — Windows runners default to pwsh, which chokes on
+        # the `if ! cargo …; then` guard below (seen on run 45935657748).
+        # All three runners ship bash, so pin it explicitly.
+        shell: bash
         run: |
           if ! cargo test --workspace; then
             if [ "$RUNNER_OS" = "macOS" ]; then
