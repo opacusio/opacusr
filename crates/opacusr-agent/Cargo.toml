@@ -113,4 +113,5 @@ depends = "$auto, libx11-6, libxtst6, libxi6, libasound2"
 assets = [
     ["target/release/opacusr-agent", "usr/bin/opacusr-agent", "755"],
     ["../../assets/opacusr-agent.service", "usr/lib/systemd/user/opacusr-agent.service", "644"],
+    ["../../assets/opacusr-uinput.rules", "usr/lib/udev/rules.d/60-opacusr-uinput.rules", "644"],
 ]

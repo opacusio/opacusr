@@ -346,6 +346,9 @@ async fn run_session(
 
     // --- capabilities ------------------------------------------------------
     let (mut cur_w, mut cur_h) = capture.size().unwrap_or((1280, 720));
+    // Absolute-pointer backends (Wayland uinput) normalize coordinates
+    // against the real capture viewport; other backends ignore it.
+    injector.set_viewport(cur_w, cur_h);
     let screens = capture.screens();
     let codec = cfg.codec.resolve();
 
@@ -818,6 +821,7 @@ async fn run_session(
                                 cur_w = w;
                                 cur_h = h;
                                 viewer_screen = (w, h);
+                                injector.set_viewport(w, h);
                                 // The viewer rescales from frame dims, and the
                                 // next frame carries the new resolution; the
                                 // H.264 encoder re-initialises itself on size

@@ -1,10 +1,12 @@
 //! OpacusR input injection.
 //!
-//! Desktop backends use [`enigo`] (X11 / Windows / macOS). Mobile targets
-//! and tests use the stub / mock implementations. The host scales incoming
-//! coordinates from the *viewer's* view of the remote screen to its own
-//! real screen size before calling [`InputInjector`] — see
-//! `opacusr-agent::session::InputExecutor`.
+//! Desktop backends use [`enigo`] (X11 / Windows / macOS); native Wayland
+//! sessions use the kernel [`uinput`] virtual devices instead (enigo's
+//! XTest path needs an X server, which a pure Wayland session may not
+//! offer). Mobile targets and tests use the stub / mock implementations.
+//! The host scales incoming coordinates from the *viewer's* view of the
+//! remote screen to its own real screen size before calling
+//! [`InputInjector`] — see `opacusr-agent::session::InputExecutor`.
 
 use opacusr_proto::message::{mods, MouseButtonId, OpKey};
 use thiserror::Error;
@@ -22,6 +24,10 @@ pub enum InputError {
 
 /// Executes remote input events on the local machine.
 pub trait InputInjector: Send {
+    /// Report the host's real capture viewport (device px). Absolute-pointer
+    /// backends (Wayland uinput) normalize coordinates against it; the rest
+    /// inject in the given space directly and ignore it.
+    fn set_viewport(&mut self, _w: u32, _h: u32) {}
     fn mouse_move(&mut self, x: u32, y: u32) -> Result<(), InputError>;
     fn mouse_button(
         &mut self,
@@ -41,6 +47,12 @@ pub trait InputInjector: Send {
 mod desktop;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub use desktop::DesktopInjector;
+
+/// Linux-native Wayland input injection (virtual evdev devices).
+#[cfg(target_os = "linux")]
+mod uinput;
+#[cfg(target_os = "linux")]
+pub use uinput::{is_wayland_session, UinputInjector};
 
 pub mod clipboard;
 
@@ -96,6 +108,9 @@ impl RecordingInjector {
 }
 
 impl InputInjector for RecordingInjector {
+    fn set_viewport(&mut self, w: u32, h: u32) {
+        self.events.push(format!("viewport {w} {h}"));
+    }
     fn mouse_move(&mut self, x: u32, y: u32) -> Result<(), InputError> {
         self.events.push(format!("move {x} {y}"));
         Ok(())
@@ -132,6 +147,20 @@ impl InputInjector for RecordingInjector {
 pub fn platform_injector() -> Box<dyn InputInjector> {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     {
+        // Native Wayland session: uinput first (enigo needs an X server).
+        // Failure falls through to enigo/XWayland, then the null injector.
+        #[cfg(target_os = "linux")]
+        if uinput::is_wayland_session() {
+            match uinput::UinputInjector::new() {
+                Ok(i) => {
+                    tracing::info!(target: "opacusr", "native Wayland session: remote input via uinput virtual devices");
+                    return Box::new(i);
+                }
+                Err(e) => {
+                    tracing::warn!(target: "opacusr", "uinput unavailable: {e}; falling back to X11/XWayland input")
+                }
+            }
+        }
         match desktop::DesktopInjector::new() {
             Ok(i) => Box::new(i),
             Err(e) => {

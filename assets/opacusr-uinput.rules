@@ -1,0 +1,9 @@
+# OpacusR — native-Wayland remote input.
+#
+# The agent creates two virtual evdev devices (pointer + keyboard) via
+# /dev/uinput so remote input works on Wayland sessions without an X
+# server (libinput picks them up like real hardware). Opening uinput
+# requires write access; this rule grants it to the `input` group — the
+# same group the physical input lock (EVIOCGRAB) already needs.
+# Put the desktop user into the group:  sudo usermod -aG input $USER
+KERNEL=="uinput", MODE="0660", GROUP="input", OPTIONS+="static_node=uinput"
