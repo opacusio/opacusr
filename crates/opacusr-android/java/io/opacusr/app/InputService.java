@@ -42,10 +42,10 @@ public final class InputService extends AccessibilityService {
 
     /** A dispatched stroke + its continuity + its current end point. */
     static final class Stroke {
-        final AccessibilityService.GestureDescription.StrokeDescription desc;
+        final GestureDescription.StrokeDescription desc;
         final boolean continuing;
         final float x, y;
-        Stroke(AccessibilityService.GestureDescription.StrokeDescription d, boolean c, float x, float y) {
+        Stroke(GestureDescription.StrokeDescription d, boolean c, float x, float y) {
             desc = d;
             continuing = c;
             this.x = x;
@@ -106,7 +106,7 @@ public final class InputService extends AccessibilityService {
         Path p = new Path();
         p.moveTo(x, y);
         Stroke st = new Stroke(
-                new AccessibilityService.GestureDescription.StrokeDescription(p, 0, SEG_MS, true),
+                new GestureDescription.StrokeDescription(p, 0, SEG_MS, true),
                 true, x, y);
         return s.dispatch(st);
     }
@@ -148,7 +148,7 @@ public final class InputService extends AccessibilityService {
         Path p = new Path();
         p.moveTo(x, y);
         return s.dispatch(new Stroke(
-                new AccessibilityService.GestureDescription.StrokeDescription(p, 0, LONG_PRESS_MS),
+                new GestureDescription.StrokeDescription(p, 0, LONG_PRESS_MS),
                 false, x, y));
     }
 
@@ -160,7 +160,7 @@ public final class InputService extends AccessibilityService {
         Path p = new Path();
         p.moveTo(x, y);
         return s.dispatch(new Stroke(
-                new AccessibilityService.GestureDescription.StrokeDescription(p, 0, TAP_MS),
+                new GestureDescription.StrokeDescription(p, 0, TAP_MS),
                 false, x, y));
     }
 
@@ -192,7 +192,7 @@ public final class InputService extends AccessibilityService {
         p.moveTo(sx, sy);
         p.lineTo(ex, ey);
         return s.dispatch(new Stroke(
-                new AccessibilityService.GestureDescription.StrokeDescription(p, 0, SCROLL_MS),
+                new GestureDescription.StrokeDescription(p, 0, SCROLL_MS),
                 false, ex, ey));
     }
 
