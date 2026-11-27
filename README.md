@@ -10,7 +10,7 @@
 > 🇷🇺 Russian documentation: [README.ru.md](README.ru.md)
 
 - **License:** AGPL-3.0
-- **Status:** v0.15.0 — Wayland input added, macOS host, stable IDs, audited, hardened, actively developed
+- **Status:** v0.16.0 — Android remote input added, Wayland input, macOS host, stable IDs, audited, hardened, actively developed
 - **Platforms:** Windows (DXGI/GDI), Linux (X11 / Wayland via PipeWire), macOS (CoreGraphics), Android (viewer + phone-host)
 - **Repository home:** [github.com/opacusio](https://github.com/opacusio)
 
