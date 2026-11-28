@@ -347,9 +347,14 @@ async fn run_session(
     // --- capabilities ------------------------------------------------------
     let (mut cur_w, mut cur_h) = capture.size().unwrap_or((1280, 720));
     // Absolute-pointer backends (Wayland uinput) normalize coordinates
-    // against the real capture viewport; other backends ignore it.
+    // against the real capture viewport; other backends ignore it. The
+    // output mapping (native Wayland multi-monitor) rides along — also a
+    // no-op for every other backend.
     injector.set_viewport(cur_w, cur_h);
+    injector.set_output_mapping(capture.output_mapping());
     let screens = capture.screens();
+    // The first entry is the default streamed screen for every backend.
+    let active_screen = screens.first().map(|s| s.id).unwrap_or(0);
     let codec = cfg.codec.resolve();
 
     // Opt-in recording: MP4 muxing needs Annex-B parameter sets, so it is
@@ -390,7 +395,7 @@ async fn run_session(
                     name: s.name.clone(),
                     w: s.w,
                     h: s.h,
-                    active: s.id == 0,
+                    active: s.id == active_screen,
                 })
                 .collect(),
             audio_available: cfg.audio && cfg!(feature = "audio"),
@@ -822,6 +827,10 @@ async fn run_session(
                                 cur_h = h;
                                 viewer_screen = (w, h);
                                 injector.set_viewport(w, h);
+                                // Multi-monitor Wayland: re-point the uinput
+                                // injector at the newly selected output (no-op
+                                // on every other backend).
+                                injector.set_output_mapping(capture.output_mapping());
                                 // The viewer rescales from frame dims, and the
                                 // next frame carries the new resolution; the
                                 // H.264 encoder re-initialises itself on size

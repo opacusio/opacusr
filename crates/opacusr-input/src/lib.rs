@@ -8,7 +8,7 @@
 //! remote screen to its own real screen size before calling
 //! [`InputInjector`] — see `opacusr-agent::session::InputExecutor`.
 
-use opacusr_proto::message::{mods, MouseButtonId, OpKey};
+use opacusr_proto::message::{mods, MouseButtonId, OpKey, OutputMapping};
 use thiserror::Error;
 
 /// Injection failures.
@@ -28,6 +28,13 @@ pub trait InputInjector: Send {
     /// backends (Wayland uinput) normalize coordinates against it; the rest
     /// inject in the given space directly and ignore it.
     fn set_viewport(&mut self, _w: u32, _h: u32) {}
+    /// Report where the streamed output sits inside the compositor's
+    /// desktop (native Wayland multi-monitor: the compositor maps an
+    /// absolute pointer over the WHOLE desktop bounding box, so frame
+    /// coordinates need the per-output translation). `None` = no layout
+    /// info — backends keep the single-monitor mapping; every non-uinput
+    /// backend ignores it (default no-op).
+    fn set_output_mapping(&mut self, _mapping: Option<OutputMapping>) {}
     fn mouse_move(&mut self, x: u32, y: u32) -> Result<(), InputError>;
     fn mouse_button(
         &mut self,
@@ -116,6 +123,9 @@ impl RecordingInjector {
 impl InputInjector for RecordingInjector {
     fn set_viewport(&mut self, w: u32, h: u32) {
         self.events.push(format!("viewport {w} {h}"));
+    }
+    fn set_output_mapping(&mut self, m: Option<OutputMapping>) {
+        self.events.push(format!("mapping {m:?}"));
     }
     fn mouse_move(&mut self, x: u32, y: u32) -> Result<(), InputError> {
         self.events.push(format!("move {x} {y}"));

@@ -184,6 +184,29 @@ pub struct ScreenInfo {
     pub active: bool,
 }
 
+/// Where the streamed output sits inside the compositor's desktop —
+/// host-internal contract, NOT a wire type. The capture backend fills it
+/// from the Wayland output layout; the host session hands it to the
+/// input injector, whose absolute-pointer device is mapped over the
+/// whole desktop by the compositor and therefore needs this translation
+/// to land remote clicks on the streamed monitor. Everything else (other
+/// backends, other injectors, single-monitor hosts) ignores it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OutputMapping {
+    /// Logical top-left of the streamed output in desktop space.
+    pub out_x: i32,
+    pub out_y: i32,
+    /// Logical size of the streamed output (compositor space).
+    pub logical_w: u32,
+    pub logical_h: u32,
+    /// Logical bounding box of ALL outputs: the [0, 1] space of an
+    /// absolute pointer maps over exactly this rect.
+    pub bbox_x: i32,
+    pub bbox_y: i32,
+    pub bbox_w: u32,
+    pub bbox_h: u32,
+}
+
 /// Host → viewer: session refused.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionReject {

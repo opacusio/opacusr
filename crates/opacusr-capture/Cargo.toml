@@ -10,6 +10,9 @@ homepage.workspace = true
 [dependencies]
 thiserror = { workspace = true }
 tracing = { workspace = true }
+# ScreenDesc / OutputMapping (the capture↔input coordinate-space
+# contract) live in the proto crate alongside ScreenInfo.
+opacusr-proto = { workspace = true }
 x11rb = { workspace = true, optional = true }
 # android_projection (MediaProjection host backend) — raw vtable JNI,
 # compiled on ALL targets so the desktop build type-checks the wiring
@@ -24,6 +27,12 @@ ashpd = { version = "0.9", optional = true, default-features = false, features =
 ] }
 pipewire = { version = "0.8", optional = true }
 async-std = { version = "1", optional = true }
+# Output-layout probe (wayland_layout.rs): enumerates the compositor's
+# monitors once per portal negotiation so the consent-dialog streams get
+# real names and uinput gets the per-output input mapping. Pure-Rust wire
+# implementation — no wayland-sys, nothing to link.
+wayland-client = { version = "0.31", optional = true }
+wayland-protocols = { version = "0.32", optional = true, features = ["unstable", "client"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [
@@ -51,4 +60,10 @@ cc = "1"
 [features]
 default = ["x11"]
 x11 = ["dep:x11rb"]
-pipewire = ["dep:ashpd", "dep:pipewire", "dep:async-std"]
+pipewire = [
+    "dep:ashpd",
+    "dep:pipewire",
+    "dep:async-std",
+    "dep:wayland-client",
+    "dep:wayland-protocols",
+]

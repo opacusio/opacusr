@@ -34,6 +34,12 @@ pub mod win32;
 #[cfg(all(target_os = "linux", feature = "pipewire"))]
 pub mod wayland;
 
+/// Wayland output-layout probe (wl_output + xdg-output) behind the same
+/// `pipewire` feature: names the portal streams and feeds the per-output
+/// input mapping.
+#[cfg(all(target_os = "linux", feature = "pipewire"))]
+pub mod wayland_layout;
+
 #[cfg(any(
     target_os = "android",
     target_os = "ios",

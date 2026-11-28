@@ -13,12 +13,13 @@
 //! the Wayland scale factor cancel out — [`InputInjector::set_viewport`]
 //! (the real capture size in device px) is all we need to convert.
 //!
-//! v1 limitations (documented in platforms.md):
-//! * single-monitor correctness: compositors map absolute pointers across
-//!   the whole desktop, so on multi-monitor setups the cursor may land on
-//!   the wrong output (needs per-output mapping — roadmap);
-//! * `text()` handles printable ASCII (+ `\n`, `\t`); Unicode text needs
-//!   the Wayland input-method protocol — roadmap.
+//! Multi-monitor: the compositor maps [0..1] over the bounding box of
+//! ALL outputs, not the streamed one — so the session hands the streamed
+//! output's logical geometry ([`InputInjector::set_output_mapping`],
+//! probed via wl_output + xdg-output by the capture backend) and every
+//! pointer position is translated frame px → output-logical px → desktop
+//! bbox before hitting the ABS range. Without a mapping (probe failed,
+//! single monitor) the frame itself is the bbox — the v1 behavior.
 //!
 //! Permissions: opening `/dev/uinput` needs write access (the packaged
 //! udev rule grants it to the `input` group, same group the physical
@@ -33,7 +34,7 @@ use std::mem::size_of;
 use std::os::unix::io::RawFd;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use opacusr_proto::message::{mods, MouseButtonId, OpKey};
+use opacusr_proto::message::{mods, MouseButtonId, OpKey, OutputMapping};
 
 use crate::{InputError, InputInjector};
 
@@ -405,6 +406,9 @@ pub struct UinputInjector {
     pointer: UinputDevice,
     keyboard: UinputDevice,
     viewport: (u32, u32),
+    /// Streamed output's position inside the desktop (multi-monitor);
+    /// `None` = frame-is-the-bbox single-monitor mapping.
+    mapping: Option<OutputMapping>,
 }
 
 impl UinputInjector {
@@ -420,6 +424,7 @@ impl UinputInjector {
             pointer,
             keyboard,
             viewport: (1920, 1080),
+            mapping: None,
         })
     }
 
@@ -429,6 +434,17 @@ impl UinputInjector {
             return 0;
         }
         (((v.min(span - 1)) as u64 * ABS_RANGE_MAX as u64) / (span - 1) as u64) as i32
+    }
+
+    /// ABS values for a frame-relative pointer position: through the
+    /// per-output mapping when we have one, else the v1 frame-is-the-bbox
+    /// normalization.
+    fn abs_at(&self, x: u32, y: u32) -> (i32, i32) {
+        let (w, h) = self.viewport;
+        match self.mapping {
+            Some(m) => frame_to_desktop_abs(&m, x, y, w, h, ABS_RANGE_MAX),
+            None => (Self::to_abs(x, w), Self::to_abs(y, h)),
+        }
     }
 
     fn btn_code(b: MouseButtonId) -> u16 {
@@ -661,12 +677,14 @@ impl InputInjector for UinputInjector {
         }
     }
 
+    fn set_output_mapping(&mut self, mapping: Option<OutputMapping>) {
+        self.mapping = mapping;
+    }
+
     fn mouse_move(&mut self, x: u32, y: u32) -> Result<(), InputError> {
-        let (w, h) = self.viewport;
-        self.pointer.emit(&[
-            (EV_ABS, ABS_X, Self::to_abs(x, w)),
-            (EV_ABS, ABS_Y, Self::to_abs(y, h)),
-        ])
+        let (ax, ay) = self.abs_at(x, y);
+        self.pointer
+            .emit(&[(EV_ABS, ABS_X, ax), (EV_ABS, ABS_Y, ay)])
     }
 
     fn mouse_button(
@@ -676,10 +694,10 @@ impl InputInjector for UinputInjector {
         button: MouseButtonId,
         down: bool,
     ) -> Result<(), InputError> {
-        let (w, h) = self.viewport;
+        let (ax, ay) = self.abs_at(x, y);
         self.pointer.emit(&[
-            (EV_ABS, ABS_X, Self::to_abs(x, w)),
-            (EV_ABS, ABS_Y, Self::to_abs(y, h)),
+            (EV_ABS, ABS_X, ax),
+            (EV_ABS, ABS_Y, ay),
             (EV_KEY, Self::btn_code(button), if down { 1 } else { 0 }),
         ])
     }
@@ -744,6 +762,52 @@ impl InputInjector for UinputInjector {
         }
         Ok(())
     }
+}
+
+/// Translate a frame-relative device pixel of the streamed output into
+/// the desktop ABS range. Path: frame px → output-logical px (the frame
+/// covers exactly the output, so the scale is `logical / frame`) →
+/// offset inside the desktop bounding box → normalized [0, 1] → ABS.
+/// The compositor maps ABS a/32767 linearly over the bbox, so the
+/// normalized position is the CONTINUOUS fraction `(logical − bbox) /
+/// bbox` — no `span − 1` pixel-index convention here (that one is kept
+/// only in the legacy `to_abs` fallback path, ≤ 1 device px off).
+/// Out-of-frame positions clamp, mirroring `to_abs`.
+fn frame_to_desktop_abs(
+    m: &OutputMapping,
+    x: u32,
+    y: u32,
+    vw: u32,
+    vh: u32,
+    abs_max: u32,
+) -> (i32, i32) {
+    // frame px → logical px on the streamed output
+    let fx = if vw > 0 {
+        (x.min(vw - 1)) as f64 * m.logical_w as f64 / vw as f64
+    } else {
+        0.0
+    };
+    let fy = if vh > 0 {
+        (y.min(vh - 1)) as f64 * m.logical_h as f64 / vh as f64
+    } else {
+        0.0
+    };
+    let lx = m.out_x as f64 + fx;
+    let ly = m.out_y as f64 + fy;
+    // logical position inside the desktop bbox → continuous [0, 1] → ABS
+    let norm = |v: f64, origin: i32, span: u32| -> f64 {
+        if span > 0 {
+            ((v - origin as f64) / span as f64).clamp(0.0, 1.0)
+        } else {
+            0.0
+        }
+    };
+    let nx = norm(lx, m.bbox_x, m.bbox_w);
+    let ny = norm(ly, m.bbox_y, m.bbox_h);
+    (
+        (nx * abs_max as f64).floor() as i32,
+        (ny * abs_max as f64).floor() as i32,
+    )
 }
 
 #[cfg(test)]
@@ -914,6 +978,118 @@ mod tests {
         assert_eq!(UinputInjector::to_abs(5, 0), 0);
         // Values beyond the viewport clamp into range.
         assert_eq!(UinputInjector::to_abs(9999, 2560), ABS_RANGE_MAX as i32);
+    }
+
+    fn mapping(out_x: i32, out_y: i32, lw: u32, lh: u32, bw: u32, bh: u32) -> OutputMapping {
+        OutputMapping {
+            out_x,
+            out_y,
+            logical_w: lw,
+            logical_h: lh,
+            bbox_x: 0,
+            bbox_y: 0,
+            bbox_w: bw,
+            bbox_h: bh,
+        }
+    }
+
+    #[test]
+    fn desktop_mapping_matches_single_monitor_behavior() {
+        // One monitor: bbox == output, frame == device px at scale 1.
+        // The continuous desktop mapping and the legacy span-1 fallback
+        // differ by ≤ 1 device px (= ABS_RANGE_MAX/span counts) — assert
+        // that, not bit equality; both land within the same pixel.
+        let m = mapping(0, 0, 2560, 1440, 2560, 1440);
+        // Legacy drift ≤ 1 device px = ABS_MAX/span counts per axis.
+        let tol_x = (ABS_RANGE_MAX as i64 / 2560) as i64 + 1;
+        let tol_y = (ABS_RANGE_MAX as i64 / 1440) as i64 + 1;
+        for (x, y) in [(0u32, 0u32), (1280, 720), (2559, 1439), (640, 100)] {
+            let (ax, ay) = frame_to_desktop_abs(&m, x, y, 2560, 1440, ABS_RANGE_MAX);
+            let (lx, ly) = (
+                UinputInjector::to_abs(x, 2560) as i64,
+                UinputInjector::to_abs(y, 1440) as i64,
+            );
+            assert!((ax as i64 - lx).abs() <= tol_x, "x for {x}: {ax} vs {lx}");
+            assert!((ay as i64 - ly).abs() <= tol_y, "y for {y}: {ay} vs {ly}");
+        }
+    }
+
+    #[test]
+    fn desktop_mapping_lands_on_the_right_monitor() {
+        // Two side-by-side 1920x1080 monitors; streaming the RIGHT one.
+        // Frame center must hit the desktop's ¾ mark, not the middle.
+        let m = mapping(1920, 0, 1920, 1080, 3840, 1080);
+        let (ax, ay) = frame_to_desktop_abs(&m, 960, 540, 1920, 1080, ABS_RANGE_MAX);
+        let three_quarter = (ABS_RANGE_MAX as f64 * 0.75).round() as i32;
+        // The continuous mapping lands on the geometric fraction exactly;
+        // ±2 counts absorbs the floor.
+        assert!(
+            (ax - three_quarter).abs() <= 2,
+            "x {ax} vs ¾ {three_quarter}"
+        );
+        assert!((ay - ABS_RANGE_MAX as i32 / 2).abs() <= 2, "y {ay}");
+
+        // Left edge of the streamed right monitor = desktop middle.
+        let (ax, _) = frame_to_desktop_abs(&m, 0, 0, 1920, 1080, ABS_RANGE_MAX);
+        assert!((ax - ABS_RANGE_MAX as i32 / 2).abs() <= 8, "left edge {ax}");
+        // Right edge = within one device px of ABS max (the continuous
+        // fraction maps the last pixel INDEX slightly inside the edge —
+        // the position itself is continuous, this is sub-pixel).
+        let (ax, _) = frame_to_desktop_abs(&m, 1919, 1079, 1920, 1080, ABS_RANGE_MAX);
+        assert!((ABS_RANGE_MAX as i32 - ax) <= 10, "right edge {ax}");
+    }
+
+    #[test]
+    fn desktop_mapping_scales_retina_frames() {
+        // The right monitor streams at 2x device px (frame 3840x2160 for
+        // a 1920x1080 logical output): frame center still lands at ¾.
+        let m = mapping(1920, 0, 1920, 1080, 3840, 1080);
+        let (ax, ay) = frame_to_desktop_abs(&m, 1920, 1080, 3840, 2160, ABS_RANGE_MAX);
+        let three_quarter = (ABS_RANGE_MAX as f64 * 0.75).round() as i32;
+        assert!((ax - three_quarter).abs() <= 2, "x {ax}");
+        assert!((ay - ABS_RANGE_MAX as i32 / 2).abs() <= 2, "y {ay}");
+    }
+
+    #[test]
+    fn desktop_mapping_clamps_stray_coordinates() {
+        // Coordinates beyond the streamed frame (viewer rescale races)
+        // clamp into the frame, so the ABS value stays inside the bbox —
+        // within one device px of the edge, never outside.
+        let m = mapping(1920, 0, 1920, 1080, 3840, 1080);
+        let (ax, ay) = frame_to_desktop_abs(&m, 9999, 9999, 1920, 1080, ABS_RANGE_MAX);
+        // One device px per axis = ABS_MAX/span counts.
+        assert!(
+            (ABS_RANGE_MAX as i64 - ax as i64) <= ABS_RANGE_MAX as i64 / 3840 + 1,
+            "x {ax}"
+        );
+        assert!(
+            (ABS_RANGE_MAX as i64 - ay as i64) <= ABS_RANGE_MAX as i64 / 1080 + 1,
+            "y {ay}"
+        );
+    }
+
+    #[test]
+    fn desktop_mapping_handles_negative_and_gapped_layouts() {
+        // Left monitor at (-1920, -600), gap, right monitor at (0, 480);
+        // streaming the LEFT one: its center is the desktop's ¼ mark on
+        // both axes.
+        let m = OutputMapping {
+            out_x: -1920,
+            out_y: -600,
+            logical_w: 1920,
+            logical_h: 1080,
+            bbox_x: -1920,
+            bbox_y: -600,
+            bbox_w: 3840,
+            bbox_h: 2160,
+        };
+        let (ax, ay) = frame_to_desktop_abs(&m, 960, 540, 1920, 1080, ABS_RANGE_MAX);
+        let quarter = (ABS_RANGE_MAX as f64 * 0.25).round() as i32;
+        assert!((ax - quarter).abs() <= 2, "x {ax} vs ¼ {quarter}");
+        assert!((ay - quarter).abs() <= 2, "y {ay} vs ¼ {quarter}");
+        // Top-left of the layout maps to ABS 0 on both axes.
+        let (ax, ay) = frame_to_desktop_abs(&m, 0, 0, 1920, 1080, ABS_RANGE_MAX);
+        assert_eq!((ax, ay), (0, 0));
     }
 
     #[test]
