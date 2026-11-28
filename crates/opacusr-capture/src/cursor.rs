@@ -6,8 +6,8 @@
 //! enough to call every streamed frame, while [`CursorSource::shape`] runs
 //! only when the cursor's appearance changes (the position carries a
 //! `serial` that changes with the shape). Backends without cursor support
-//! (e.g. macOS) return `None` from `poll` and the host simply never sends
-//! cursor messages.
+//! return `None` from `poll` and the host simply never sends cursor
+//! messages.
 //!
 //! Wayland: the portal screencast stream carries `spa_meta_cursor`
 //! metadata (see [`crate::wayland`]); [`CursorPoller`] picks that backend
@@ -41,6 +41,25 @@ pub struct CursorBitmap {
     pub rgba: Vec<u8>,
 }
 
+/// Convert PREMULTIPLIED-alpha RGBA (what AppKit/CoreGraphics bitmap
+/// contexts composite to — the macOS cursor shim ships this) into the
+/// straight alpha the wire speaks ([`CursorBitmap::rgba`]). No-op on
+/// fully opaque and fully transparent pixels.
+pub(crate) fn unpremultiply_rgba(buf: &mut [u8]) {
+    for px in buf.as_chunks_mut::<4>().0 {
+        let a = px[3];
+        if a == 0 || a == 255 {
+            continue;
+        }
+        // c' = round(c * 255 / a); premultiplied guarantees c <= a, so
+        // the u16 math never overflows and the result never exceeds 255.
+        let a16 = u16::from(a);
+        for c in px[..3].iter_mut() {
+            *c = ((u16::from(*c) * 255 + a16 / 2) / a16) as u8;
+        }
+    }
+}
+
 /// Per-platform cursor source. Everything is `None` when the platform
 /// cannot provide the information — the session degrades gracefully.
 pub trait CursorSource: Send {
@@ -68,7 +87,7 @@ pub fn platform_cursor() -> Box<dyn CursorSource> {
 
 /// Platform cursor poller: Win32 (`GetCursorInfo` + `GetIconInfo`) on
 /// Windows, XFixes on X11, PipeWire cursor metadata in Wayland sessions,
-/// empty elsewhere.
+/// real NSCursor shapes through the C shim on macOS.
 pub struct CursorPoller {
     inner: Option<Inner>,
 }
@@ -222,22 +241,56 @@ impl CursorSource for CursorPoller {
 }
 
 // ---------------------------------------------------------------------------
-// macOS (CoreGraphics events + built-in arrow sprite)
+// macOS (CoreGraphics events + real NSCursor shapes via the C shim)
 // ---------------------------------------------------------------------------
 
 #[cfg(target_os = "macos")]
 mod macos {
-    use super::{CursorBitmap, CursorPosition};
+    use std::sync::atomic::{AtomicU32, Ordering};
 
-    /// Serial of the built-in arrow sprite — constant, because the shape
-    /// never changes: the real per-app shapes (I-beam, resize, grab) need
-    /// the ObjC `NSCursor` dance and stay a roadmap item. The viewer adds
-    /// a contrasting outline around the sprite, so a flat black arrow
-    /// reads fine on light AND dark desktops.
+    use super::{unpremultiply_rgba, CursorBitmap, CursorPosition};
+
+    /// Serial of the FALLBACK arrow sprite — used only when the NSCursor
+    /// shim has never seen a cursor (serial 0: no window server access).
+    /// With the shim live, the serial comes from it and changes with the
+    /// real per-app shape (I-beam, resize, grab — whatever the system
+    /// shows). The viewer adds a contrasting outline around the sprite,
+    /// so a flat black arrow reads fine on light AND dark desktops.
     const ARROW_SERIAL: u64 = 1;
 
     const ARROW_W: u32 = 16;
     const ARROW_H: u32 = 24;
+
+    /// Buffer for the shim's rendered cursor (256x256 RGBA max, the
+    /// shim's own sanity cap).
+    const SHIM_BUF_CAP: usize = 256 * 256 * 4;
+
+    /// Device px per point of the display under the cursor, cached by
+    /// the last poll() — the shim renders the shape at exactly this
+    /// scale, so poll and shape always agree (a scale drift would bump
+    /// the shim's serial and re-download the bitmap).
+    static LAST_SCALE100: AtomicU32 = AtomicU32::new(100);
+
+    /// C bridge to shim/cursor_shim.m (the only ObjC — compiled by
+    /// build.rs on macOS targets only).
+    mod nscursor {
+        use std::ffi::c_int;
+
+        #[link(name = "opacusr_cursor_shim", kind = "static")]
+        extern "C" {
+            pub(super) fn opacusr_cursor_serial(scale: f32) -> u64;
+            pub(super) fn opacusr_cursor_image(
+                scale: f32,
+                dst: *mut u8,
+                cap: u32,
+                w: *mut u32,
+                h: *mut u32,
+                hot_x: *mut u32,
+                hot_y: *mut u32,
+                serial: *mut u64,
+            ) -> c_int;
+        }
+    }
 
     /// Outline of the standard macOS arrow, clockwise, in sprite pixels
     /// (x right, y down): vertical left edge → tail notch → tail → back
@@ -295,22 +348,68 @@ mod macos {
         // device pixels the streamed frame speaks (2x on Retina).
         let (x_pt, y_pt) = crate::macos::cursor_point()?;
         let s = crate::macos::px_per_pt_at_point(x_pt, y_pt);
+        LAST_SCALE100.store((s * 100.0).round().max(1.0) as u32, Ordering::Relaxed);
+        // The shim's serial identifies the REAL system cursor shape and
+        // bumps when the rendered content changes (per-app shapes, or a
+        // scale change — dims are part of the identity). Serial 0 means
+        // the shim has never seen a cursor: fall back to the arrow.
+        let serial = unsafe { nscursor::opacusr_cursor_serial(s) };
+        let serial = if serial == 0 { ARROW_SERIAL } else { serial };
         Some(CursorPosition {
             x: (x_pt * s).round() as i32,
             y: (y_pt * s).round() as i32,
-            // Visibility needs the ObjC NSCursor dance — always report
-            // visible; a hidden remote pointer draws an arrow that sits
-            // still, which is less confusing than no pointer at all.
+            // Visibility needs window-server state the public AppKit API
+            // does not expose — always report visible; a hidden remote
+            // pointer draws an arrow that sits still, which is less
+            // confusing than no pointer at all.
             visible: true,
-            serial: ARROW_SERIAL,
+            serial,
         })
     }
 
     pub fn shape(serial: u64) -> Option<CursorBitmap> {
-        if serial != ARROW_SERIAL {
+        // Render the CURRENT system cursor at the cached scale. The
+        // bitmap comes back PREMULTIPLIED (AppKit bitmaps) — convert to
+        // the straight alpha the wire speaks.
+        let scale = LAST_SCALE100.load(Ordering::Relaxed).max(1) as f32 / 100.0;
+        let mut buf = vec![0u8; SHIM_BUF_CAP];
+        let (mut w, mut h, mut hx, mut hy, mut shim_serial) = (0u32, 0u32, 0u32, 0u32, 0u64);
+        let rc = unsafe {
+            nscursor::opacusr_cursor_image(
+                scale,
+                buf.as_mut_ptr(),
+                buf.len() as u32,
+                &mut w,
+                &mut h,
+                &mut hx,
+                &mut hy,
+                &mut shim_serial,
+            )
+        };
+        if rc == 0 && w > 0 && h > 0 && w <= 256 && h <= 256 {
+            if shim_serial == serial {
+                let n = w as usize * h as usize * 4;
+                let mut rgba = buf[..n].to_vec();
+                unpremultiply_rgba(&mut rgba);
+                return Some(CursorBitmap {
+                    width: w,
+                    height: h,
+                    hotspot_x: hx,
+                    hotspot_y: hy,
+                    rgba,
+                });
+            }
+            // The shape changed between poll and shape (stale serial):
+            // None — the session retries next frame, or gives up on the
+            // serial after 5 tries; the viewer keeps its last bitmap.
             return None;
         }
-        Some(arrow_bitmap())
+        // Shim unavailable (never saw a cursor / render failed): the
+        // arrow sprite keeps the overlay alive.
+        if serial == ARROW_SERIAL {
+            return Some(arrow_bitmap());
+        }
+        None
     }
 
     #[cfg(test)]
@@ -800,5 +899,70 @@ mod tests {
         let c = test_caret();
         assert_eq!((c.width, c.height), (4, 14));
         assert_eq!(c.hotspot_x, 1);
+    }
+
+    #[test]
+    fn unpremultiply_leaves_edges_untouched() {
+        // Fully opaque: identity. Fully transparent: untouched garbage
+        // RGB (invisible anyway).
+        let mut buf = vec![255u8, 200, 100, 255, 90, 60, 30, 0];
+        unpremultiply_rgba(&mut buf);
+        assert_eq!(buf, vec![255, 200, 100, 255, 90, 60, 30, 0]);
+    }
+
+    #[test]
+    fn unpremultiply_restores_composited_values() {
+        // Straight 64,128,192 at alpha 128 composites to 32,64,96
+        // (truncating premultiply). The inverse is exact for 64 and 128,
+        // and ±1 for 192 (96.37 quantized to 96 — information loss is
+        // inherent, invisible on a cursor bitmap).
+        let mut buf = vec![32u8, 64, 96, 128];
+        unpremultiply_rgba(&mut buf);
+        assert_eq!(buf, vec![64, 128, 191, 128]);
+    }
+
+    #[test]
+    fn unpremultiply_stays_in_range_and_saturates() {
+        // Premultiplied c == a inverts to exactly 255 (no overflow).
+        let mut buf = vec![128u8, 128, 128, 128, 254, 254, 254, 255];
+        unpremultiply_rgba(&mut buf);
+        assert_eq!(buf[0..4], vec![255u8, 255, 255, 128]);
+        assert_eq!(buf[4..8], vec![254u8, 254, 254, 255]);
+    }
+
+    #[test]
+    fn unpremultiply_round_trip_stays_within_bound() {
+        // The premultiply quantization is lossy (unpremultiply cannot be
+        // exact in general): the straight value is recoverable only to
+        // within ceil(255/a) + 1 — the tighter the alpha, the more bits
+        // the composite destroyed. Verified numerically over the full
+        // sweep; deviations are invisible on a cursor bitmap.
+        let straight: Vec<u8> = (0..=255u8)
+            .flat_map(|i| [i, 255 - i, i / 2, i.wrapping_add(55).max(1)])
+            .collect();
+        let mut prem = straight.clone();
+        for px in prem.as_chunks_mut::<4>().0 {
+            let a = u16::from(px[3]);
+            for c in px[..3].iter_mut() {
+                *c = (u16::from(*c) * a / 255) as u8;
+            }
+        }
+        unpremultiply_rgba(&mut prem);
+        for (got, want) in prem
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(straight.as_chunks::<4>().0)
+        {
+            let a = u16::from(want[3]).max(1);
+            let bound = ((255 + a - 1) / a + 1) as i16;
+            for ch in 0..3 {
+                let d = i16::from(got[ch]) - i16::from(want[ch]);
+                assert!(
+                    d.abs() <= bound,
+                    "straight {want:?} → got {got:?} (bound {bound})"
+                );
+            }
+        }
     }
 }
