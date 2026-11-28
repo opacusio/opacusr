@@ -24,4 +24,5 @@ opacusr-app = { workspace = true }
 # default-features = false).
 eframe = { workspace = true, features = ["accesskit", "default_fonts", "wgpu"] }
 egui = { workspace = true }
+tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

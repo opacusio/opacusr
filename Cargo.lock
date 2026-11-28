@@ -5402,6 +5402,7 @@ dependencies = [
  "eframe",
  "egui",
  "opacusr-app",
+ "tracing",
  "tracing-subscriber",
 ]
 
