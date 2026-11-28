@@ -35,7 +35,7 @@ wayland-client = { version = "0.31", optional = true }
 wayland-protocols = { version = "0.32", optional = true, features = ["unstable", "client"] }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = [
+windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
     "Win32_UI_WindowsAndMessaging",

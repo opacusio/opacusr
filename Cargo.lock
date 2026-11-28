@@ -5289,7 +5289,7 @@ dependencies = [
  "tracing-subscriber",
  "tray-icon",
  "windows-service",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
  "winresource",
 ]
 
@@ -5308,7 +5308,7 @@ dependencies = [
  "wayland-client",
  "wayland-protocols",
  "windows 0.59.0",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
  "x11rb",
 ]
 
