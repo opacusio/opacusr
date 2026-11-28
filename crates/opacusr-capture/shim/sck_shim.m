@@ -91,12 +91,14 @@ typedef struct OpacusRSckFrameState {
     pthread_mutex_destroy(&self->st.lock);
 }
 
-// SCStreamOutput — one delivered display frame.
-- (void)stream:(SCStream *)stream
+// SCStreamOutput — one delivered display frame. The SDK's output type
+// is SCStreamOutputType (the protocol was NOT declared with SCFrameType
+// — caught by the macOS CI compile).
+- (void)stream:(SCStream *)scStream
     didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
-                   ofType:(SCFrameType)type {
-    (void)stream;
-    if (type != SCFrameTypeScreen) return;
+                   ofType:(SCStreamOutputType)type {
+    (void)scStream;
+    if (type != SCStreamOutputTypeScreen) return;
     CVPixelBufferRef pb = (CVPixelBufferRef)CMSampleBufferGetImageBuffer(sampleBuffer);
     if (pb == NULL) return;
     if (CVPixelBufferGetPixelFormatType(pb) != kCVPixelFormatType_32BGRA) {
@@ -143,8 +145,8 @@ typedef struct OpacusRSckFrameState {
 // SCStreamDelegate — fatal stream error (e.g. permission revoked
 // mid-session). The stream keeps delivering nothing after this; poll()
 // reports OPACUSR_SCK_STOPPED with the reason.
-- (void)stream:(SCStream *)stream didStopWithError:(NSError *)error {
-    (void)stream;
+- (void)stream:(SCStream *)scStream didStopWithError:(NSError *)error {
+    (void)scStream;
     pthread_mutex_lock(&self->st.lock);
     self->st.stopped = 1;
     snprintf(self->st.stop_msg, sizeof(self->st.stop_msg),
@@ -268,7 +270,7 @@ uintptr_t opacusr_sck_start(uint32_t display_id, uint32_t width, uint32_t height
 
         NSError *add_err = nil;
         if (![stream addStreamOutput:out
-                                type:SCStreamFrameOutputTypeScreen
+                                type:SCStreamOutputTypeScreen
                    sampleHandlerQueue:out->queue
                                error:&add_err]) {
             sck_err_ns(errbuf, errbuf_cap, add_err);
