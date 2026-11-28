@@ -143,7 +143,7 @@ static int cursor_refresh(float scale) {
         memcpy(g_px + (size_t)y * row, src + (size_t)y * bpr, row);
     }
 
-    NSPoint hot = cur.hotspot; // flipped: top-left origin, in POINTS
+    NSPoint hot = cur.hotSpot; // flipped: top-left origin, in POINTS
     uint32_t hx = cursor_clamp_dim(hot.x * clamped);
     uint32_t hy = cursor_clamp_dim(hot.y * clamped);
     if (hx >= tw) hx = tw - 1;

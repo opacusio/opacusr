@@ -44,8 +44,11 @@ pub struct CursorBitmap {
 /// Convert PREMULTIPLIED-alpha RGBA (what AppKit/CoreGraphics bitmap
 /// contexts composite to — the macOS cursor shim ships this) into the
 /// straight alpha the wire speaks ([`CursorBitmap::rgba`]). No-op on
-/// fully opaque and fully transparent pixels.
-pub(crate) fn unpremultiply_rgba(buf: &mut [u8]) {
+/// fully opaque and fully transparent pixels. Public for the same
+/// reason as [`crate::bgra_to_rgba`]: a generally useful conversion
+/// (and it keeps the Linux unit tests alive — the macOS caller is
+/// cfg-gated out there).
+pub fn unpremultiply_rgba(buf: &mut [u8]) {
     for px in buf.as_chunks_mut::<4>().0 {
         let a = px[3];
         if a == 0 || a == 255 {
@@ -955,7 +958,7 @@ mod tests {
             .zip(straight.as_chunks::<4>().0)
         {
             let a = u16::from(want[3]).max(1);
-            let bound = ((255 + a - 1) / a + 1) as i16;
+            let bound = (255u16.div_ceil(a) + 1) as i16;
             for ch in 0..3 {
                 let d = i16::from(got[ch]) - i16::from(want[ch]);
                 assert!(
