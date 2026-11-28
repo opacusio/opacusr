@@ -1,0 +1,23 @@
+[package]
+name = "opacusr-ios"
+description = "OpacusR iOS viewer shell: static entry around the egui UI (relay / LAN-direct transport)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+# Static archive for the (future) Xcode app shell: Swift links
+# libopacusr_ios.a and calls `opacusr_ios_run` on the UIKit main thread.
+# All dependencies live under the iOS target: on every other platform
+# this crate is an empty staticlib (the entry code is cfg-gated), so
+# desktop builds stay clean — both in tooling time and in
+# `cargo::unused_dependencies` noise.
+[lib]
+crate-type = ["staticlib"]
+
+[target.'cfg(target_os = "ios")'.dependencies]
+opacusr-app = { workspace = true }
+eframe = { workspace = true }
+egui = { workspace = true }
+tracing-subscriber = { workspace = true }

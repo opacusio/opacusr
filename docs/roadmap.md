@@ -57,7 +57,7 @@ Design in [serverless.md](serverless.md); goal: a working connection with **0 �
 ## M4 — Mobile & embed
 
 - **Android**: MediaProjection capture, touch-input mapping, FFI bindings for `SessionClient`, published APKs; remote input (accessibility gestures + IME keyboard for real text/keys).
-- **iOS**: ReplayKit broadcast capture, input bridging where iOS allows, TestFlight builds.
+- **iOS**: ReplayKit broadcast capture, input bridging where iOS allows, TestFlight builds. *(In progress: the full viewer dependency graph — transport/codec/client/agent/app — compiles for `aarch64-apple-ios` with WebRTC cfg-gated off (TCP relay / LAN direct); `opacusr-ios` static shell exposes `opacusr_ios_run()`; next: the Xcode app bundle, then ReplayKit capture.)*
 - **Remote keyboard/text input polish** for touch (soft keyboard over `TextInput`).
 
 ## Gap analysis (vs TeamViewer / AnyDesk)

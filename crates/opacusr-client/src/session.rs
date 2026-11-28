@@ -26,6 +26,11 @@ use opacusr_transport::relay::{RelayRole, RelayTransport};
 use opacusr_transport::secure::SecureSession;
 use opacusr_transport::signaling::SignalingClient;
 use opacusr_transport::tcp::TcpTransport;
+// WebRTC transport: not compiled for iOS (the webrtc → webrtc-util →
+// nix 0.26 chain references `libc::sockaddr_ctl`, absent there — see
+// opacusr-transport/Cargo.toml). iOS sessions ride the TCP relay
+// (`TransportChoice::Auto` degrades) or LAN-direct TCP.
+#[cfg(not(target_os = "ios"))]
 use opacusr_transport::webrtc::{
     accept_answer, create_channels, make_offer, new_peer_connection, WebRtcConfig, WebRtcTransport,
 };
@@ -261,6 +266,9 @@ pub struct SessionSettings {
     /// `http://[user:pass@]host:port`. `None`/empty = direct. LAN/direct
     /// connections bypass it, as does WebRTC ICE/UDP.
     pub proxy: Option<String>,
+    /// ICE/STUN/TURN configuration. Absent on iOS, where the WebRTC
+    /// stack is not compiled and `Auto` always rides the TCP relay.
+    #[cfg(not(target_os = "ios"))]
     pub webrtc: WebRtcConfig,
 }
 
@@ -278,6 +286,7 @@ impl Default for SessionSettings {
             clipboard_sync: true,
             totp: None,
             proxy: None,
+            #[cfg(not(target_os = "ios"))]
             webrtc: WebRtcConfig {
                 ice_servers: vec![opacusr_transport::webrtc::IceServerConfig::stun(&[
                     "stun:stun.l.google.com:19302",
@@ -548,6 +557,7 @@ impl SessionClient {
 
         // Negotiate the wire.
         let transport: Box<dyn opacusr_transport::Transport> = match choice {
+            #[cfg(not(target_os = "ios"))]
             TransportChoice::WebRtcOnly | TransportChoice::Auto => {
                 match Self::webrtc_via(&mut sig, host_id, &settings).await {
                     Ok(t) => Box::new(t),
@@ -560,6 +570,22 @@ impl SessionClient {
                     Err(e) => return Err(e),
                 }
             }
+            // iOS ships without the WebRTC stack (nix 0.26 is macOS-only
+            // in its socket layer). `Auto` degrades to the TCP relay —
+            // same wire the desktop ladder falls back to — while an
+            // explicit `WebRtcOnly` fails closed instead of silently
+            // downgrading.
+            #[cfg(target_os = "ios")]
+            TransportChoice::WebRtcOnly => {
+                return Err(TransportError::Signaling(
+                    "WebRTC transport is not built for iOS; use the TCP relay or LAN direct".into(),
+                ));
+            }
+            #[cfg(target_os = "ios")]
+            TransportChoice::Auto => {
+                tracing::warn!(target: "opacusr", "webrtc is not built for iOS; connecting via the TCP relay");
+                Box::new(Self::relay_via(&mut sig, host_id, server_url, proxy.as_ref()).await?)
+            }
             TransportChoice::RelayOnly => {
                 Box::new(Self::relay_via(&mut sig, host_id, server_url, proxy.as_ref()).await?)
             }
@@ -569,6 +595,10 @@ impl SessionClient {
         Self::finish_handshake(SecureSession::new(transport, None), settings).await
     }
 
+    /// WebRTC negotiation over the signaling channel (offer → answer →
+    /// data channels). Not built for iOS — callers on iOS never reach
+    /// this (the `TransportChoice` match degrades to the relay first).
+    #[cfg(not(target_os = "ios"))]
     async fn webrtc_via(
         sig: &mut SignalingClient,
         host_id: PeerId,

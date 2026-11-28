@@ -3,7 +3,9 @@
 //! Layers (bottom → top):
 //! 1. [`Transport`] — byte pipes with two logical channels
 //!    ([`opacusr_proto::Channel`]): TCP ([`tcp`]), server relay
-//!    ([`relay`]) and WebRTC data channels ([`webrtc`]).
+//!    ([`relay`]) and WebRTC data channels ([`webrtc`]; not compiled for
+//!    iOS — the webrtc → nix chain references a macOS-only libc symbol,
+//!    iOS viewers use the relay / LAN-direct paths).
 //! 2. [`secure::SecureSession`] — optional end-to-end encryption on top of
 //!    any transport (skipped when the wire is already confidential).
 //! 3. [`signaling::SignalingClient`] — WebSocket client for the OpacusR
@@ -20,6 +22,10 @@ pub mod signaling;
 pub mod tcp;
 pub mod turn;
 pub mod update;
+// iOS: the webrtc → webrtc-util → nix 0.26 chain references
+// `libc::sockaddr_ctl`, which does not exist for iOS — the crate (and
+// everything downstream) fails to build there. See Cargo.toml.
+#[cfg(not(target_os = "ios"))]
 pub mod webrtc;
 
 pub use opacusr_proto::{message::Message, signal::*, Channel, PeerId, ProtoError, PROTO_VERSION};

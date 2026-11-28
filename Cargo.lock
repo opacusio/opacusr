@@ -5400,6 +5400,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "opacusr-ios"
+version = "0.17.0"
+dependencies = [
+ "eframe",
+ "egui",
+ "opacusr-app",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "opacusr-libp2p"
 version = "0.17.0"
 dependencies = [

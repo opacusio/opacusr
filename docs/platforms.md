@@ -1,6 +1,6 @@
 # OpacusR Platform Support
 
-Status per platform for **v0.15.0 / main**. The transport, protocol, crypto, server, file-transfer and terminal layers are fully cross-platform Rust; what differs is **screen capture**, **audio capture** and **input injection**.
+Status per platform for **main** (post-0.17.0). The transport, protocol, crypto, server, file-transfer and terminal layers are fully cross-platform Rust; what differs is **screen capture**, **audio capture** and **input injection**.
 
 ## Summary
 
@@ -11,7 +11,7 @@ Status per platform for **v0.15.0 / main**. The transport, protocol, crypto, ser
 | Windows 10/11 | ✅ DXGI Desktop Duplication (auto) with GDI fallback; both multi-monitor | ✅ system sound (WASAPI loopback) | ✅ enigo (SendInput) | ✅ ConPTY | ✅ eframe | **Working** |
 | macOS (aarch64) | ✅ CoreGraphics snapshots (multi-monitor, Retina; Screen Recording permission required) | ✅ mic (cpal/CoreAudio) | ✅ enigo (needs Accessibility permission) | ✅ openpty | ✅ eframe | **Working** |
 | Android | ✅ MediaProjection (host) | ❌ | ⚠️ host-side via accessibility shim (drag/long-press/swipe-scroll/Back/paste; Android 8+ for drag) | ❌ | ✅ NativeActivity + egui | **Working (viewer + phone-host)** |
-| iOS | ❌ | ❌ | ❌ | ❌ | ❌ | **Not started** |
+| iOS | ❌ | ❌ | ❌ | ❌ | ✅ egui (static shell, needs an Xcode app bundle to run) | **Viewer core — in progress** |
 | Headless / VM / CI | ✅ `test-source` synthetic pattern | n/a (feature compiles) | ✅ `NullInjector` | ✅ | n/a | **Working (testing)** |
 
 Every platform compiles the full workspace; capture/input differences are isolated behind traits in `opacusr-capture` and `opacusr-input`, so a missing backend degrades to the deterministic `test-source` / `NullInjector` pair instead of failing the build.
@@ -56,7 +56,9 @@ Every platform compiles the full workspace; capture/input differences are isolat
   - `Escape` → **Back** (`GLOBAL_ACTION_BACK` — editors cannot consume Esc anyway).
 - **Keys + text (v2, IME)**: the user selects the silent «OpacusR» keyboard once as the current input method (it renders NO UI; local typing is inert while selected — switch keyboards from quick settings to type locally, the AnyDesk tradeoff). Text rides `InputConnection.commitText` — real Unicode (emoji, CJK) WITHOUT clobbering the clipboard; editing keys (Enter, Tab, Backspace/Delete, arrows, Home/End, PgUp/PgDn, Insert, Space, F1–F12) ride `InputConnection.sendKeyEvent` with SHIFT/CTRL/ALT/META state (Ctrl+C/V/X/A work in editors that handle them). Modifier chords on letters/digits become real key events; punctuation chords stay unsupported (typed punctuation arrives as `text()` anyway); CapsLock/NumLock/PrintScreen/ContextMenu are unsupported. When the keyboard is not selected (or no editor has focus), `text()` falls back to the v1 clipboard + `ACTION_PASTE` path (clobbers the clipboard) and keys report unsupported honestly.
 
-Hover moves without a held button are dropped (touch screens have no hover). The device paths (real gesture dispatch, real IME commits on hardware) are untested in CI — CI proves javac/aapt2/d8 compile the shims and the manifest links; the first live run should be watched. Audio capture and iOS are not implemented; iOS: nothing beyond proto/crypto checks — the client does not build for iOS yet (webrtc→nix).
+Hover moves without a held button are dropped (touch screens have no hover). The device paths (real gesture dispatch, real IME commits on hardware) are untested in CI — CI proves javac/aapt2/d8 compile the shims and the manifest links; the first live run should be watched. Audio capture is not implemented for phones.
+
+**iOS (viewer core, this release)**: the whole viewer dependency graph compiles for `aarch64-apple-ios` in CI — proto → crypto → transport → codec → capture/input stubs → client → agent → egui app → the new `opacusr-ios` static shell. The WebRTC data-channel stack is **not compiled** for iOS: webrtc 0.14 → webrtc-util 0.12 → nix 0.26 references `libc::sockaddr_ctl`, which exists for macOS but not iOS, so the module is cfg-gated off there (`TransportChoice::Auto` degrades to the TCP relay, `WebRtcOnly` fails closed, an iOS host answers raw offers with an explicit `Reject`). LAN-direct TCP works as-is. What is still missing for a runnable app: the Xcode project (UIKit lifecycle + `libopacusr_ios.a` + signing) — the Rust side already exposes `opacusr_ios_run()` for it. ReplayKit host capture stays a roadmap item.
 
 ## Headless / CI usage
 
@@ -74,6 +76,6 @@ Both sides can run without any real display or input device:
 | `aarch64-unknown-linux-gnu` | cross-compiles; same deps on target |
 | `x86_64-pc-windows-msvc` | primary Windows target |
 | `aarch64-apple-darwin` / `x86_64-apple-darwin` | experimental |
-| `aarch64-linux-android` / `aarch64-apple-ios` | core crates only, today |
+| `aarch64-linux-android` / `aarch64-apple-ios` | Android: full APK; iOS: full viewer graph (no webrtc — TCP relay / LAN direct) |
 
 CI (`.github/workflows/ci.yml`) runs fmt, clippy and the test suite on Linux, Windows and macOS.

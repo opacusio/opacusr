@@ -4,6 +4,48 @@ All notable changes to OpacusR are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is
 SemVer-ish (breaking protocol changes bump the minor until 1.0).
 
+## [Unreleased]
+
+### iOS — вьювер собирается: граф клиента для aarch64-apple-ios (без WebRTC)
+
+Блокер, который раньше пускал под iOS только proto+crypto (CI-шаг
+«pure core»), снят гейтом, а не ожиданием апстрима: **webrtc 0.14 →
+webrtc-util 0.12 → nix 0.26** ссылается на `libc::sockaddr_ctl` — символ
+есть для macOS, но отсутствует для iOS, поэтому WebRTC-модуль вынесен из
+сборки iOS таргет-специфичной зависимостью (`opacusr-transport`),
+а кодовые пути — `cfg`-гейтами у потребителей:
+
+- **transport**: `pub mod webrtc` и сам крейт `webrtc` — только для
+  не-iOS таргетов; остальной стэк (signaling WS, TCP, relay, TURN,
+  proxy, ft/chunk) собирается на iOS как есть.
+- **client**: `SessionSettings.webrtc` (ICE-конфиг) — поле с `cfg`;
+  `TransportChoice::Auto` на iOS честно деградирует в TCP relay (тот же
+  провод, на который настольная лестница падает при сбое WebRTC),
+  `WebRtcOnly` — fail-closed с внятной ошибкой вместо тихого даунгрейда;
+  `connect_direct` (LAN по ip:port) работает без изменений.
+- **agent**: хост-транспорт `start_webrtc_session`/`webrtc_config`/
+  `turn_credentials` — не-iOS; входящий `SdpOffer` на iOS отвечает
+  явным `Reject` («host transport unavailable on this platform») —
+  вьювер не зависает.
+- **app**: ICE/TURN-конфигурация в `make_settings` — под `cfg`; остальное
+  построение настроек не продублировано (поле литерала под `cfg`).
+
+Новый крейт **opacusr-ios**: staticlib-обёртка для будущего Xcode-шелла —
+`opacusr_ios_run()` (extern "C", вызывается Swift'ом на главном потоке
+UIKit) поднимает тот же egui-UI через `opacusr_app` (`install_fonts` +
+`App::new`), экспортирует `OPACUSR_CONFIG_DIR` до загрузки конфига
+(санбокс-каталог приложения: env-оверрайд или `NSTemporaryDirectory`),
+на не-iOS таргетах — пустой крейт (все deps — под iOS-таргетом, чтобы
+не мусорить `unused_dependencies`).
+
+CI: мобильный `cargo check` для iOS расширен с «proto+crypto» до всего
+графа вьювера — proto, crypto, transport, codec, capture/input-заглушки,
+client, agent, app и ios-шелл — под `aarch64-apple-ios` на macOS-раннере.
+
+Что ещё нужно для запускаемого приложения: Xcode-проект (UIKit-lifecycle,
+линковка `libopacusr_ios.a`, подписание) — Rust-сторона экспортирует
+точку входа уже сейчас; ReplayKit-хост — отдельный пункт роадмапа.
+
 ## [0.17.0] — 2026-11-27
 
 ### Android — настоящий ввод клавиатуры через IME-сервис (v2 текста)

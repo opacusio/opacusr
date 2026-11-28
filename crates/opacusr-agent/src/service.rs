@@ -18,7 +18,14 @@ use opacusr_transport::lockout::{AuthGate, AuthGateConfig};
 use opacusr_transport::secure::SecureSession;
 use opacusr_transport::signaling::SignalingClient;
 use opacusr_transport::tcp::TcpTransport;
-use opacusr_transport::turn::{TurnCredentialCache, TurnCredentials};
+use opacusr_transport::turn::TurnCredentialCache;
+// WebRTC host transport: not compiled for iOS — the webrtc → webrtc-util
+// → nix 0.26 chain references `libc::sockaddr_ctl`, which does not exist
+// there (see opacusr-transport/Cargo.toml). iOS hosts answer offers with
+// an explicit Reject instead of stalling the viewer.
+#[cfg(not(target_os = "ios"))]
+use opacusr_transport::turn::TurnCredentials;
+#[cfg(not(target_os = "ios"))]
 use opacusr_transport::webrtc::{
     new_peer_connection, AnswerPending, IceServerConfig, WebRtcConfig,
 };
@@ -515,6 +522,12 @@ impl AgentService {
                                         })
                                         .map(|(d, _)| d);
                                     match decision {
+                                        // iOS ships without the WebRTC host
+                                        // transport (nix 0.26 is macOS-only in
+                                        // its socket layer); an iOS host
+                                        // answers a raw offer with an explicit
+                                        // Reject instead of stalling the viewer.
+                                        #[cfg(not(target_os = "ios"))]
                                         Some(d) => {
                                             let view_only = d == SessionDecision::ViewOnly;
                                             self.start_webrtc_session(
@@ -526,6 +539,20 @@ impl AgentService {
                                                 turn,
                                             )
                                             .await?;
+                                        }
+                                        #[cfg(target_os = "ios")]
+                                        Some(_) => {
+                                            let _ = self.events.send(AgentEvent::Notice(
+                                                "session transport unavailable: WebRTC host is not built for iOS".into(),
+                                            ));
+                                            let _ = sig
+                                                .send(&SignalMessage::PeerSend(PeerSend {
+                                                    to: from,
+                                                    payload: PeerPayload::Reject {
+                                                        reason: "host transport unavailable on this platform".into(),
+                                                    },
+                                                }))
+                                                .await;
                                         }
                                         None => {
                                             let _ = self.events.send(AgentEvent::Notice(
@@ -616,7 +643,9 @@ impl AgentService {
 
     /// ICE configuration: the configured STUN entries plus, when minted
     /// credentials are available, the server's coturn URIs as a TURN
-    /// entry (media can relay when direct paths fail).
+    /// entry (media can relay when direct paths fail). WebRTC-only —
+    /// not built for iOS.
+    #[cfg(not(target_os = "ios"))]
     fn webrtc_config(&self, turn: Option<&TurnCredentials>) -> WebRtcConfig {
         let mut ice = Vec::new();
         for url in &self.cfg.ice_urls {
@@ -637,6 +666,8 @@ impl AgentService {
 
     /// Minted TURN credentials for the current signaling path, or `None`
     /// (degrade to STUN-only) when disabled, cooling down or unreachable.
+    /// WebRTC-only — not built for iOS.
+    #[cfg(not(target_os = "ios"))]
     async fn turn_credentials(&self, turn: &TurnCredentialCache) -> Option<TurnCredentials> {
         if !turn.enabled() {
             return None;
@@ -658,6 +689,10 @@ impl AgentService {
         }
     }
 
+    /// Accept a viewer's WebRTC offer and spawn the encrypted host
+    /// session over the resulting data channels. Not built for iOS —
+    /// the `SdpOffer` arm answers with an explicit `Reject` there.
+    #[cfg(not(target_os = "ios"))]
     async fn start_webrtc_session(
         &self,
         sig: &mut SignalingClient,

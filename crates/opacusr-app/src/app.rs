@@ -692,7 +692,10 @@ impl App {
 
         // Base values shared by every connection attempt; settings are
         // built per attempt because each signaling endpoint mints its
-        // own TURN credentials.
+        // own TURN credentials. WebRTC ICE: not on iOS — the webrtc
+        // stack is not compiled there (nix 0.26 is macOS-only in its
+        // socket layer), iOS sessions ride the TCP relay / LAN direct.
+        #[cfg(not(target_os = "ios"))]
         let base_ice: Vec<opacusr_transport::webrtc::IceServerConfig> = self
             .config
             .ice_urls
@@ -722,15 +725,21 @@ impl App {
         };
         let make_settings =
             move |turn: Option<opacusr_transport::turn::TurnCredentials>| -> SessionSettings {
-                let mut ice = base_ice.clone();
-                if let Some(t) = turn {
-                    let uris: Vec<&str> = t.uris.iter().map(String::as_str).collect();
-                    ice.push(opacusr_transport::webrtc::IceServerConfig::turn(
-                        &uris,
-                        &t.username,
-                        &t.password,
-                    ));
-                }
+                #[cfg(not(target_os = "ios"))]
+                let webrtc = {
+                    let mut ice = base_ice.clone();
+                    if let Some(t) = turn {
+                        let uris: Vec<&str> = t.uris.iter().map(String::as_str).collect();
+                        ice.push(opacusr_transport::webrtc::IceServerConfig::turn(
+                            &uris,
+                            &t.username,
+                            &t.password,
+                        ));
+                    }
+                    opacusr_transport::webrtc::WebRtcConfig { ice_servers: ice }
+                };
+                #[cfg(target_os = "ios")]
+                let _ = turn;
                 SessionSettings {
                     password: password.clone(),
                     display_name: display_name.clone(),
@@ -743,7 +752,8 @@ impl App {
                     } else {
                         Some(proxy_raw.clone())
                     },
-                    webrtc: opacusr_transport::webrtc::WebRtcConfig { ice_servers: ice },
+                    #[cfg(not(target_os = "ios"))]
+                    webrtc,
                 }
             };
 
