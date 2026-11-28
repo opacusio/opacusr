@@ -53,7 +53,12 @@ mkdir -p "$OUT_DIR"
 echo "==> cargo rustc -p opacusr-ios ($PROFILE) + native-static-libs"
 cargo rustc -p opacusr-ios --target aarch64-apple-ios $EXTRA_EXPANDED \
   -- --print native-static-libs >/dev/null 2>"$OUT_DIR/native-libs.log"
-NATIVE=$(sed -n 's/.*native-static-libs: //p' "$OUT_DIR/native-libs.log" | tail -1)
+NATIVE=$(sed -n 's/.*native-static-libs: //p' "$OUT_DIR/native-libs.log" | tail -1 |
+  # iOS has no separate libm (it lives inside libSystem) — rustc's
+  # generic native-static-libs still emits `-lm`, which makes ld fail
+  # with "library 'm' not found". Duplicate -lSystem/-lc/-lobjc are
+  # harmless (ld only warns).
+  sed 's/-lm//g')
 test -n "$NATIVE" || { echo "could not capture native-static-libs"; cat "$OUT_DIR/native-libs.log"; exit 1; }
 echo "    native libs: $NATIVE"
 
