@@ -443,7 +443,6 @@ fn run_screencast(tx: Sender<PwMsg>) -> Result<(), String> {
 fn portal_negotiate() -> Result<(std::os::fd::OwnedFd, Vec<PwStreamInfo>), String> {
     use ashpd::desktop::screencast::{CursorMode, Screencast, SourceType};
     use ashpd::desktop::PersistMode;
-    use ashpd::WindowIdentifier;
 
     async fn inner() -> Result<(std::os::fd::OwnedFd, Vec<PwStreamInfo>), String> {
         let proxy = Screencast::new()
@@ -470,7 +469,11 @@ fn portal_negotiate() -> Result<(std::os::fd::OwnedFd, Vec<PwStreamInfo>), Strin
             .await
             .map_err(|e| format!("portal select: {e}"))?;
         let response = proxy
-            .start(&session, &WindowIdentifier::default())
+            // ashpd 0.11: the parent-window identifier is now
+            // Option<&WindowIdentifier>. None = unparented portal dialog —
+            // the 0.9 WindowIdentifier::default() carried no real window
+            // either, so the DBus payload is unchanged.
+            .start(&session, None)
             .await
             .map_err(|e| format!("portal start: {e}"))?
             .response()
