@@ -375,7 +375,7 @@ void opacusr_sck_stop(uintptr_t handle) {
         }];
         dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW,
                 OPACUSR_SCK_TIMEOUT_SEC * NSEC_PER_SEC));
-        [stream removeStreamOutput:out type:SCStreamFrameOutputTypeScreen];
+        [stream removeStreamOutput:out type:SCStreamOutputTypeScreen];
         out->stream = nil;
         out->queue = nil;
     }
