@@ -356,7 +356,7 @@ mod macos {
         // bumps when the rendered content changes (per-app shapes, or a
         // scale change — dims are part of the identity). Serial 0 means
         // the shim has never seen a cursor: fall back to the arrow.
-        let serial = unsafe { nscursor::opacusr_cursor_serial(s) };
+        let serial = unsafe { nscursor::opacusr_cursor_serial(s as f32) };
         let serial = if serial == 0 { ARROW_SERIAL } else { serial };
         Some(CursorPosition {
             x: (x_pt * s).round() as i32,
