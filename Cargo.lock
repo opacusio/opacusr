@@ -5317,6 +5317,7 @@ version = "0.17.0"
 dependencies = [
  "ashpd 0.9.3",
  "async-std",
+ "cc",
  "jni-sys 0.4.1",
  "pipewire",
  "thiserror 2.0.21",

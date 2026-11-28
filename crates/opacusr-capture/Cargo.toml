@@ -41,6 +41,13 @@ windows = { version = "0.59", features = [
     "Win32_Graphics_Gdi",
 ] }
 
+[build-dependencies]
+# sck_shim.m (the ScreenCaptureKit ObjC bridge) — build.rs invokes cc
+# only when CARGO_CFG_TARGET_OS is "macos" (SCK does not exist on iOS,
+# other targets have no use for the shim either). The dependency is
+# unconditional because build scripts are compiled for every target.
+cc = "1"
+
 [features]
 default = ["x11"]
 x11 = ["dep:x11rb"]

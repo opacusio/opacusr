@@ -7,8 +7,10 @@
 //!   Wayland/PipeWire are roadmap items, see docs/roadmap.md);
 //! * Windows — GDI `BitBlt` of the primary screen (DXGI Desktop Duplication
 //!   is the roadmap upgrade);
-//! * macOS — CoreGraphics snapshots (`CGDisplayCreateImage`, multi-monitor,
-//!   Retina-aware; ScreenCaptureKit is the roadmap upgrade);
+//! * macOS — ScreenCaptureKit stream (`SCStream`, hardware-backed, via
+//!   the ObjC shim + C FFI in `macos_sck.rs`) with CoreGraphics
+//!   snapshots (`CGDisplayCreateImage`) as the fallback ladder —
+//!   multi-monitor, Retina-aware on both paths;
 //! * Android / iOS — stub returning [`CaptureError::Unsupported`]
 //!   (viewer-only use on those platforms for now);
 //! * [`test::TestSource`] — deterministic animated pattern used by tests
@@ -39,10 +41,15 @@ pub mod wayland;
 ))]
 pub mod stub;
 
-/// macOS host capture (CoreGraphics snapshots) + the global
-/// device-px → event-points bridge for remote input.
+/// macOS host capture (ScreenCaptureKit + CoreGraphics fallback) + the
+/// global device-px → event-points bridge for remote input.
 #[cfg(target_os = "macos")]
 pub mod macos;
+
+/// The ScreenCaptureKit C-shim bridge (`shim/sck_shim.m`, compiled by
+/// build.rs on macOS targets only — SCK does not exist on iOS).
+#[cfg(target_os = "macos")]
+pub mod macos_sck;
 
 pub mod test;
 
@@ -273,13 +280,16 @@ pub fn platform_capture(
     }
     #[cfg(target_os = "macos")]
     {
-        // CoreGraphics snapshot backend; errors honestly (TCC hint) when
-        // the Screen Recording permission is missing. No test-source
-        // fallback here: silently streaming a synthetic pattern from a
-        // real Mac would be worse than a clear failure.
+        // ScreenCaptureKit stream with the CoreGraphics snapshot
+        // fallback (the ladder lives inside MacCapture: connect tries
+        // SCK, every failure degrades to CG, which errors honestly
+        // with the TCC hint when the Screen Recording permission is
+        // missing). No test-source fallback here: silently streaming a
+        // synthetic pattern from a real Mac would be worse than a
+        // clear failure.
         let _ = allow_test_fallback;
         let cap = crate::macos::MacCapture::connect()?;
-        tracing::info!(target: "opacusr", "using macOS CoreGraphics capture");
+        tracing::info!(target: "opacusr", "using macOS capture backend {}", cap.backend());
         return Ok(Box::new(cap));
     }
     #[allow(unreachable_code)]

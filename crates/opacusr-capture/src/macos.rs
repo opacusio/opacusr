@@ -1,13 +1,20 @@
-//! macOS host capture — CoreGraphics via C FFI (no objc_msgSend calls
-//! anywhere: the platform glue stays crash-free without an ObjC runtime
-//! audit, same discipline as the raw-vtable JNI backend on Android).
+//! macOS host capture — ScreenCaptureKit stream first (hardware-backed,
+//! push-based `SCStream` via the C shim `shim/sck_shim.m`, see
+//! [`super::macos_sck`]), CoreGraphics snapshot fallback (`macos-cg`).
+//! The Rust side of BOTH paths is pure C FFI — no objc_msgSend calls
+//! anywhere in Rust: the platform glue stays crash-free without an
+//! ObjC runtime audit, same discipline as the raw-vtable JNI backend
+//! on Android.
 //!
-//! Strategy (v1, GDI-style snapshot): one `CGDisplayCreateImage` per
-//! streamed frame — a full-screen CPU copy, honest and simple; the
-//! ScreenCaptureKit upgrade (hardware-backed, window-safe) stays on the
-//! roadmap. Requires the Screen Recording TCC permission: without it
-//! `CGDisplayCreateImage` returns NULL (10.15+) and the backend fails
-//! with an explicit user-facing hint instead of a black stream.
+//! The ladder mirrors Windows (DXGI → GDI): SCK is tried at connect
+//! time and on every display switch; any failure — OS < 12.3, missing
+//! Screen Recording TCC permission, unexpected pixel format, a delegate
+//! stop mid-session — drops SCK and the CG path takes over (per frame
+//! when SCK dies mid-session). CG itself requires the Screen Recording
+//! permission: without it `CGDisplayCreateImage` returns NULL (10.15+)
+//! and the backend fails with an explicit user-facing hint instead of a
+//! black stream — so the fallback never masks a permission problem with
+//! a silently broken stream.
 //!
 //! Coordinate contract (the tricky macOS part):
 //! * CG *display geometry* (`CGDisplayBounds`) is bottom-left origin;
@@ -23,6 +30,7 @@
 
 use std::ffi::c_void;
 
+use crate::macos_sck::{SckDeath, SckStream};
 use crate::source::{ScreenCapture, ScreenDesc};
 use crate::{CaptureError, Frame};
 
@@ -246,14 +254,49 @@ unsafe fn capture_display(display: CGDirectDisplayID) -> Result<Frame, CaptureEr
     result
 }
 
+/// Start a ScreenCaptureKit stream for the display, or `None` with a
+/// warn log when unavailable (OS < 12.3, no Screen Recording
+/// permission, or any other SCK failure) — the CG snapshot path stays
+/// fully functional as the fallback.
+fn try_start_sck(display: CGDirectDisplayID) -> Option<SckStream> {
+    if !SckStream::available() {
+        return None;
+    }
+    let (w, h) = display_px(display);
+    if w == 0 || h == 0 {
+        return None;
+    }
+    match SckStream::start(display, w, h) {
+        Ok(s) => {
+            tracing::info!(
+                target: "opacusr",
+                "ScreenCaptureKit stream active ({w}x{h}, display {display})"
+            );
+            Some(s)
+        }
+        Err(e) => {
+            tracing::warn!(
+                target: "opacusr",
+                "ScreenCaptureKit unavailable ({e}); using CoreGraphics snapshots"
+            );
+            None
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // ScreenCapture backend
 // ---------------------------------------------------------------------------
 
-/// CoreGraphics snapshot capture (multi-monitor aware, Retina-aware).
+/// ScreenCaptureKit stream with a CoreGraphics snapshot fallback
+/// (multi-monitor aware, Retina-aware). [`MacCapture::connect`] tries
+/// SCK first; every failure path degrades to the CG path that worked
+/// before v2, and `backend()` reports which one is actually streaming.
 pub struct MacCapture {
     display: CGDirectDisplayID,
     online: Vec<CGDirectDisplayID>,
+    /// Live ScreenCaptureKit stream (`None` = CoreGraphics snapshots).
+    sck: Option<SckStream>,
 }
 
 impl MacCapture {
@@ -280,15 +323,65 @@ impl MacCapture {
             disp,
             online.len()
         );
+        let sck = try_start_sck(disp);
         Ok(Self {
             display: disp,
             online,
+            sck,
         })
+    }
+
+    /// Restart the SCK stream when the display mode changed
+    /// mid-session: SCK frames keep the configured size, so a stale
+    /// stream would desync the frame from the cursor/input coordinate
+    /// mapping (the CG path re-reads the mode every frame instead).
+    fn maybe_restart_stream(&mut self) {
+        let stale = match &self.sck {
+            Some(s) => {
+                let (w, h) = display_px(self.display);
+                w > 0 && h > 0 && s.cfg_size() != (w, h)
+            }
+            None => false,
+        };
+        if stale {
+            tracing::info!(
+                target: "opacusr",
+                "display mode changed; restarting the ScreenCaptureKit stream"
+            );
+            // The old stream drops AFTER the new one started (the
+            // assignment moves the replacement in first): handles are
+            // object pointers in the shim, so the old stop() cannot
+            // tear down the new stream.
+            self.sck = try_start_sck(self.display);
+        }
     }
 }
 
 impl ScreenCapture for MacCapture {
     fn capture(&mut self) -> Result<Frame, CaptureError> {
+        self.maybe_restart_stream();
+        if self.sck.is_some() {
+            // take() first so the mutable borrow is released before the
+            // error path reassigns; a dead stream drops (stopping the
+            // SCStream in Drop) and the CG path answers this frame.
+            let mut s = self.sck.take().expect("checked is_some");
+            match s.frame() {
+                Ok(f) => {
+                    self.sck = Some(s);
+                    return Ok(f);
+                }
+                Err(death) => {
+                    let why = match death {
+                        SckDeath::WrongFormat => "unexpected pixel format".to_string(),
+                        SckDeath::Failed(m) => m,
+                    };
+                    tracing::warn!(
+                        target: "opacusr",
+                        "ScreenCaptureKit stream ended ({why}); falling back to CoreGraphics snapshots"
+                    );
+                }
+            }
+        }
         unsafe { capture_display(self.display) }
     }
 
@@ -329,6 +422,11 @@ impl ScreenCapture for MacCapture {
             return Ok(false);
         }
         self.display = id;
+        // Stop the old stream BEFORE starting the new one: the
+        // assignment drops it (Drop → shim stop), so the new start
+        // never briefly overlaps two live SCStreams for one backend.
+        self.sck = None;
+        self.sck = try_start_sck(id);
         Ok(true)
     }
 
@@ -337,7 +435,11 @@ impl ScreenCapture for MacCapture {
     }
 
     fn backend(&self) -> &'static str {
-        "macos-cg"
+        if self.sck.is_some() {
+            "macos-sck"
+        } else {
+            "macos-cg"
+        }
     }
 }
 
