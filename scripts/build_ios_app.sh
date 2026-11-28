@@ -35,10 +35,13 @@ if [ -z "$VERSION" ]; then
 fi
 
 case "$PROFILE" in
-  release) FLAGS=(--release) ;;
-  debug) FLAGS=() ;;
+  release) EXTRA=(--release) ;;
+  debug) EXTRA=() ;;
   *) echo "PROFILE must be debug or release (got: $PROFILE)"; exit 1 ;;
 esac
+# macOS ships bash 3.2 where an EMPTY array under `set -u` explodes on
+# "${EXTRA[@]}" — expand via the classic guard instead.
+EXTRA_EXPANDED=${EXTRA[@]+"${EXTRA[@]}"}
 
 mkdir -p "$OUT_DIR"
 
@@ -48,7 +51,7 @@ mkdir -p "$OUT_DIR"
 #    libopacusr_ios.a (Metal, UIKit, Security, CoreGraphics, ...). Hand
 #    maintaining that list would rot with every wgpu/winit bump.
 echo "==> cargo rustc -p opacusr-ios ($PROFILE) + native-static-libs"
-cargo rustc -p opacusr-ios --target aarch64-apple-ios "${FLAGS[@]}" \
+cargo rustc -p opacusr-ios --target aarch64-apple-ios $EXTRA_EXPANDED \
   -- --print native-static-libs >/dev/null 2>"$OUT_DIR/native-libs.log"
 NATIVE=$(sed -n 's/.*native-static-libs: //p' "$OUT_DIR/native-libs.log" | tail -1)
 test -n "$NATIVE" || { echo "could not capture native-static-libs"; cat "$OUT_DIR/native-libs.log"; exit 1; }
