@@ -258,19 +258,22 @@ unsafe fn capture_display(display: CGDirectDisplayID) -> Result<Frame, CaptureEr
 /// warn log when unavailable (OS < 12.3, no Screen Recording
 /// permission, or any other SCK failure) — the CG snapshot path stays
 /// fully functional as the fallback.
-fn try_start_sck(display: CGDirectDisplayID) -> Option<SckStream> {
+fn try_start_sck(disp: CGDirectDisplayID) -> Option<SckStream> {
     if !SckStream::available() {
         return None;
     }
-    let (w, h) = display_px(display);
+    let (w, h) = display_px(disp);
     if w == 0 || h == 0 {
         return None;
     }
-    match SckStream::start(display, w, h) {
+    match SckStream::start(disp, w, h) {
         Ok(s) => {
             tracing::info!(
                 target: "opacusr",
-                "ScreenCaptureKit stream active ({w}x{h}, display {display})"
+                // `display` in a format string is the tracing field
+                // helper, not a variable name — the argument stays `disp`
+                // (see the connect() comment).
+                "ScreenCaptureKit stream active ({w}x{h}, display {disp})"
             );
             Some(s)
         }
