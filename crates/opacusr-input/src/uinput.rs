@@ -1001,8 +1001,8 @@ mod tests {
         // that, not bit equality; both land within the same pixel.
         let m = mapping(0, 0, 2560, 1440, 2560, 1440);
         // Legacy drift ≤ 1 device px = ABS_MAX/span counts per axis.
-        let tol_x = (ABS_RANGE_MAX as i64 / 2560) as i64 + 1;
-        let tol_y = (ABS_RANGE_MAX as i64 / 1440) as i64 + 1;
+        let tol_x = ABS_RANGE_MAX as i64 / 2560 + 1;
+        let tol_y = ABS_RANGE_MAX as i64 / 1440 + 1;
         for (x, y) in [(0u32, 0u32), (1280, 720), (2559, 1439), (640, 100)] {
             let (ax, ay) = frame_to_desktop_abs(&m, x, y, 2560, 1440, ABS_RANGE_MAX);
             let (lx, ly) = (
