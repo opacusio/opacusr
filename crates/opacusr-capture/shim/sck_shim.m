@@ -375,7 +375,11 @@ void opacusr_sck_stop(uintptr_t handle) {
         }];
         dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW,
                 OPACUSR_SCK_TIMEOUT_SEC * NSEC_PER_SEC));
-        [stream removeStreamOutput:out type:SCStreamOutputTypeScreen];
+        // Best-effort detach: the API gained an NSError out-param
+        // (Swift `throws`) — the old `removeStreamOutput:type:` selector
+        // no longer exists in the SDK.
+        NSError *remove_err = nil;
+        (void)[stream removeStreamOutput:out type:SCStreamOutputTypeScreen error:&remove_err];
         out->stream = nil;
         out->queue = nil;
     }
