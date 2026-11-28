@@ -82,6 +82,18 @@ opacusr-input = { workspace = true }
 [target.'cfg(target_os = "android")'.dependencies]
 opacusr-app = { workspace = true }
 egui = { workspace = true }
-eframe = { workspace = true, features = ["android-native-activity"] }
+# Full desktop feature set of eframe (workspace entry carries
+# default-features = false) + the NativeActivity event-loop hook.
+# glow/glutin is fine on Android (EGL); iOS uses wgpu instead —
+# glutin has no iOS backend.
+eframe = { workspace = true, features = [
+    "accesskit",
+    "default_fonts",
+    "glow",
+    "wayland",
+    "web_screen_reader",
+    "x11",
+    "android-native-activity",
+] }
 winit = { version = "0.30", default-features = false, features = ["android-native-activity"] }
 tracing-subscriber = { workspace = true }

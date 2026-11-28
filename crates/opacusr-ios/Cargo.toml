@@ -18,6 +18,10 @@ crate-type = ["staticlib"]
 
 [target.'cfg(target_os = "ios")'.dependencies]
 opacusr-app = { workspace = true }
-eframe = { workspace = true }
+# wgpu renderer (Metal): glutin — the glow backend — has no iOS support
+# and aborts compilation there, so the iOS eframe set deliberately
+# replaces glow with wgpu (the workspace eframe entry carries
+# default-features = false).
+eframe = { workspace = true, features = ["accesskit", "default_fonts", "wgpu"] }
 egui = { workspace = true }
 tracing-subscriber = { workspace = true }

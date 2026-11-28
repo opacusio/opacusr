@@ -19,7 +19,6 @@ opacusr-transport = { workspace = true }
 opacusr-capture = { workspace = true }
 opacusr-codec = { workspace = true }
 opacusr-input = { workspace = true }
-eframe = { workspace = true }
 egui = { workspace = true }
 raw-window-handle = { workspace = true }
 tokio = { workspace = true }
@@ -45,6 +44,20 @@ arboard = { workspace = true }
 # return None where there is no XDG dialog.
 rfd = { workspace = true }
 
+[target.'cfg(not(target_os = "ios"))'.dependencies]
+# Desktop + Android: the classic glow renderer (the default feature set
+# of eframe, spelled out because the workspace entry carries
+# default-features = false — glutin has no iOS backend, so iOS builds
+# pick wgpu/Metal instead; see the iOS section below).
+eframe = { workspace = true, features = [
+    "accesskit",
+    "default_fonts",
+    "glow",
+    "wayland",
+    "web_screen_reader",
+    "x11",
+] }
+
 # Embedded libp2p node for the experimental decentralized mode
 # (Настройки → Децентрализованный) — desktop AND Android. No new
 # native build on Android: aws-lc-rs/ring are already in the APK
@@ -53,7 +66,6 @@ rfd = { workspace = true }
 # quinn, which CI already compiles for aarch64-linux-android. iOS is
 # excluded — the app is not built there (CI compiles only
 # proto+crypto for aarch64-apple-ios).
-[target.'cfg(not(target_os = "ios"))'.dependencies]
 opacusr-libp2p = { workspace = true }
 
 [target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
@@ -61,6 +73,13 @@ opacusr-client = { workspace = true }
 # Mobile: the agent lib without its audio feature — a phone never
 # hosts a session (no capture backend).
 opacusr-agent = { workspace = true }
+
+# iOS: wgpu renderer (Metal). glutin — the glow backend — has no iOS
+# support and aborts compilation there, so the glow feature set must
+# never unify into an iOS build (that is why eframe is per-target here
+# and not in the shared [dependencies] above).
+[target.'cfg(target_os = "ios")'.dependencies]
+eframe = { workspace = true, features = ["accesskit", "default_fonts", "wgpu"] }
 
 # System tray (TeamViewer-style background operation). Linux is
 # deliberately excluded: the tray-icon Linux backends need GTK /
