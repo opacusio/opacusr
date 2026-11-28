@@ -102,7 +102,12 @@ xcrun -sdk iphoneos swiftc \
 #    and contain our entry symbol.
 file "$APP_DIR/OpacusR"
 otool -L "$APP_DIR/OpacusR" | head -8
-nm "$APP_DIR/OpacusR" | grep -q " _opacusr_ios_run$" || {
+# nm via a FILE, not a pipe: a debug-profile binary carries hundreds of
+# thousands of symbols and `grep -q` closes the pipe early — nm dies
+# with SIGPIPE ("LLVM ERROR: IO failure") before it ever reaches the
+# sorted `_opacusr_*` region. Also -gU: global + defined only.
+nm -gU "$APP_DIR/OpacusR" > "$OUT_DIR/symbols.txt" 2>/dev/null || true
+grep -q "_opacusr_ios_run" "$OUT_DIR/symbols.txt" || {
   echo "entry symbol _opacusr_ios_run missing from the linked binary"
   exit 1
 }
