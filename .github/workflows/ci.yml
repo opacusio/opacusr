@@ -185,3 +185,15 @@ jobs:
         # opacusr-app avoids by carrying default-features = false.
         if: runner.os == 'macOS'
         run: cargo check -p opacusr-ios --target aarch64-apple-ios
+
+      - name: "iOS — build the app shell (link libopacusr_ios.a into a real Mach-O)"
+        # cargo check only type-checks; this step does the REAL link:
+        # swiftc compiles the UIKit entry (ios/App/AppDelegate.swift) and
+        # links libopacusr_ios.a using rustc's `native-static-libs` as the
+        # framework list, then packages the bundle as an unsigned IPA and
+        # verifies the arm64 Mach-O contains the `_opacusr_ios_run` entry
+        # symbol. Script details + self-signing notes: ios/README.md.
+        # Debug profile (fast); release.yml builds the release-profile IPA
+        # for tags with the same script.
+        if: runner.os == 'macOS'
+        run: bash scripts/build_ios_app.sh

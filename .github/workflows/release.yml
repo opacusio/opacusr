@@ -304,9 +304,39 @@ jobs:
           name: android-artifacts
           path: opacusr-*-android-arm64.apk
 
+  ios:
+    name: iOS (unsigned IPA, viewer shell)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ios-cargo-release-${{ hashFiles('**/Cargo.lock') }}
+      - name: Build unsigned IPA
+        # scripts/build_ios_app.sh: release-profile libopacusr_ios.a →
+        # swiftc (UIKit entry, native-static-libs framework list) →
+        # OpacusR.app → UNSIGNED opacusr-<ver>-ios-unsigned.ipa. No
+        # signing in CI (no Apple Developer certificate): users self-sign
+        # with a free Personal Team (Xcode / AltStore / Sideloadly) —
+        # see ios/README.md. TestFlight is the follow-up stage.
+        env:
+          PROFILE: release
+        run: bash scripts/build_ios_app.sh
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ios-artifacts
+          path: opacusr-*-ios-unsigned.ipa
+
   publish:
     name: Publish GitHub Release
-    needs: [linux, windows, macos, android]
+    needs: [linux, windows, macos, android, ios]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -341,6 +371,7 @@ jobs:
             dist/*.msi
             dist/*.deb
             dist/*.apk
+            dist/*.ipa
             dist/SHA256SUMS
           body_path: release_body.md
           generate_release_notes: true

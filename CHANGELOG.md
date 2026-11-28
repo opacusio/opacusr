@@ -51,8 +51,42 @@ default_fonts). Никто не линкует glutin на iOS — feature-unifi
 iOS-таргет glow не тянет (eframe в app — по таргет-секциям).
 
 Что ещё нужно для запускаемого приложения: Xcode-проект (UIKit-lifecycle,
-линковка `libopacusr_ios.a`, подписание) — Rust-сторона экспортирует
-точку входа уже сейчас; ReplayKit-хост — отдельный пункт роадмапа.
+линковка `libopacusr_ios.a`, подписание) — первый шаг сделан в этой же
+версии (шелл ниже); ReplayKit-хост — отдельный пункт роадмапа.
+
+### iOS — приложение собирается целиком: шелл линкуется в Mach-O, CI пакует неподписанный IPA
+
+Предыдущий этап доказал, что граф вьювера *компилируется* под
+`aarch64-apple-ios`; этот — что он **линкуется** и упаковывается в
+приложение:
+
+- **Шелл приложения** (`ios/App/`): минималистичный UIKit-entry
+  (`AppDelegate.swift`) без сториборда — после запуска он передаёт
+  главный поток в Rust (`DispatchQueue.main.async { opacusr_ios_run() }`;
+  блокирующий вызов внутри `didFinishLaunchingWithOptions` не давал бы
+  run loop'у стартовать). winit создаёт и владеет единственным окном,
+  поэтому Swift только заводит процесс. C-объявление точки входа — через
+  bridging header.
+- **Сборка** (`scripts/build_ios_app.sh`): `cargo rustc -p opacusr-ios
+  -- --print native-static-libs` собирает статическую библиотеку и
+  одновременно печатает канонический список нативных фреймворков
+  (Metal, UIKit, Security, CoreGraphics, …) — список передаётся линкеру
+  как есть, поэтому он автоматически сопровождает апгрейды
+  wgpu/winit/objc2 вместо ручной поддержки. `swiftc
+  -target arm64-apple-ios13.0` компилирует Swift-entry и линкует
+  `libopacusr_ios.a` + нативные флаги (`-Xlinker -ObjC` — дешёвая
+  страховка от невытянутых ObjC-объектов статического архива).
+- **Верификация в CI**: `plutil -lint` манифеста, `file`/`otool` —
+  arm64 Mach-O с линковкой против SDK iOS, `nm` — символ
+  `_opacusr_ios_run` присутствует в бинарнике; пакуется
+  `Payload/OpacusR.app` → IPA.
+- **release.yml**: новая джоба `ios` (release-профиль) выкладывает
+  `opacusr-<версия>-ios-unsigned.ipa` в релиз — ассет попадает в
+  SHA256SUMS автоматически (10-й ассет).
+- **Подписи нет**: для установки IPA нужна самоподпись бесплатным
+  Personal Team (Xcode / AltStore / Sideloadly) — инструкция в
+  `ios/README.md`; TestFlight/App Store — следующий этап (нужен платный
+  Apple Developer аккаунт).
 
 ## [0.17.0] — 2026-11-27
 
