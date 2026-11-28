@@ -175,13 +175,13 @@ jobs:
         # WebRTC module is cfg-gated off for iOS (opacusr-transport pulls
         # it via a target-specific dependency; client/agent/app gate the
         # WebRTC code paths and iOS sessions ride the TCP relay /
-        # LAN-direct wires instead). This step proves the whole viewer
-        # dependency graph — proto, crypto, transport, codec, capture/
-        # input stubs, client, agent, egui app and the new opacusr-ios
-        # static shell — compiles for aarch64-apple-ios.
+        # LAN-direct wires instead). Checking `-p opacusr-ios` compiles
+        # the whole viewer dependency graph — proto, crypto, transport,
+        # codec, capture/input stubs, client, agent, egui app — for
+        # aarch64-apple-ios. Explicit `-p opacusr-client` / `-p
+        # opacusr-agent` would UNIFY their default features (audio) into
+        # the build and drag audiopus's vendored Opus (autoreconf) onto
+        # the iOS target — exactly what the mobile section of
+        # opacusr-app avoids by carrying default-features = false.
         if: runner.os == 'macOS'
-        run: |
-          cargo check -p opacusr-ios \
-            -p opacusr-proto -p opacusr-crypto -p opacusr-client \
-            -p opacusr-agent -p opacusr-app \
-            --target aarch64-apple-ios
+        run: cargo check -p opacusr-ios --target aarch64-apple-ios
