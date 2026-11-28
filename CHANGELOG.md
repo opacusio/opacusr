@@ -42,6 +42,14 @@ CI: мобильный `cargo check` для iOS расширен с «proto+cryp
 графа вьювера — proto, crypto, transport, codec, capture/input-заглушки,
 client, agent, app и ios-шелл — под `aarch64-apple-ios` на macOS-раннере.
 
+Рендерер: glutin (бэкенд glow-рендерера eframe) не имеет iOS-поддержки и
+прерывает компиляцию («Please select at least one api backend»), поэтому
+eframe в workspace объявлен с `default-features = false`, а члены
+перечисляют фичи по платформам: desktop/Android — glow-набор (как
+прежний default), iOS — **wgpu/Metal** (eframe + wgpu + accesskit +
+default_fonts). Никто не линкует glutin на iOS — feature-unification под
+iOS-таргет glow не тянет (eframe в app — по таргет-секциям).
+
 Что ещё нужно для запускаемого приложения: Xcode-проект (UIKit-lifecycle,
 линковка `libopacusr_ios.a`, подписание) — Rust-сторона экспортирует
 точку входа уже сейчас; ReplayKit-хост — отдельный пункт роадмапа.
