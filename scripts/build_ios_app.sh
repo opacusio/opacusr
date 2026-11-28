@@ -74,7 +74,11 @@ plutil -lint "$APP_DIR/Info.plist"
 #    mode). Native flags go LAST so the linker resolves our archive's
 #    dependencies against the frameworks left-to-right.
 echo "==> swiftc (arm64-apple-ios13.0) + link"
+# -parse-as-library: swiftc otherwise treats the single source file as
+# top-level script code and rejects @main ("'main' attribute cannot be
+# used in a module that contains top-level code").
 xcrun -sdk iphoneos swiftc \
+  -parse-as-library \
   -target arm64-apple-ios13.0 -O \
   -import-objc-header ios/App/bridging.h \
   ios/App/AppDelegate.swift \
