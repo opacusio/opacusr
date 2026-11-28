@@ -6,6 +6,31 @@ SemVer-ish (breaking protocol changes bump the minor until 1.0).
 
 ## [Unreleased]
 
+### Wayland — Unicode-текст через виртуальную клавиатуру (IME-путь)
+
+`text()` на нативном Wayland больше не ограничен ASCII — закрыт последний
+«v1 limitation» ввода, заявленный в ошибке `needs a Wayland IME path`:
+
+- **Механика** (подход `wtype`, проверенный в полевых условиях): агент создаёт
+  второй виртуальный keyboard через `zwp_virtual_keyboard_v1` и пушит ему
+  самосгенерированную XKB-keymap, в которой блок кастомных keycodes замаплен
+  на Unicode-keysyms печатаемой строки, затем тапает эти коды как обычные
+  клавиши. Грунтовка: wire-keycode = evdev, keymap-код = evdev + 8
+  (офсеты wtype 142/150), keysym записываются числовым синтаксисом классической
+  XKB-грамматики (как в shipped xkeyboard-config: latin1 = кодпойнт,
+  Unicode = `0x01000000|cp`, Escape = `0xff1b`), trailing NUL + byte-length
+  с fd, roundtrip после каждого события.
+- **Роутинг**: ASCII (+ `\n`, `\t`) по-прежнему едет через uinput напрямую
+  (без keymap-танцев); всё остальное (latin1, Unicode вплоть до эмодзи/CJK,
+  Escape) — через IME-путь. Pre-validation обоих путей до первого тапа —
+  «полунапечатанный ASCII-префикс + ошибка» невозможен, как и в v1.
+- **Лимиты и деградация**: один короткоживущий connection на `text()`-вызов
+  (без глобального состояния); чанк по 100 уникальных символов на keymap
+  (XKB keycodes останавливаются на 255), длинные строки едут порциями с
+  свежей keymap; композитор без virtual-keyboard-глобала (не wlroots-семейство
+  и не KWin) сохраняет прежнее честное поведение — ничего не напечатано,
+  ошибка в логе.
+
 ### Wayland — multi-monitor: каждый монитор портала как отдельный стрим + per-output маппинг ввода
 
 Бэкенд PipeWire-захвата больше не ограничен одним монитором, а uinput-инжектор

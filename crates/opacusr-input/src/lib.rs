@@ -61,6 +61,12 @@ mod uinput;
 #[cfg(target_os = "linux")]
 pub use uinput::{is_wayland_session, UinputInjector};
 
+/// Native-Wayland Unicode text path (wtype-style virtual keyboard with a
+/// self-generated XKB keymap). Lives next to uinput: the injector types
+/// tap-able chars through uinput and everything else through this.
+#[cfg(target_os = "linux")]
+mod wayland_ime;
+
 /// Android host remote input through the accessibility shim
 /// (InputService + static JNI bridge). Compiles everywhere; set_context
 /// is only called from android_main.

@@ -495,7 +495,9 @@ impl UinputInjector {
     }
 
     /// US-layout mapping for a character → (key code, needs Shift).
-    fn char_code(c: char) -> Option<(u16, bool)> {
+    /// ASCII (+ Enter/Tab) → evdev keycode + shift flag. Everything
+    /// outside this table rides the Wayland IME path (wayland_ime.rs).
+    pub(crate) fn char_code(c: char) -> Option<(u16, bool)> {
         let shifted = |base: u16| Some((base, true));
         let plain = |base: u16| Some((base, false));
         match c {
@@ -747,18 +749,36 @@ impl InputInjector for UinputInjector {
     }
 
     fn text(&mut self, text: &str) -> Result<(), InputError> {
-        // Pre-validate: type nothing when anything is untypeable, so a
-        // Unicode string never leaves a half-typed ASCII prefix behind.
-        if let Some(c) = text
-            .chars()
-            .find(|c| UinputInjector::char_code(*c).is_none())
-        {
+        // Pre-validate BOTH paths up front (unchanged v1 contract: type
+        // nothing when anything is untypeable, so a Unicode string never
+        // leaves a half-typed ASCII prefix behind). A char is typable when
+        // uinput has a keycode for it (ASCII + Enter/Tab) or the Wayland
+        // IME keymap can carry its keysym (latin1, Unicode, Escape).
+        if let Some(c) = text.chars().find(|c| {
+            UinputInjector::char_code(*c).is_none() && crate::wayland_ime::keysym(*c).is_none()
+        }) {
             return Err(InputError::Backend(format!(
-                "text: '{c}' needs a Wayland IME path (uinput types ASCII only)"
+                "text: U+{:04X} has neither a uinput keycode nor a Wayland keysym",
+                c as u32
             )));
         }
+        // The IME session (connection + virtual keyboard + plan) is built
+        // BEFORE the first tap: a compositor without the virtual-keyboard
+        // manager keeps today's honest error instead of a typed ASCII
+        // prefix followed by an error tail.
+        let mut ime = if text.chars().any(|c| UinputInjector::char_code(c).is_none()) {
+            Some(crate::wayland_ime::ImeSession::start(text)?)
+        } else {
+            None
+        };
         for c in text.chars() {
-            self.tap_char(c, 0)?;
+            if UinputInjector::char_code(c).is_some() {
+                self.tap_char(c, 0)?;
+            } else {
+                ime.as_mut()
+                    .expect("IME chars validated before the first tap")
+                    .type_char(c)?;
+            }
         }
         Ok(())
     }

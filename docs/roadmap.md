@@ -14,7 +14,7 @@ Where OpacusR is heading. Items are grouped by milestone; security items from [s
 ## M1 — Media & experience (next)
 
 - **Audio polish**: Linux system-sound capture without manual device picking (PipeWire monitor), Windows per-device selection, viewer-side volume/mute, WASAPI loopback auto-recovery after default-device changes.
-- **Wayland hardening**: promote the PipeWire backend to default after field testing; ~~multi-monitor portal dialogs~~ **done** — the consent dialog multi-selects monitors, each becomes a live selectable stream (node-id screens), and uinput input is per-output mapped through a wl_output + xdg-output layout probe; DmaBuf zero-copy path remains.
+- **Wayland hardening**: promote the PipeWire backend to default after field testing; ~~multi-monitor portal dialogs~~ **done** — the consent dialog multi-selects monitors, each becomes a live selectable stream (node-id screens), and uinput input is per-output mapped through a wl_output + xdg-output layout probe; ~~Wayland IME (Unicode text)~~ **done** — non-ASCII `text()` rides a wtype-style virtual keyboard (`zwp_virtual_keyboard_v1`) with a self-generated XKB keymap carrying the string's Unicode keysyms; DmaBuf zero-copy path remains.
 - **Cursor rendering**: ~~compositor cursor overlay (DXGI pointer shapes / X11 cursor events) so remote viewers always see the pointer~~ **done (v0.6.0 WIP)** — separate `CursorShape`/`CursorPos` messages (Win32 `GetCursorInfo`/`GetIconInfo`, X11 XFixes; native Wayland still unsupported — the PipeWire cursor metadata path is the follow-up).
 - **Session UX**: fullscreen hotkeys, quality presets, session stats panel (tier, encode time, packet loss).
 - **VP9/AV1 evaluation** behind the existing codec traits (web-optimized fallback for slow links).

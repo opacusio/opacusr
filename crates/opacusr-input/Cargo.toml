@@ -28,6 +28,15 @@ opacusr-capture = { workspace = true }
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
 libc = "0.2"
 
+# Native-Wayland Unicode text (wayland_ime.rs): a second virtual keyboard
+# (zwp_virtual_keyboard_v1) + a self-generated XKB keymap with Unicode
+# keysyms — the wtype approach. Pure-Rust wire stack (no wayland-sys),
+# nothing to link; runs only where the compositor exposes the
+# virtual-keyboard manager (wlroots family, KWin).
+[target.'cfg(target_os = "linux")'.dependencies]
+wayland-client = { version = "0.31" }
+wayland-protocols-misc = { version = "0.3", features = ["client"] }
+
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 enigo = { workspace = true }
 arboard = { workspace = true }
