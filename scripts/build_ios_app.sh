@@ -51,9 +51,14 @@ mkdir -p "$OUT_DIR"
 #    libopacusr_ios.a (Metal, UIKit, Security, CoreGraphics, ...). Hand
 #    maintaining that list would rot with every wgpu/winit bump.
 echo "==> cargo rustc -p opacusr-ios ($PROFILE) + native-static-libs"
-cargo rustc -p opacusr-ios --target aarch64-apple-ios $EXTRA_EXPANDED \
+cargo rustc --color=never -p opacusr-ios --target aarch64-apple-ios $EXTRA_EXPANDED \
   -- --print native-static-libs >/dev/null 2>"$OUT_DIR/native-libs.log"
-NATIVE=$(sed -n 's/.*native-static-libs: //p' "$OUT_DIR/native-libs.log" | tail -1 |
+NATIVE=$(sed -n 's/.*native-static-libs: //p' "$OUT_DIR/native-libs.log" |
+  # Belt and braces for ANSI color codes: even with --color=never the
+  # CI env (CARGO_TERM_COLOR=always) can re-enable them, and a stray
+  # ESC sequence becomes a phantom "<U+001B>" linker input. Strip all
+  # SGR sequences, then take the last line.
+  sed 's/\x1b\[[0-9;]*m//g' | tail -1 |
   # iOS has no separate libm (it lives inside libSystem) — rustc's
   # generic native-static-libs still emits `-lm`, which makes ld fail
   # with "library 'm' not found". Duplicate -lSystem/-lc/-lobjc are
